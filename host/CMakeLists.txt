@@ -1,0 +1,56 @@
+# Desktop build of the portable core: per-component static libs so one
+# component failing to compile doesn't block the others.
+#   cmake -S host -B build/host -DCMAKE_BUILD_TYPE=Release && cmake --build build/host -j
+# Sources:  lib/pg/src/pg/<component>/*.cpp   -> library pg_<component>
+# Tests:    host/tests/test_<component>_*.cpp -> executable, linked to pg_<component>, registered with ctest
+# Tools:    host/tools/<name>.cpp             -> executable linked to every component
+cmake_minimum_required(VERSION 3.16)
+project(pocket_groove_host CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release)
+endif()
+set(PG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
+set(PG_SRC ${PG_ROOT}/lib/pg/src)
+# Match the firmware's constraints: no exceptions/RTTI, and flag accidental doubles.
+set(PG_FLAGS -Wall -Wextra -Wdouble-promotion -Wfloat-conversion -fno-exceptions -fno-rtti)
+enable_testing()
+
+file(GLOB PG_COMPONENT_DIRS LIST_DIRECTORIES true ${PG_SRC}/pg/*)
+set(PG_LIBS "")
+foreach(dir ${PG_COMPONENT_DIRS})
+  if(IS_DIRECTORY ${dir})
+    get_filename_component(comp ${dir} NAME)
+    file(GLOB_RECURSE srcs CONFIGURE_DEPENDS ${dir}/*.cpp)
+    if(srcs)
+      add_library(pg_${comp} STATIC ${srcs})
+      target_include_directories(pg_${comp} PUBLIC ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+      target_compile_options(pg_${comp} PRIVATE ${PG_FLAGS})
+      list(APPEND PG_LIBS pg_${comp})
+    endif()
+  endif()
+endforeach()
+
+file(GLOB test_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
+foreach(src ${test_srcs})
+  get_filename_component(name ${src} NAME_WE)
+  string(REGEX REPLACE "^test_([a-z0-9]+)_.*$" "\\1" comp ${name})
+  if(TARGET pg_${comp})
+    add_executable(${name} ${src})
+    target_link_libraries(${name} PRIVATE pg_${comp})
+    target_include_directories(${name} PRIVATE ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_options(${name} PRIVATE ${PG_FLAGS})
+    add_test(NAME ${name} COMMAND ${name} WORKING_DIRECTORY ${PG_ROOT})
+  endif()
+endforeach()
+
+file(GLOB tool_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/*.cpp)
+foreach(src ${tool_srcs})
+  get_filename_component(name ${src} NAME_WE)
+  add_executable(${name} ${src})
+  # Link twice so inter-component references resolve regardless of order.
+  target_link_libraries(${name} PRIVATE ${PG_LIBS} ${PG_LIBS})
+  target_include_directories(${name} PRIVATE ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(${name} PRIVATE ${PG_FLAGS})
+endforeach()

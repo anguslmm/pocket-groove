@@ -1,0 +1,4 @@
+build/
+.pio/
+*.wav
+__pycache__/
