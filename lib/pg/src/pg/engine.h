@@ -21,21 +21,32 @@ enum class CmdType : uint8_t {
   SetMute,          // a = track, c = 0/1
   NoteOn,           // live play: a = track, b = note, c = velocity, step.chord/flags honoured.
                     //   If recording and playing, the engine also writes it to the nearest step.
-  NoteOff,          // a = track, b = note
+                    //   A NoteOn that arrives while the previous recorded note on that synth track
+                    //   is still held (legato) sets kStepSlide on the PREVIOUS note's step.
+  NoteOff,          // a = track, b = note. When recording, sets the recorded step's gate from
+                    //   the held duration (min 1 quarter-step).
   QueuePattern,     // a = pattern: switch at the next pattern boundary (immediately if stopped)
-  SetSongMode,      // c = 0/1
+  SetSongMode,      // c = 0/1, a = slot to start from when switching on
   SetSongSlot,      // a = slot, b = pattern, c = repeats
   SetRecord,        // c = 0/1
   ClearTrack,       // a = pattern, b = track
   ClearPattern,     // a = pattern
   CopyPattern,      // a = source pattern, b = destination pattern
   CopyTrack,        // a = pattern, b = source track, c = destination track (same type only)
+  Roll,             // a = track, c = hits per step x2 (1 = 1/8 notes, 2 = 1/16, 3 = 1/16T, 4 = 1/32), 0 = stop.
+                    //   While active the track retriggers on that grid (locked to the transport when
+                    //   playing, free-running from the command when stopped) using step.note/vel/chord.
+  WriteTrack,       // a = pattern, b = track, ptr = const TrackPattern* to copy in (paste / undo)
+  WritePattern,     // a = pattern, ptr = const Pattern* to copy in (paste / undo)
+                    //   For both: the engine copies during a later quantum; the buffer must stay
+                    //   valid and unmodified until status().writesDone has incremented.
 };
 
 struct Command {
   CmdType type;
   uint8_t a, b, c;
   Step    step;
+  const void* ptr;   // WriteTrack / WritePattern only
 };
 
 struct EngineStatus {
@@ -44,6 +55,9 @@ struct EngineStatus {
   uint8_t  pattern;            // currently playing pattern
   uint8_t  queuedPattern;      // 0xFF if none
   uint8_t  songSlot;
+  uint8_t  songRepeat;         // which play of the current slot we are on, 0-based
+  uint8_t  masterStep;         // position within Pattern::length (pattern-boundary countdown)
+  uint8_t  writesDone;         // increments (wraps) each time a WriteTrack/WritePattern is applied
   uint8_t  step[kNumTracks];   // current step per track
   uint8_t  trig[kNumTracks];   // increments every time the track fires (UI flashes on change)
   float    peakL, peakR;       // post-master peak since last status() call, 0..1+
@@ -59,6 +73,9 @@ class Engine {
   // the engine has no compile-time dependency on concrete synths.
   void init(float sampleRate, Project* project);
   void setVoice(int track, Voice* voice);
+  // Device mode: render one bus and mono FX; process() then writes L == R.
+  // Call after init/setVoice and before audio starts; forwards to every voice.
+  void setMonoOutput(bool mono);
 
   // Fill `p` with a valid empty project: magic/version, default globals,
   // each track's params from its voice's ParamInfo defaults + mixer defaults,

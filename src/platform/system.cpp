@@ -1,0 +1,202 @@
+// Platform layer: system services. See system.h.
+#include "system.h"
+
+#include <Arduino.h>
+#include <M5Unified.h>
+
+#include <esp_chip_info.h>
+#include <esp_cpu.h>
+#include <esp_heap_caps.h>
+#include <esp_rom_sys.h>
+#include <esp_system.h>
+#include <cstring>
+#include <new>
+
+namespace plat {
+namespace sys {
+
+namespace {
+BootInfo s_boot = {false, false, 0, "?"};
+uint32_t s_serialMuteUntilMs = 0;   // after a stalled write, drop output until then
+
+const char* boardName(m5::board_t b) {
+  switch (b) {
+    case m5::board_t::board_M5CardputerADV: return "M5CardputerADV";
+    case m5::board_t::board_M5Cardputer:    return "M5Cardputer(orig)";
+    case m5::board_t::board_unknown:        return "unknown";
+    default:                                return "other-M5";
+  }
+}
+}  // namespace
+
+BootInfo begin(uint32_t serialBaud) {
+  // Serial is the native USB-Serial/JTAG CDC (ARDUINO_USB_MODE=1 + CDC_ON_BOOT=1).
+  // A bigger TX ring lets a whole report page go out without waiting; a short
+  // TX timeout bounds how long a stalled host can hold the UI loop (see
+  // serialWrite for the rest of the protection).
+  Serial.setTxBufferSize(4096);
+  Serial.begin(serialBaud);
+  Serial.setTxTimeoutMs(10);
+
+  auto cfg = M5.config();
+  cfg.serial_baudrate = 0;       // we own Serial
+  cfg.clear_display   = true;
+  cfg.output_power    = true;
+  cfg.internal_imu    = true;    // probe only (answers the IMU address question); never read later
+  cfg.internal_rtc    = false;
+  cfg.internal_mic    = false;   // M5.Mic would reconfigure the codec against the DAC
+  // internal_spk stays true ON PURPOSE: M5.begin() then only *stores* the
+  // board's speaker pin config and ES8311 callback (M5Unified.inl, "Speaker.
+  // setCallback / Speaker.config"); the I2S port is not touched until
+  // M5.Speaker.begin() or a play*() call. plat::audio never makes those calls
+  // in direct-I2S mode, so the port is free for our own driver, and the stored
+  // config is exactly what the fallback backend needs.
+  cfg.internal_spk    = true;
+  cfg.external_imu    = false;
+  cfg.external_rtc    = false;
+  cfg.led_brightness  = 0;
+  M5.begin(cfg);
+
+  const m5::board_t b = M5.getBoard();
+  s_boot.boardId        = static_cast<int>(b);
+  s_boot.boardName      = boardName(b);
+  s_boot.isCardputerAdv = (b == m5::board_t::board_M5CardputerADV);
+  s_boot.displayOk      = (M5.getDisplayCount() > 0) && (M5.Display.width() > 0);
+  return s_boot;
+}
+
+const BootInfo& bootInfo() { return s_boot; }
+
+uint32_t millis()        { return ::millis(); }
+uint64_t micros()        { return static_cast<uint64_t>(esp_timer_get_time()); }
+void     delayMs(uint32_t ms) { ::delay(ms); }
+uint32_t cycles()        { return esp_cpu_get_cycle_count(); }
+uint32_t cyclesPerUs()   { return esp_rom_get_cpu_ticks_per_us(); }
+int      currentCore()   { return xPortGetCoreID(); }
+
+namespace {
+struct TaskArg { void (*fn)(void*); void* user; };
+void taskTrampoline(void* p) {
+  TaskArg a = *static_cast<TaskArg*>(p);
+  delete static_cast<TaskArg*>(p);
+  a.fn(a.user);
+  vTaskDelete(nullptr);
+}
+}  // namespace
+
+bool runTask(void (*fn)(void*), void* user, const char* name, uint32_t stackBytes, int priority, int core) {
+  if (!fn) return false;
+  auto* a = new (std::nothrow) TaskArg{fn, user};
+  if (!a) return false;
+  if (core < 0 || core > 1) core = 1;
+  if (xTaskCreatePinnedToCore(taskTrampoline, name ? name : "pg_job", stackBytes, a, priority, nullptr, core) != pdPASS) {
+    delete a;
+    return false;
+  }
+  return true;
+}
+
+void serialWrite(const char* data, size_t len) {
+  if (!data || !len) return;
+  const uint32_t now = ::millis();
+  if (s_serialMuteUntilMs && static_cast<int32_t>(now - s_serialMuteUntilMs) < 0) return;
+  s_serialMuteUntilMs = 0;
+  // HWCDC::write returns short when the host is plugged in but not reading
+  // (after ~20 x TX timeout). Without the mute window a 100-line report would
+  // then freeze the UI for seconds.
+  const size_t done = Serial.write(reinterpret_cast<const uint8_t*>(data), len);
+  if (done < len) s_serialMuteUntilMs = (::millis() + 1500) | 1u;
+}
+void serialWrite(const char* text) { if (text) serialWrite(text, strlen(text)); }
+int  serialRead() { return Serial.available() > 0 ? Serial.read() : -1; }
+bool serialHostListening() { return HWCDC::isConnected(); }
+
+void chipInfo(ChipInfo* out) {
+  if (!out) return;
+  memset(out, 0, sizeof(*out));
+  esp_chip_info_t ci;
+  esp_chip_info(&ci);
+  strlcpy(out->model, ESP.getChipModel(), sizeof(out->model));
+  out->revMajor   = static_cast<uint8_t>(ci.revision / 100);
+  out->revMinor   = static_cast<uint8_t>(ci.revision % 100);
+  out->cores      = ci.cores;
+  out->cpuMhz     = getCpuFrequencyMhz();
+  out->flashBytes = ESP.getFlashChipSize();
+  out->psramFound = psramFound();
+  out->psramBytes = out->psramFound ? ESP.getPsramSize() : 0;
+  strlcpy(out->idfVersion, esp_get_idf_version(), sizeof(out->idfVersion));
+  strlcpy(out->coreVersion, ESP.getCoreVersion(), sizeof(out->coreVersion));
+  const char* rr = "?";
+  switch (esp_reset_reason()) {
+    case ESP_RST_POWERON:   rr = "POWERON";   break;
+    case ESP_RST_EXT:       rr = "EXT_PIN";   break;
+    case ESP_RST_SW:        rr = "SOFTWARE";  break;
+    case ESP_RST_PANIC:     rr = "PANIC";     break;
+    case ESP_RST_INT_WDT:   rr = "INT_WDT";   break;
+    case ESP_RST_TASK_WDT:  rr = "TASK_WDT";  break;
+    case ESP_RST_WDT:       rr = "OTHER_WDT"; break;
+    case ESP_RST_DEEPSLEEP: rr = "DEEPSLEEP"; break;
+    case ESP_RST_BROWNOUT:  rr = "BROWNOUT";  break;
+    case ESP_RST_USB:       rr = "USB";       break;
+    case ESP_RST_JTAG:      rr = "JTAG";      break;
+    default:                rr = "UNKNOWN";   break;
+  }
+  strlcpy(out->resetReason, rr, sizeof(out->resetReason));
+}
+
+HeapInfo heap() {
+  const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+  HeapInfo h;
+  h.freeBytes    = heap_caps_get_free_size(caps);
+  h.largestBlock = heap_caps_get_largest_free_block(caps);
+  h.minEverFree  = heap_caps_get_minimum_free_size(caps);
+  h.totalBytes   = heap_caps_get_total_size(caps);
+  return h;
+}
+void* allocInternal(size_t bytes) { return heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
+void  freeInternal(void* p)       { heap_caps_free(p); }
+
+Battery battery() {
+  // Cardputer-Adv: plain ADC read on GPIO10 through a 2:1 divider, no I2C.
+  Battery b;
+  b.percent    = M5.Power.getBatteryLevel();
+  b.millivolts = M5.Power.getBatteryVoltage();
+  if (b.percent < 0 || b.percent > 100) b.percent = -1;
+  if (b.millivolts <= 0) b.millivolts = -1;
+  return b;
+}
+
+bool i2cProbe(uint8_t addr) { return M5.In_I2C.scanID(addr, 100000); }
+
+int i2cScan(uint8_t* found, int cap) {
+  int n = 0;
+  for (uint8_t a = 0x08; a < 0x78; ++a) {
+    if (M5.In_I2C.scanID(a, 100000)) {
+      if (found && n < cap) found[n] = a;
+      ++n;
+    }
+  }
+  return n;
+}
+
+bool i2cRead8(uint8_t addr, uint8_t reg, uint8_t* value, uint32_t hz) {
+  uint8_t v = 0;
+  const bool ok = M5.In_I2C.readRegister(addr, reg, &v, 1, hz);
+  if (ok && value) *value = v;
+  return ok;
+}
+bool i2cWrite8(uint8_t addr, uint8_t reg, uint8_t value, uint32_t hz) {
+  return M5.In_I2C.writeRegister(addr, reg, &value, 1, hz);
+}
+
+const char* imuName() {
+  switch (M5.Imu.getType()) {
+    case m5::imu_none:    return "none";
+    case m5::imu_bmi270:  return "BMI270";
+    case m5::imu_unknown: return "unknown";
+    default:              return "other";
+  }
+}
+
+}  // namespace sys
+}  // namespace plat

@@ -52,6 +52,14 @@ class Voice {
 
   // False when the voice is silent, so the engine can skip it.
   virtual bool active() const = 0;
+
+  // True if render() always writes identical L and R, so the mixer may read
+  // only outL. (Drums and bass: true.)
+  virtual bool mono() const { return false; }
+
+  // The device's codec is mono. When set, a stereo voice should render its
+  // mono sum to both channels as cheaply as it can. Called before audio starts.
+  virtual void setMonoOutput(bool /*mono*/) {}
 };
 
 }  // namespace pg

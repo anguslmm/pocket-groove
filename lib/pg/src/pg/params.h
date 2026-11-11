@@ -14,6 +14,8 @@ enum class ParamFormat : uint8_t {
   OnOff,
   Semitones, // value - centre, in semitones
   Bpm,
+  Swing,     // 0..50 shown as 50%..75%
+  DjFilter,  // 64 = "OFF", below = "LPnn", above = "HPnn"
 };
 
 struct ParamInfo {
@@ -21,7 +23,7 @@ struct ParamInfo {
   const char* longName;   // <= 12 chars ("Cutoff", "Resonance")
   uint8_t min, max, def;
   ParamFormat fmt;
-  const char* const* enumNames;  // only for ParamFormat::Enum, max-min+1 entries
+  const char* const* enumNames;  // only for ParamFormat::Enum, max-min+1 entries, each <= 5 chars
 };
 
 // ---- Per-track mixer params (track param indices 24..31), same for all tracks.

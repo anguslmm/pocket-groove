@@ -15,10 +15,12 @@ struct Key {
   constexpr uint8_t id() const { return uint8_t(row * 14 + col); }
 };
 constexpr int kKeyRows = 4, kKeyCols = 14, kNumKeys = 56;
+constexpr uint8_t kKeyG0 = 56;   // the side button, reported after the matrix keys
 
 struct KeyEvent {
-  uint8_t key;    // Key::id()
-  bool    down;   // true = pressed, false = released
+  uint8_t  key;     // Key::id(), or kKeyG0
+  bool     down;    // true = pressed, false = released
+  uint32_t timeUs;  // when the key interrupt fired (wraps; compare by difference)
 };
 
 // ---- Display: 8-bit indexed framebuffer the UI draws into. -----------------
