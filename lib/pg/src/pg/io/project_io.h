@@ -156,9 +156,24 @@ Status saveUiSettings(FileSystem& fs, uint8_t version, const uint8_t* data, size
 Status loadUiSettings(FileSystem& fs, uint8_t* version, uint8_t* buf, size_t cap, size_t* len);
 
 // Boot-time cleanup of an interrupted save on `mount`: a complete, valid
-// <mount>/pg/_save.tmp whose target is missing (non-atomic rename interrupted)
-// is renamed into place; any other temp file is removed.
+// <mount>/pg/_save.tmp (or _xfer.tmp, see installReceived) whose target is
+// missing (non-atomic rename interrupted) is renamed into place; any other
+// temp file is removed.
 Status recoverAfterPowerLoss(FileSystem& fs, const char* mount);
+
+// ---- files received from outside (USB transfer, pg/io/xfer.h) -----------------
+// A .pgv streamed byte for byte into xferTempPath(mount) is installed as
+// <mount>/pg/<name>.pgv with the save path's guarantees: the temp is re-read
+// and must have exactly `size` bytes with whole-file CRC32 `crc`; then the
+// full first-pass check of a load (header, version, body CRC, structure,
+// Project magic/version) and header stem == name (what the power-loss
+// recovery installs it under); then the same rename as saveFile. On any
+// failure the temp is removed (or, after a split FAT rename, kept for
+// recoverAfterPowerLoss) and an existing target is untouched.
+constexpr const char* kXferTmpName = "_xfer.tmp";
+bool xferTempPath(const char* mount, char* out, size_t cap);    // "<mount>/pg/_xfer.tmp"
+Status installReceived(FileSystem& fs, const char* tmpPath, const char* mount, const char* name, uint32_t size,
+                       uint32_t crc, HeaderInfo* info = nullptr);
 
 // ---- in-memory codec (host tools, tests) --------------------------------------
 Status encodeToBuffer(const Project& p, const char* stem, uint8_t* out, size_t cap, size_t* len);

@@ -1,0 +1,20 @@
+#!/bin/sh
+# Pocket Groove computer tool: projects over USB and stem bounces.
+#   tools/pg ls | pull NAME | push FILE.pgv | bounce NAME|FILE.pgv   (tools/pg -h for options)
+# Needs Python 3 with pyserial. PlatformIO's own Python has it, so that one is
+# preferred (Homebrew Python refuses `pip install` system-wide); otherwise python3.
+here=$(cd "$(dirname "$0")" && pwd)
+for py in "${PG_PYTHON:-}" "$HOME/.platformio/penv/bin/python" python3; do
+  [ -n "$py" ] || continue
+  if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import serial' >/dev/null 2>&1; then
+    exec "$py" "$here/pg.py" "$@"
+  fi
+done
+cat >&2 <<'MSG'
+pg: no Python 3 with pyserial found.
+  PlatformIO's Python has it: install PlatformIO (pip install platformio, or the VS Code
+  extension), which creates ~/.platformio/penv/bin/python. Or make a virtualenv:
+      python3 -m venv ~/.venvs/pg && ~/.venvs/pg/bin/pip install pyserial
+      PG_PYTHON=~/.venvs/pg/bin/python tools/pg ls
+MSG
+exit 1

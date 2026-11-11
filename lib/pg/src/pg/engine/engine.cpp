@@ -23,6 +23,7 @@
 #include "engine_hooks.h"
 #include "master.h"
 #include "reverb.h"
+#include "stem_tap.h"
 #include "tables.h"
 
 namespace pg {
@@ -160,6 +161,16 @@ struct State {
   Reverb reverb;
   MasterBus master;
 
+#if PG_STEM_TAP
+  // ---- host-only offline rendering hooks (stem_tap.h) ----
+  StemTap* tap;
+  HalfbandUp tapUpL, tapUpR;          // upsample the delay-only return for the tap
+  int endAfter;                       // pattern plays per Play before the sequencer holds (-1 = off)
+  int playsLeft;                      // boundaries still allowed in this run
+  bool seqHeld;
+  long endedAt;
+#endif
+
   // ================= methods =================
   void init(float sampleRate, Project* p);
   void resetRuntime();
@@ -238,6 +249,11 @@ void State::init(float sampleRate, Project* p) {
   monoOut = false;
   writesDone = 0;
   qCount = 0;
+#if PG_STEM_TAP
+  seqHeld = false;
+  endedAt = -1;
+  playsLeft = -1;
+#endif
 
   const float quantaPerSec = sr / float(kQuantum);
   gainK = 1.0f - expf(-1.0f / (0.004f * quantaPerSec));     // 4 ms; init is not real-time
@@ -307,6 +323,9 @@ void State::resetFx() {
   reverb.reset();
   decD.reset(); decR.reset(); upL.reset(); upR.reset();
   master.reset();
+#if PG_STEM_TAP
+  tapUpL.reset(); tapUpR.reset();
+#endif
   dSilent = rSilent = 1000;
   fxRunning = false;
 }
@@ -829,6 +848,11 @@ void State::play(bool cont) {
   sinceFire = 0;
   absStep = 0;
   playing = true;
+#if PG_STEM_TAP
+  playsLeft = endAfter > 0 ? endAfter - 1 : -1;
+  seqHeld = false;
+  endedAt = -1;
+#endif
   for (int t = 0; t < kNumTracks; ++t)
     if (tr[t].rollC) tr[t].rollCd = 0;   // a held roll locks to the downbeat
 }
@@ -1033,6 +1057,20 @@ void State::boundary() {
 }
 
 void State::fireMasterStep() {
+#if PG_STEM_TAP
+  if (masterNext >= curPatternLen() && playsLeft >= 0) {
+    if (playsLeft == 0) {
+      // End of the offline render: fire nothing more. Notes held "until the
+      // next step" would never see one, so let their own gates end them.
+      seqHeld = true;
+      endedAt = long(qCount) * kQuantum;
+      for (int t = 0; t < kNumTracks; ++t)
+        for (int i = 0; i < kMaxPend; ++i) tr[t].pend[i].holdToStep = 0;
+      return;
+    }
+    --playsLeft;
+  }
+#endif
   if (masterNext >= curPatternLen()) boundary();
   const Pattern& pat = proj->patterns[curPattern];
   const int len = sanitizeLength(pat.length);
@@ -1095,6 +1133,9 @@ void State::sequencerTick() {
   //    itself stays straight so changing swing never shifts the bar.
   {
     const int idx = masterNext >= curPatternLen() ? 0 : masterNext;
+#if PG_STEM_TAP
+    if (!seqHeld)
+#endif
     if (gridCd + swingOffFP(idx) < kHalfQuantumFP) fireMasterStep();
   }
   // 3. Ratchet hits.
@@ -1240,10 +1281,39 @@ void State::recordNote(int t, const NoteEvent& ev) {
 // delay and reverb mono sums are exact by construction) except where the
 // master's nonlinear stages (drive, limiter knee) act differently on L/R
 // than on their sum.
+// STEM TAP (host only, PG_STEM_TAP, see stem_tap.h): the PG_TAP_* lines
+// below copy values the mixer already computes into the tap's buffers. On the
+// device the macros expand to nothing.
+#if PG_STEM_TAP
+#define PG_TAP_DRY(i, a, b) do { if (tapL) { tapL[i] = (a); tapR[i] = (b); } } while (0)
+#else
+#define PG_TAP_DRY(i, a, b) do { } while (0)
+#endif
+
+#if PG_STEM_TAP
+namespace {
+void tapZero(float* const (&buf)[2], long pos) {
+  for (int c = 0; c < 2; ++c)
+    if (buf[c]) for (int i = 0; i < kQuantum; ++i) buf[c][pos + i] = 0.0f;
+}
+}  // namespace
+#endif
+
 void State::render(int16_t* out) {
   float busL[kQuantum], busR[kQuantum], sD[kQuantum], sR[kQuantum];
   const bool mono = monoOut;
   for (int i = 0; i < kQuantum; ++i) { busL[i] = 0.0f; busR[i] = 0.0f; sD[i] = 0.0f; sR[i] = 0.0f; }
+#if PG_STEM_TAP
+  StemTap* const tp = (tap && !mono && tap->pos + kQuantum <= tap->capacity) ? tap : nullptr;
+  if (tap && !mono && !tp) tap->overflow = true;
+  const long tpos = tp ? tp->pos : 0;
+  if (tp) {
+    for (int t = 0; t < kNumTracks; ++t) tapZero(tp->track[t], tpos);
+    tapZero(tp->delayRet, tpos);
+    tapZero(tp->reverbRet, tpos);
+    tapZero(tp->preMaster, tpos);
+  }
+#endif
   const float duckEnd = duck.tick();
   const float invN = 1.0f / float(kQuantum);
   bool dSend = false, rSend = false;
@@ -1310,6 +1380,18 @@ void State::render(int16_t* out) {
       steady = endL == r.outL && endR == r.outR && endD == r.sendD && endR2 == r.sendR;
       sends = endD > 0.0f || endR2 > 0.0f || r.sendD > 0.0f || r.sendR > 0.0f;
     }
+#if PG_STEM_TAP
+    float* tapL = nullptr;
+    float* tapR = nullptr;
+    if (tp) {
+      if (tp->track[t][0] && tp->track[t][1]) { tapL = tp->track[t][0] + tpos; tapR = tp->track[t][1] + tpos; }
+      if (!((tp->sendMask >> t) & 1u)) {   // this track's sends are masked out for this render
+        endD = 0.0f; endR2 = 0.0f; r.sendD = 0.0f; r.sendR = 0.0f;
+        sends = false;
+        steady = endL == r.outL && endR == r.outR;
+      }
+    }
+#endif
 
     Voice* v = voice[t];
     if (v && v->active()) {
@@ -1386,6 +1468,7 @@ void State::render(int16_t* out) {
           for (int i = 0; i < kQuantum; ++i) {
             busL[i] += L[i] * gl;
             busR[i] += Rp[i] * gr;
+            PG_TAP_DRY(i, L[i] * gl, Rp[i] * gr);
           }
         } else if (steady) {
           const float gl = endL, gr = endR, gd = 0.5f * endD, gv = 0.5f * endR2;
@@ -1393,6 +1476,7 @@ void State::render(int16_t* out) {
             const float a = L[i] * gl, b = Rp[i] * gr;
             busL[i] += a;
             busR[i] += b;
+            PG_TAP_DRY(i, a, b);
             const float m = a + b;
             sD[i] += m * gd;
             sR[i] += m * gv;
@@ -1408,6 +1492,7 @@ void State::render(int16_t* out) {
               const float a = L[i] * gl, b = Rp[i] * gr;
               busL[i] += a;
               busR[i] += b;
+              PG_TAP_DRY(i, a, b);
               const float m = a + b;
               sD[i] += m * gd;
               sR[i] += m * gv;
@@ -1417,6 +1502,7 @@ void State::render(int16_t* out) {
               gl += dl; gr += dr;
               busL[i] += L[i] * gl;
               busR[i] += Rp[i] * gr;
+              PG_TAP_DRY(i, L[i] * gl, Rp[i] * gr);
             }
           }
         } else {
@@ -1429,6 +1515,7 @@ void State::render(int16_t* out) {
             const float a = L[i] * gl, b = Rp[i] * gr;
             busL[i] += a;
             busR[i] += b;
+            PG_TAP_DRY(i, a, b);
             const float m = a + b;
             sD[i] += m * gd;
             sR[i] += m * gv;
@@ -1457,6 +1544,9 @@ void State::render(int16_t* out) {
       for (int i = 0; i < kQuantum; ++i) { busL[i] = 0.0f; busR[i] = 0.0f; sD[i] = 0.0f; sR[i] = 0.0f; }
       for (int t = 0; t < kNumTracks; ++t) vChoke(t);
       ++faults;
+#if PG_STEM_TAP
+      if (tp) for (int t = 0; t < kNumTracks; ++t) tapZero(tp->track[t], tpos);
+#endif
     }
   }
 
@@ -1474,6 +1564,10 @@ void State::render(int16_t* out) {
       if (mono) delay.processMono(in, wL, kHalf);
       else delay.process(in, wL, wR, kHalf);
     }
+#if PG_STEM_TAP
+    float tdL[kHalf], tdR[kHalf];   // the delay's share of the return, before the reverb adds in
+    if (tp) for (int i = 0; i < kHalf; ++i) { tdL[i] = wL[i]; tdR[i] = wR[i]; }
+#endif
     if (runReverb) {
       decR.process(sR, in, kHalf);
       if (mono) reverb.processMono(in, wL, kHalf);
@@ -1483,6 +1577,9 @@ void State::render(int16_t* out) {
       delay.reset();
       reverb.reset();
       decD.reset(); decR.reset(); upL.reset(); upR.reset();
+#if PG_STEM_TAP
+      tapUpL.reset(); tapUpR.reset();
+#endif
       ++faults;
     } else {
       upL.process(wL, fL, kHalf);
@@ -1495,6 +1592,25 @@ void State::render(int16_t* out) {
         }
       } else {
         upR.process(wR, fR, kHalf);
+#if PG_STEM_TAP
+        if (tp) {
+          // Return = the upsampled sum times the FX duck, exactly as added
+          // below; the delay part goes through its own (linear, identical)
+          // upsamplers and the reverb part is the remainder.
+          float dL[kQuantum], dR[kQuantum];
+          tapUpL.process(tdL, dL, kHalf);
+          tapUpR.process(tdR, dR, kHalf);
+          float gt = g;
+          for (int i = 0; i < kQuantum; ++i) {
+            gt += dg;
+            const float tl = fL[i] * gt, trr = fR[i] * gt, xl = dL[i] * gt, xr = dR[i] * gt;
+            if (tp->delayRet[0]) tp->delayRet[0][tpos + i] = xl;
+            if (tp->delayRet[1]) tp->delayRet[1][tpos + i] = xr;
+            if (tp->reverbRet[0]) tp->reverbRet[0][tpos + i] = tl - xl;
+            if (tp->reverbRet[1]) tp->reverbRet[1][tpos + i] = trr - xr;
+          }
+        }
+#endif
         for (int i = 0; i < kQuantum; ++i) {
           g += dg;
           busL[i] += fL[i] * g;
@@ -1505,10 +1621,20 @@ void State::render(int16_t* out) {
     fxRunning = true;
   } else if (fxRunning) {
     decD.reset(); decR.reset(); upL.reset(); upR.reset();
+#if PG_STEM_TAP
+    tapUpL.reset(); tapUpR.reset();
+#endif
     fxRunning = false;
   }
   fxDuckPrev = fxEnd;
 
+#if PG_STEM_TAP
+  if (tp) {
+    if (tp->preMaster[0]) for (int i = 0; i < kQuantum; ++i) tp->preMaster[0][tpos + i] = busL[i];
+    if (tp->preMaster[1]) for (int i = 0; i < kQuantum; ++i) tp->preMaster[1][tpos + i] = busR[i];
+    tp->pos = tpos + kQuantum;
+  }
+#endif
   master.setParams(mFilter, mReso, mDrive, mVolume);
   if (mono) master.processMono(busL, out, kQuantum, &peakL, &peakR);
   else master.process(busL, busR, out, kQuantum, &peakL, &peakR);
@@ -1768,6 +1894,19 @@ void setRumbleFilterBypass(bool bypass) {
   if (g_state) g_state->master.setRumbleBypass(bypass);
 }
 uint32_t faultCount() { return g_state ? g_state->faults + g_state->master.faults() : 0; }
+
+#if PG_STEM_TAP
+void setStemTap(StemTap* tap) {
+  if (!g_state) return;
+  g_state->tap = tap;
+  g_state->tapUpL.reset();
+  g_state->tapUpR.reset();
+}
+void setEndAfterPatternPlays(int plays) {
+  if (g_state) g_state->endAfter = plays > 0 ? plays : -1;
+}
+long endedAtFrame() { return g_state ? g_state->endedAt : -1; }
+#endif
 
 }  // namespace engine_detail
 }  // namespace pg

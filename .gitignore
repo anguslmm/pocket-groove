@@ -3,3 +3,5 @@ build/
 *.wav
 __pycache__/
 .claude/worktrees/
+projects/
+bounces/

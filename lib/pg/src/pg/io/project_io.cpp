@@ -392,6 +392,22 @@ Status failCause(FileSystem& fs, const char* mount, Status fallback) {
   return fallback;
 }
 
+// Moves a verified temp file over its target (saveFile, installReceived).
+Status commitTemp(FileSystem& fs, const char* m, const char* tmp, const char* path) {
+  if (!fs.rename(tmp, path)) {
+    // A non-atomic rename (remove + move) may have failed after removing
+    // the target: then the verified temp is the only copy. Retry once;
+    // if that fails too, keep the temp for recoverAfterPowerLoss().
+    if (!fs.exists(path) && fs.exists(tmp)) {
+      if (fs.rename(tmp, path)) return Status::Ok;
+      return failCause(fs, m, Status::RenameFailed);
+    }
+    fs.remove(tmp);
+    return failCause(fs, m, Status::RenameFailed);
+  }
+  return Status::Ok;
+}
+
 // ---- UI settings blob ----------------------------------------------------------
 constexpr uint8_t kUiMagic[4] = {'P', 'G', 'U', 'I'};
 constexpr int kUiHeader = 12;
@@ -524,20 +540,55 @@ Status saveFile(FileSystem& fs, const char* path, const char* stem, const Projec
       fs.remove(tmp);
       return failCause(fs, m, Status::VerifyFailed);
     }
-    if (!fs.rename(tmp, path)) {
-      // A non-atomic rename (remove + move) may have failed after removing
-      // the target: then the verified temp is the only copy. Retry once;
-      // if that fails too, keep the temp for recoverAfterPowerLoss().
-      if (!fs.exists(path) && fs.exists(tmp)) {
-        if (fs.rename(tmp, path)) return Status::Ok;
-        return failCause(fs, m, Status::RenameFailed);
-      }
-      fs.remove(tmp);
-      return failCause(fs, m, Status::RenameFailed);
-    }
-    return Status::Ok;
+    return commitTemp(fs, m, tmp, path);
   }
   return Status::Busy;
+}
+
+Status installReceived(FileSystem& fs, const char* tmpPath, const char* mount, const char* name, uint32_t size,
+                       uint32_t crc, HeaderInfo* info) {
+  if (info) std::memset(info, 0, sizeof(*info));
+  char path[kPathMax];
+  if (!isMount(mount) || !buildProjectPath(mount, name, path, sizeof(path)) || !tmpPath ||
+      std::strcmp(mountOf(tmpPath) ? mountOf(tmpPath) : "", mount) != 0 || std::strcmp(tmpPath, path) == 0)
+    return Status::BadName;
+  if (!fs.mounted(mount)) return Status::NoMount;
+  // 1. The bytes on disk are the bytes that were sent (size + whole-file CRC32).
+  {
+    const int h = fs.open(tmpPath, false);
+    if (h < 0) return fs.exists(tmpPath) ? Status::OpenFailed : Status::NotFound;
+    uint8_t buf[kIoBuf];
+    uint32_t n = 0, c = 0;
+    bool ok = true;
+    for (;;) {
+      const int r = fs.readSome(h, buf, sizeof(buf));
+      if (r < 0) { ok = false; break; }
+      if (r == 0) break;
+      c = crc32(c, buf, size_t(r));
+      n += uint32_t(r);
+      if (n > size) break;
+    }
+    fs.close(h);
+    if (!ok || n != size || c != crc) {
+      fs.remove(tmpPath);
+      return ok ? Status::VerifyFailed : Status::ReadFailed;
+    }
+  }
+  // 2. The same full check as the first pass of a load, and the stem the
+  //    power-loss recovery would install it under.
+  HeaderInfo h;
+  const Status v = verifyFile(fs, tmpPath, &h);
+  if (info) *info = h;
+  if (v != Status::Ok || std::strcmp(h.stem, name) != 0) {
+    fs.remove(tmpPath);
+    return v != Status::Ok ? v : Status::BadName;
+  }
+  // 3. Into place exactly as saveFile does.
+  return commitTemp(fs, mount, tmpPath, path);
+}
+
+bool xferTempPath(const char* mount, char* out, size_t cap) {
+  return isMount(mount) && joinPath(out, cap, mount, "/pg/", kXferTmpName);
 }
 
 Status loadFile(FileSystem& fs, const char* path, Project& dest, HeaderInfo* info, const IoOptions* o) {
@@ -686,15 +737,18 @@ Status recoverAfterPowerLoss(FileSystem& fs, const char* mount) {
   if (!isMount(mount)) return Status::BadName;
   if (!fs.mounted(mount)) return Status::NoMount;
   Status result = Status::Ok;
-  char tmp[kPathMax];
-  joinPath(tmp, sizeof(tmp), mount, "/pg/", kTmpName);
-  if (fs.exists(tmp)) {
+  // The save temp and the USB-transfer temp (installReceived) are treated alike.
+  const char* const tmpNames[2] = {kTmpName, kXferTmpName};
+  for (const char* tmpName : tmpNames) {
+    char tmp[kPathMax];
+    joinPath(tmp, sizeof(tmp), mount, "/pg/", tmpName);
+    if (!fs.exists(tmp)) continue;
     HeaderInfo h;
     char target[kPathMax];
     bool haveTarget = false;
     if (verifyFile(fs, tmp, &h) == Status::Ok) {
       if (isValidName(h.stem)) haveTarget = buildProjectPath(mount, h.stem, target, sizeof(target));
-      else if (std::strcmp(h.stem, kSessionStem) == 0 && std::strcmp(mount, kMountInt) == 0)
+      else if (tmpName == kTmpName && std::strcmp(h.stem, kSessionStem) == 0 && std::strcmp(mount, kMountInt) == 0)
         haveTarget = joinPath(target, sizeof(target), kSessionPath, "", "");
     }
     if (haveTarget && !fs.exists(target)) {

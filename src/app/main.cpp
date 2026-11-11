@@ -17,6 +17,8 @@
 //   first key after the backlight dimmed: only wakes the screen
 // Boot menu: hold any key at power-on (or after a crash: automatic).
 // Serial (USB CDC): 'r' full report, 'h' help; a stats line every 5 s.
+// Project transfer on the same port (tools/pg ls / pull / push): lines that
+// start with "~PGX ", handled by pg::io::Xfer (protocol in pg/io/xfer.h).
 //
 // This file includes only platform and pg headers: no Arduino / M5 / ESP-IDF.
 #include <cstdarg>
@@ -34,6 +36,7 @@
 #include "overlay.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/project_io.h"
+#include "pg/io/xfer.h"
 #include "pg/ui/gfx.h"
 #include "pg/ui/ui.h"
 
@@ -57,6 +60,7 @@ pg::ui::Ui g_ui;
 pg::Framebuffer g_fb;           // 32.4 KB
 app::Overlays g_ov;
 app::Settings g_set;
+pg::io::Xfer g_xfer;            // USB project transfer (~0.4 KB)
 
 // ---- constants -----------------------------------------------------------------
 constexpr uint32_t kFrameMs = 33;              // ~30 fps
@@ -68,6 +72,9 @@ constexpr uint32_t kDimTailMs = 10000;          // after stop: delay / reverb ta
 constexpr uint32_t kVolShowMs = 1500;
 constexpr uint32_t kVolSaveDelayMs = 2000;
 constexpr uint32_t kStatsEveryMs = 5000;
+// While a transfer runs, wait up to this long per frame for the host's next
+// request, so a file moves at several chunks per frame instead of one.
+constexpr uint32_t kXferSpinMs = 8;
 constexpr uint32_t kTapMaxMs = 350, kDoubleTapGapMs = 450;
 constexpr uint8_t kKMinus = 11, kKEquals = 12;  // pg/platform.h key ids
 constexpr uint64_t kMatrixMask = (1ull << pg::kNumKeys) - 1;
@@ -268,6 +275,14 @@ void printReport() {
      static_cast<unsigned long>(si.sdMountMs), static_cast<unsigned long>(si.sdTotalBytes >> 20),
      static_cast<unsigned long>(si.sdUsedBytes >> 20));
   sp("[batt] %d%% %dmV, backlight %s\n", g_battPct, g_battMv, g_dimmed ? "dim" : "full");
+  {
+    const pg::io::Xfer::Stats& xs = g_xfer.stats();
+    sp("[xfer] lines %lu, gets %lu, puts %lu, errors %lu, timeouts %lu, bad crc %lu, bad lines %lu, overflows %lu\n",
+       static_cast<unsigned long>(xs.lines), static_cast<unsigned long>(xs.gets), static_cast<unsigned long>(xs.puts),
+       static_cast<unsigned long>(xs.errors), static_cast<unsigned long>(xs.timeouts),
+       static_cast<unsigned long>(xs.badCrc), static_cast<unsigned long>(xs.badLines),
+       static_cast<unsigned long>(xs.overflows));
+  }
   sp("===== END REPORT =====\n");
 }
 
@@ -283,14 +298,46 @@ void printStatsLine() {
      static_cast<int>(g_frameUs), g_overloadWarn ? " OVERLOAD" : "");
 }
 
+struct SerialLines final : pg::io::XferOut {
+  void send(const char* line, size_t len) override { sys::serialWrite(line, len); }
+};
+SerialLines g_xferOut;
+
+void serviceXfer() {
+  pg::io::XferEnv env;
+  env.nowMs = sys::millis();
+  env.playing = g_inst.engine().isPlaying();
+  const pg::io::Xfer::Stats before = g_xfer.stats();
+  g_xfer.service(env, g_xferOut);
+  const pg::io::Xfer::Stats& after = g_xfer.stats();
+  if (after.timeouts != before.timeouts) sp("[xfer] transfer abandoned by the host: timed out, nothing saved\n");
+}
+
+// Single-letter commands (at most 16 per frame, as before) and protocol lines
+// (any number; replies go out at once).
 void pollSerial() {
-  for (int n = 0; n < 16; ++n) {
+  const uint32_t t0 = sys::millis();
+  int letters = 0;
+  for (int n = 0; n < 4096; ++n) {
     const int ch = sys::serialRead();
-    if (ch < 0) return;
+    if (ch < 0) {
+      if (g_xfer.busy() && sys::millis() - t0 < kXferSpinMs) {
+        sys::delayMs(1);
+        continue;
+      }
+      break;
+    }
+    if (g_xfer.rx(static_cast<uint8_t>(ch), sys::millis())) {
+      if (g_xfer.lineReady()) serviceXfer();
+      continue;
+    }
     if (ch == 'r' || ch == 'R') printReport();
     else if (ch == 'h' || ch == '?')
-      sp("Pocket Groove %s serial: r = full report, h = help. Stats line every 5 s.\n", PG_VERSION);
+      sp("Pocket Groove %s serial: r = full report, h = help. Stats line every 5 s. "
+         "Project transfer: tools/pg on the computer.\n", PG_VERSION);
+    if (++letters >= 16) break;
   }
+  serviceXfer();   // session and line timeouts
 }
 
 // ---- overlays ------------------------------------------------------------------------------
@@ -492,6 +539,7 @@ void setup() {
 
   g_inst.init(static_cast<float>(sampleRate()), /*monoOutput=*/true);
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
+  g_xfer.init(&fs, PG_VERSION);
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards
   g_ui.boot(sys::millis());
   sp("[boot] UI up, project \"%s\"\n", g_ui.projectName());

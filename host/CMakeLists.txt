@@ -15,6 +15,9 @@ endif()
 set(PG_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/..)
 set(PG_SRC ${PG_ROOT}/lib/pg/src)
 # Match the firmware's constraints: no exceptions/RTTI, and flag accidental doubles.
+# Host-only engine hooks for offline stem rendering (lib/pg/src/pg/engine/stem_tap.h).
+# The firmware never defines it, so the device build compiles none of it.
+add_compile_definitions(PG_STEM_TAP=1)
 set(PG_FLAGS -Wall -Wextra -Wdouble-promotion -Wfloat-conversion -fno-exceptions -fno-rtti)
 enable_testing()
 
@@ -75,3 +78,19 @@ foreach(src ${itest_srcs})
   target_compile_options(${name} PRIVATE ${PG_FLAGS})
   add_test(NAME ${name} COMMAND ${name} WORKING_DIRECTORY ${PG_ROOT})
 endforeach()
+
+# itest_bounce runs the bounce tool: build it first.
+if(TARGET itest_bounce AND TARGET bounce)
+  add_dependencies(itest_bounce bounce)
+endif()
+
+# The USB transfer client (tools/pg.py) against the device's protocol module
+# (pg::io::Xfer in host/tools/xfer_sim, on a pseudo-terminal). Needs Python 3
+# with pyserial; skipped (exit 77) without pyserial.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND TARGET xfer_sim AND NOT WIN32)
+  add_test(NAME test_pg_client
+           COMMAND ${Python3_EXECUTABLE} ${PG_ROOT}/tools/test_pg.py --sim $<TARGET_FILE:xfer_sim>
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(test_pg_client PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+endif()
