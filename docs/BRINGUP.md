@@ -60,11 +60,37 @@ Then on any OS, check the version (must say 6.2.0 or later):
 pio --version
 ```
 
-If an older Core is already installed:
+### Known problem: "not compatible with PlatformIO Core v6.2.0-post.1"
+
+The pinned ESP32 platform installs its own build of PlatformIO Core into
+`~/.platformio/penv` and takes the newest one, 6.2.0.post1. That version misreads
+its own number as a pre-release and then refuses the platform, with:
+
+    IncompatiblePlatform: Development platform 'espressif32' is not compatible with
+    PlatformIO Core v6.2.0-post.1 and depends on PlatformIO Core >=6.2.0.
+
+Fix: pin the Core in that environment to 6.2.0. Do not run `pio upgrade`
+afterwards; it brings the problem back. In VS Code open the PlatformIO sidebar,
+then Quick Access, Miscellaneous, "PlatformIO Core CLI", and run:
 
 ```bash
-pio upgrade
+python -m pip install "pioarduino==6.2.0"
 ```
+
+If that reports `No module named pip`, use the bundled `uv` instead:
+
+```bash
+uv pip install --python ~/.platformio/penv "pioarduino==6.2.0"
+```
+
+Check it took:
+
+```bash
+pio --version
+```
+
+It should print `6.2.0`. Then build again; the platform is re-downloaded if the
+failed run removed it.
 
 ### Linux only: serial port permissions
 
