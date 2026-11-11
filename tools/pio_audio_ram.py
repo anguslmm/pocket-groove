@@ -86,17 +86,26 @@ def _sections(objcopy, path):
     return re.findall(r"\]\s+(\S+)\s+(?:PROGBITS|NOBITS)", out)
 
 
-def _demangle(names):
+def _demangle(cxxfilt, names):
+    # The toolchain's own c++filt, never the host's: on macOS the system
+    # c++filt strips a leading underscore first and so leaves ELF names
+    # mangled, which made every demangled-name pattern miss silently.
     if not names:
         return {}
-    r = subprocess.run(["c++filt"], input="\n".join(names), capture_output=True, text=True)
-    out = r.stdout.split("\n") if r.returncode == 0 else names
+    r = subprocess.run([cxxfilt], input="\n".join(names), capture_output=True, text=True)
+    if r.returncode != 0:
+        raise RuntimeError("[audio-ram] %s failed: %s" % (cxxfilt, r.stderr.strip()))
+    out = r.stdout.split("\n")
     return dict(zip(names, out))
+
+
+_moved = []
 
 
 def _relocate(target, source, env):
     # $OBJCOPY is esptool on this platform: use the toolchain's binutils.
     objcopy = env.WhereIs(env.subst("$CC").replace("gcc", "objcopy")) or env.subst("$CC").replace("gcc", "objcopy")
+    cxxfilt = objcopy.replace("objcopy", "c++filt")
     for t in target:
         path = str(t)
         rel = path.replace("\\", "/")
@@ -106,13 +115,14 @@ def _relocate(target, source, env):
         args = []
         if any(o in rel for o in AUDIO_OBJS):
             fns = sorted({s.split(".", 2)[2] for s in secs if s.startswith((".text.", ".literal."))})
-            dm = _demangle(fns)
+            dm = _demangle(cxxfilt, fns)
             pick = {f for f in fns if any(h.search(dm.get(f, f)) or h.search(f) for h in _hot)}
             for s in secs:
                 if s.startswith(".text.") and s[6:] in pick:
                     args += ["--rename-section", "%s=.iram1.pg.%s" % (s, s[6:])]
                 elif s.startswith(".literal.") and s[9:] in pick:
                     args += ["--rename-section", "%s=.iram1.pgl.%s" % (s, s[9:])]
+            _moved.extend(dm.get(f, f) for f in pick)
             if pick:
                 print("[audio-ram] %s: %d functions -> IRAM" % (rel.split("/pg/")[-1], len(pick)))
         if TIER >= 3 and any(o in rel for o in RAM_RODATA):
@@ -142,6 +152,16 @@ def _relocate_all(target, source, env):
     objs = [o for o in glob.glob(os.path.join(env.subst("$BUILD_DIR"), "**", "*.o"), recursive=True)
             if "/pg/pg/" in o.replace("\\", "/")]
     _relocate([type("N", (), {"__str__": lambda self, o=o: o})() for o in objs], None, env)
+    # Fail the build rather than ship an image that silently stayed in flash.
+    # (On a re-link without recompiling, the sections are already renamed and
+    # nothing is moved now: only check when this run did the renaming.)
+    if _moved:
+        for must in ("pg::Engine::process(", "pg::lead::LeadVoice::render(", "pg::bass::BassVoice::render("):
+            if not any(m.startswith(must) for m in _moved):
+                raise RuntimeError("[audio-ram] %s was not moved to IRAM (%d functions matched)" % (must, len(_moved)))
+        print("[audio-ram] total: %d functions -> IRAM" % len(_moved))
+    elif not objs:
+        raise RuntimeError("[audio-ram] found no lib/pg objects under " + env.subst("$BUILD_DIR"))
     return 0
 
 
