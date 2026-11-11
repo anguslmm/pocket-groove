@@ -5,6 +5,10 @@ Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
 (build/firmware/pocket-groove-smoke.bin), first boot of the instrument
 (build/firmware/pocket-groove.bin), and listening feedback on renders.
 
+USB audio (stereo input over USB, UAC1 + CDC): feasible with the prebuilt TinyUSB; spike
+env:usb-audio-spike (src/usbspike, build/firmware/pocket-groove-usbspike.bin) built and
+checked offline only, waiting for the hardware test in docs/usb-audio.md section 8.
+
 Known follow-ups:
 - pg::io: FAT (SD) save-replace has a power-cut window inside FatFs rename; make it safe.
 - Per-pattern sound settings and a second p-lock per step (data-model change, v0.2).
