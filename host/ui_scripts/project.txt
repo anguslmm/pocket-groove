@@ -7,7 +7,7 @@ fsave sd LIVESET1 122
 fsave sd SKETCH07 118
 # open INT ACIDJAM through the UI, then change the tempo back to 124 (unsaved)
 tap \
-tap .
+cursor INT ACIDJAM
 tap ent
 wait 1600
 down tab
@@ -15,7 +15,7 @@ tap -
 tap -
 up tab
 tap \
-tap .
+cursor INT WAREHOUS
 wait 100
 shot project-load
 
@@ -43,9 +43,7 @@ shot project-save
 tap `
 
 tap \
-tap .
-tap .
-tap .
+cursor SD BASSHAUS
 wait 50
 tap ent
 wait 100

@@ -18,6 +18,7 @@
 //   boot                    power-on with the current (in-memory) file system: session or demo
 //   sd <0|1>                SD card present (file system and UiEnv)
 //   fsave <int|sd> <NAME> [bpm]   write the current project to a file (setup only)
+//   cursor <ROM|INT|SD> <NAME>   PROJECT view: move the list cursor onto that row
 //   session                 write the current project as the session file _last.pgv (setup only)
 //   shot <name>             write <out>/<name>.png (240x135) and <out>/<name>_4x.png
 //   bench                   print the host time of a full redraw of the current screen
@@ -30,6 +31,8 @@
 
 #include "common/ui_harness.h"
 #include "pg/io/project_io.h"
+#include "pg/demo/demo.h"
+#include <initializer_list>
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -103,6 +106,27 @@ int main(int argc, char** argv) {
       if (st != pg::io::Status::Ok) {
         std::fprintf(stderr, "%s:%d: fsave failed: %s\n", argv[1], lineNo, pg::io::statusName(st));
         ++errors;
+      }
+    } else if (op == "cursor") {
+      int target = -1, i = 0;
+      const std::string tag = a;
+      for (int d = 0; d < pg::demo::count(); ++d, ++i)
+        if (tag == "ROM" && std::strcmp(pg::demo::name(d), b) == 0) target = i;
+      for (const char* m : {"/int", "/sd"}) {
+        if (!rig.fs.mounted(m)) continue;
+        pg::io::ProjectEntry e[pg::ui::kListPerMount];
+        const int cnt = pg::io::listProjects(rig.fs, m, e, pg::ui::kListPerMount);
+        for (int j = 0; j < cnt; ++j, ++i)
+          if (((tag == "INT" && m[1] == 'i') || (tag == "SD" && m[1] == 's')) && std::strcmp(e[j].name, b) == 0)
+            target = i;
+      }
+      if (target < 0) {
+        std::fprintf(stderr, "%s:%d: no row %s %s\n", argv[1], lineNo, a, b);
+        ++errors;
+      } else {
+        target += rig.ui.projectTab() == 1 ? 1 : 0;
+        for (int g = 0; g < 80 && rig.ui.projectCursor() < target; ++g) rig.tap(pg::ui::kKDot, 30);
+        for (int g = 0; g < 80 && rig.ui.projectCursor() > target; ++g) rig.tap(pg::ui::kKSemicolon, 30);
       }
     } else if (op == "session") {
       if (pg::io::saveSession(rig.fs, *rig.proj) != pg::io::Status::Ok) ++errors;

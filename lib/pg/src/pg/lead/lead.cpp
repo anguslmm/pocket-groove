@@ -95,6 +95,13 @@ constexpr float kInvQ      = 1.0f / float(kQuantum);
 constexpr float kFmGain    = 0.80f;     // sine vs saw loudness trims
 constexpr float kOrganGain = 1.44f;
 constexpr float kOrganPerc = 0.42f;     // level of the 4' percussion partial at full velocity
+// Per-WAVE osc1 level trim, so every wave sits about as loud as SAW at equal
+// settings (measured: osc1-only Min7/Maj7 stabs, default patch and the
+// BASSHAUS organ patch, BS.1770 loudness; each trim is the mean of the two
+// shortfalls, SUPER held at +3 dB so its RMS stays within 1.5 dB of SAW).
+// SAW is exactly 1: the default sound is unchanged bit for bit.
+//                                       SAW   PULSE  TRI(+1.2) SUPER(+3) FM1(+1.8) FM2(+0.4) BELL(+1.1) ORGAN(+1.3 dB)
+constexpr float kWaveTrim[kNumWaves] = {1.0f, 1.0f, 1.148f, 1.413f, 1.230f, 1.047f, 1.135f, 1.161f};
 
 enum OscKind : uint8_t { kOne = 0, kTwo };
 enum TabSet : uint8_t { kSetSaw = 0, kSetTri, kSetSine };
@@ -257,7 +264,7 @@ void filterAmp(FilterState& st, const float* inL, const float* inR, float a1, fl
       const float xl = inL[i], xr = inR[i];
       const float v3l = xl - ic2L, v3r = xr - ic2R;
       const float v1l = a1 * ic1L + a2 * v3l, v1r = a1 * ic1R + a2 * v3r;
-      const float v2l = ic2L + a2 * ic1L + a3 * v3l, v2r = ic2R + a2 * ic1R + a3 * v3r;
+      const float v2l = ic2L + a3 * v1l, v2r = ic2R + a3 * v1r;   // a3 carries g
       ic1L = 2.0f * v1l - ic1L;
       ic1R = 2.0f * v1r - ic1R;
       ic2L = 2.0f * v2l - ic2L;
@@ -284,7 +291,7 @@ void filterAmp(FilterState& st, const float* inL, const float* inR, float a1, fl
       const float x = inL[i];
       const float v3 = x - ic2;
       const float v1 = a1 * ic1 + a2 * v3;
-      const float v2 = ic2 + a2 * ic1 + a3 * v3;
+      const float v2 = ic2 + a3 * v1;   // a3 carries g = tan: == ic2 + a2*ic1 + (g*a2)*v3
       ic1 = 2.0f * v1 - ic1;
       ic2 = 2.0f * v2 - ic2;
       float y;
@@ -298,6 +305,45 @@ void filterAmp(FilterState& st, const float* inL, const float* inR, float a1, fl
     st.ic1L = st.ic1R = ic1;
     st.ic2L = st.ic2R = ic2;
   }
+}
+
+// Mono fast path for the most common patch shape: osc1 and osc2 each one
+// table lookup (saw / triangle / sine at SHAPE 0), summed straight into the
+// filter and amp in ONE loop instead of three passes over a buffer. Same
+// float operations in the same order as oscOne + oscOne + filterAmp<TYPE,false>.
+template <int TYPE>
+void fusedOneOneMono(uint32_t& phA, uint32_t incA, const Tab& ta, float gA, uint32_t& phB, uint32_t incB,
+                     const Tab& tb, float gB, FilterState& st, float a1, float a2, float a3, float k, float g,
+                     float dg, float* out) {
+  const int16_t* da = ta.d;
+  const int16_t* db = tb.d;
+  const uint32_t sha = ta.shift, mka = ta.mask, shb = tb.shift, mkb = tb.mask;
+  const float fa = ta.fscale, fb = tb.fscale;
+  uint32_t pa = phA, pb = phB;
+  float ic1 = st.ic1L, ic2 = st.ic2L;
+  for (int i = 0; i < kQuantum; ++i) {
+    float sa, sb;
+    PG_LEAD_LOOK(sa, da, sha, mka, fa, pa);
+    PG_LEAD_LOOK(sb, db, shb, mkb, fb, pb);
+    pa += incA;
+    pb += incB;
+    const float x = sa * gA + sb * gB;
+    const float v3 = x - ic2;
+    const float v1 = a1 * ic1 + a2 * v3;
+    const float v2 = ic2 + a3 * v1;   // a3 carries g = tan: == ic2 + a2*ic1 + (g*a2)*v3
+    ic1 = 2.0f * v1 - ic1;
+    ic2 = 2.0f * v2 - ic2;
+    float y;
+    if (TYPE == kFilterLP) y = v2;
+    else if (TYPE == kFilterBP) y = k * v1;
+    else y = x - k * v1 - v2;
+    g += dg;
+    out[i] += y * g;
+  }
+  phA = pa;
+  phB = pb;
+  st.ic1L = st.ic1R = ic1;
+  st.ic2L = st.ic2R = ic2;
 }
 
 }  // namespace
@@ -353,6 +399,7 @@ void LeadVoice::init(float sampleRate) {
     applyParam(i);
   }
   paramsSnap_ = true;
+  rawValid_ = false;
   ready_ = true;
   globalQuantum();
 }
@@ -362,6 +409,10 @@ const ParamInfo* LeadVoice::paramInfo(int index) const {
 }
 
 void LeadVoice::setParams(const uint8_t* p) {
+  // Called every quantum: unchanged input (the common case) is one compare.
+  if (rawValid_ && std::memcmp(p, raw_, kNumParams) == 0) return;
+  std::memcpy(raw_, p, kNumParams);
+  rawValid_ = true;
   for (int i = 0; i < kNumParams; ++i) {
     uint8_t v = p[i];
     if (v < kInfo[i].min) v = kInfo[i].min;
@@ -624,6 +675,7 @@ void LeadVoice::startVoice(V& v, const NoteStart& n) {
   v.ph2[1] = v.ph2[0];
   v.two1 = v.two2 = 0;
   v.ic1L = v.ic2L = v.ic1R = v.ic2R = 0.0f;
+  v.cValid = 0;
   setPan(v, n.chordIdx, n.chordSize, n.panSlot);
 }
 
@@ -886,14 +938,11 @@ void LeadVoice::renderVoiceT(V& v, float* outL, float* outR) {
     const float inv = 1.0f / (den * den + num * num + k * num * den);
     a1 = den * den * inv;
     a2 = num * den * inv;
-    a3 = num * num * inv;
+    // The filter kernels compute v2 = ic2 + g * v1 (g = tan = num / den), the
+    // same value as ic2 + a2 * ic1 + a3 * v3 with two operations fewer per
+    // sample; a3 now carries g.
+    a3 = num / den;
   }
-
-  // ---- oscillators into the pre-filter stereo buffer
-  float bL[kQuantum], bR[kQuantum];
-  for (int i = 0; i < kQuantum; ++i) bL[i] = 0.0f;
-  if (ST)
-    for (int i = 0; i < kQuantum; ++i) bR[i] = 0.0f;
 
   // Detuned copies of a LOW note are not split left/right: that makes
   // anti-phase lows on headphones. No detune spread at MIDI <= 48, full from
@@ -902,9 +951,56 @@ void LeadVoice::renderVoiceT(V& v, float* outL, float* outR) {
   const float ws = clampf((v.pitch - 48.0f) * (1.0f / 16.0f), 0.0f, 1.0f);
   const float pv = v.pan * panScale_;
   const float oscSpread = oscSpread_ * ws;
-  const float mixA = mixAS_, mixB = mixBS_;
+  const float mixA = mixAS_ * kWaveTrim[wave_ < kNumWaves ? wave_ : 0], mixB = mixBS_;
   const bool classic = wave_ <= kWaveTri;
   const float det = detSemis_;
+
+  if (!ST && classic && mixA > 1.0e-4f && mixB > 1.0e-4f && shape1_.kind == kOne && shape2_.kind == kOne) {
+    // Mono, both oscillators one lookup each: fused osc + osc + filter + amp.
+    const float p1 = clampf(pb - 0.5f * det, 0.0f, pitchMax_);
+    const float p2 = clampf(pb + interval_ + 0.5f * det, 0.0f, pitchMax_);
+    // Increments and mips only change with the pitch (glide, vibrato, a new
+    // note): reuse last quantum's when it is exactly the same.
+    if (!v.cValid || p1 != v.cP1 || p2 != v.cP2 || shape1_.setA != v.cSet1 || shape2_.setA != v.cSet2) {
+      const int band1 = bandForPitch(p1), band2 = bandForPitch(p2);
+      v.cInc1 = toInc(incK_ * exp2Fast(p1 * (1.0f / 12.0f)));
+      v.cInc2 = toInc(incK_ * exp2Fast(p2 * (1.0f / 12.0f)));
+      v.cT1 = shape1_.setA == kSetSaw ? &T.saw[band1] : &T.tri[band1];
+      v.cT2 = shape2_.setA == kSetSaw ? &T.saw[band2] : (shape2_.setA == kSetTri ? &T.tri[band2] : &T.sine);
+      v.cP1 = p1;
+      v.cP2 = p2;
+      v.cSet1 = shape1_.setA;
+      v.cSet2 = shape2_.setA;
+      v.cValid = 1;
+    }
+    const uint32_t inc1 = v.cInc1, inc2 = v.cInc2;
+    const Tab& t1 = *v.cT1;
+    const Tab& t2 = *v.cT2;
+    const float pan1 = clampf(pv - oscSpread * v.flip, -1.0f, 1.0f);
+    const float g1 = shape1_.gA * (mixA * (1.0f - pan1));
+    const float pan2 = clampf(pv + oscSpread * v.flip, -1.0f, 1.0f);
+    const float g2 = shape2_.gA * (mixB * (1.0f - pan2));
+    v.two1 = v.two2 = 0;
+    v.fresh = false;
+    FilterState st = {v.ic1L, v.ic2L, v.ic1R, v.ic2R};
+    if (fltType_ == kFilterLP) fusedOneOneMono<kFilterLP>(v.ph1[0], inc1, t1, g1, v.ph2[0], inc2, t2, g2, st, a1, a2, a3, k, g0, dg, outL);
+    else if (fltType_ == kFilterBP) fusedOneOneMono<kFilterBP>(v.ph1[0], inc1, t1, g1, v.ph2[0], inc2, t2, g2, st, a1, a2, a3, k, g0, dg, outL);
+    else fusedOneOneMono<kFilterHP>(v.ph1[0], inc1, t1, g1, v.ph2[0], inc2, t2, g2, st, a1, a2, a3, k, g0, dg, outL);
+    v.ic1L = st.ic1L; v.ic2L = st.ic2L; v.ic1R = st.ic1R; v.ic2R = st.ic2R;
+    if (ending) {
+      v.stage = kOff;
+      v.gate = false;
+      v.gain = 0.0f;
+      if (v.pending) startVoice(v, v.pend);
+    }
+    return;
+  }
+
+  // ---- oscillators into the pre-filter stereo buffer
+  float bL[kQuantum], bR[kQuantum];
+  for (int i = 0; i < kQuantum; ++i) bL[i] = 0.0f;
+  if (ST)
+    for (int i = 0; i < kQuantum; ++i) bR[i] = 0.0f;
 
   if (mixA > 1.0e-4f) {
     if (classic) {

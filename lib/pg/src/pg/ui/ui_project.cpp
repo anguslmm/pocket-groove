@@ -175,6 +175,7 @@ void Ui::loadInto(int mount, int romIndex, const char* name) {
 void Ui::doLoadRow(int r) {
   if (r < 0 || r >= rowCount_) return;
   const FileRow& f = rows_[r];
+  if (f.status == kRowMore) { toast("LIST SHOWS 24 FILES PER DRIVE", 0); return; }
   if (f.mount != kPmRom && !f.valid) { ioError("LOAD", f.status); return; }
   int rom = 0;
   if (f.mount == kPmRom)
@@ -273,10 +274,10 @@ void Ui::refreshFiles() {
   }
   listedSd_ = env_.sdPresent;
   if (fs_) {
-    io::ProjectEntry e[24];
+    io::ProjectEntry e[kListPerMount];
     for (int m = kPmInt; m <= kPmSd; ++m) {
       if (!fs_->mounted(mountPath(m))) continue;
-      const int n = io::listProjects(*fs_, mountPath(m), e, 24);
+      const int n = io::listProjects(*fs_, mountPath(m), e, kListPerMount);
       for (int i = 0; i < n && rowCount_ < kMaxFileRows; ++i) {
         FileRow& r = rows_[rowCount_++];
         r.mount = uint8_t(m);
@@ -284,6 +285,25 @@ void Ui::refreshFiles() {
         r.status = uint8_t(e[i].status);
         r.tempo = e[i].tempo;
         copyName(r.name, e[i].name);
+      }
+      if (n < kListPerMount) continue;
+      // More files than the list holds: say so instead of truncating silently.
+      char dir[12];
+      cat(cat(dir, mountPath(m)), "/pg");
+      struct Count { int n; };
+      Count c{0};
+      fs_->list(dir, [](const char* name, size_t, void* u) {
+        const size_t l = std::strlen(name);
+        if (l > 4 && std::strcmp(name + l - 4, ".pgv") == 0 && name[0] != '_') ++static_cast<Count*>(u)->n;
+      }, &c);
+      if (c.n > n && rowCount_ < kMaxFileRows) {
+        FileRow& r = rows_[rowCount_++];
+        r.mount = uint8_t(m);
+        r.valid = 0;
+        r.status = kRowMore;
+        r.tempo = 0;
+        char* o = cat(r.name, "+");
+        o += itoa10(c.n - n > 999 ? 999 : c.n - n, o);
       }
     }
   }
@@ -311,6 +331,7 @@ void Ui::projectEnter() {
   const int r = projCursor_ - 1;
   if (r >= rowCount_) return;
   if (rows_[r].mount == kPmRom) { toast("DEMOS ARE READ-ONLY", 2); return; }
+  if (rows_[r].status == kRowMore) { toast("LIST SHOWS 24 FILES PER DRIVE", 0); return; }
   openConfirm(kConfirmOverwrite, r);
 }
 
@@ -318,6 +339,7 @@ void Ui::projectDel() {
   const int r = projTab_ == 0 ? projCursor_ : projCursor_ - 1;
   if (r < 0 || r >= rowCount_) return;
   if (rows_[r].mount == kPmRom) { toast("DEMOS CAN'T BE DELETED", 2); return; }
+  if (rows_[r].status == kRowMore) return;
   openConfirm(kConfirmDelete, r);
 }
 
@@ -446,7 +468,7 @@ void Ui::autosave() {
   if (!fs_) return;
   if (wasPlaying_ && !playing_) stopMs_ = now_ | 1u;
   wasPlaying_ = playing_;
-  if (!battSaved_ && env_.batteryPct <= 5) {
+  if (!battSaved_ && env_.batteryPct <= 5) {   // kBatteryUnknown (0xFF) never triggers
     battSaved_ = true;
     if (saveSessionNow()) toast("BATTERY LOW - SAVED", 2);
     return;
@@ -534,6 +556,12 @@ void Ui::drawProject(Framebuffer& fb) {
     static const uint8_t kCol[4] = {DIM, GREEN, AMBER, CYAN};
     static const uint8_t kColD[4] = {LINE, GREEN_D, AMBER_D, CYAN_D};
     g.text(6, y, kTag[f.mount & 3], cur ? kColD[f.mount & 3] : kCol[f.mount & 3]);
+    if (f.status == kRowMore) {
+      char more[32];
+      cat(cat(more, f.name), " MORE NOT SHOWN");
+      g.text(30, y, more, cur ? BG : DIM);
+      continue;
+    }
     g.text(30, y, f.name, cur ? BG : (f.valid ? TEXT : DIM));
     char t[8];
     if (f.valid) itoa10(f.tempo, t);

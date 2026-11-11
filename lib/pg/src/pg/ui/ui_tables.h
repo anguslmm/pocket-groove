@@ -24,6 +24,8 @@ inline constexpr char kPadKeys[] = "ASDFGHJK";
 inline constexpr char kNoteKeys[] = "ZXCVBNM,";
 inline constexpr char kStepKeys[] = "12345678QWERTYUI";
 
+constexpr uint8_t kRowMore = 0xFE;   // FileRow::status of the "+N MORE" row
+
 // Confirm dialog actions
 enum : uint8_t { kConfirmLoad = 1, kConfirmOverwrite, kConfirmDelete, kConfirmNew, kConfirmOverwriteName };
 

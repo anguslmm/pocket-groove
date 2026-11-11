@@ -3,6 +3,7 @@
 #include "ui.h"
 
 #include <cstring>
+#include <initializer_list>
 #include <new>
 #include "keys.h"
 #include "ui_tables.h"
@@ -126,6 +127,26 @@ bool Ui::muted(int t) const {
   t &= 7;
   if (pendMute_[t]) return pendMute_[t] == 2;
   return proj_->tracks[t].mute != 0;
+}
+
+// Is the focused track param p-locked on any step of its track in the playing
+// pattern? Cached: rescanned only when its inputs change (64 steps at most).
+void Ui::updateFocusLock() {
+  uint32_t key = 2166136261u;
+  for (uint32_t v : {uint32_t(focus_.global), uint32_t(focus_.track), uint32_t(focus_.index), uint32_t(pat_),
+                     st_.revision, uint32_t(writeBusy_)}) key = (key ^ v) * 16777619u;
+  for (const PendStep& p : pendSteps_) key = (key ^ (p.used ? uint32_t(p.s.lockParam) << 8 | p.idx : 0u)) * 16777619u;
+  if (key == lockKey_) return;
+  lockKey_ = key;
+  bool locked = false;
+  if (!focus_.global) {
+    const int t = focus_.track & 7, len = trackLen(t);
+    for (int i = 0; i < len && !locked; ++i) {
+      const Step s = stepAt(t, i);
+      locked = (s.flags & kStepOn) && s.lockParam == focus_.index + 1;
+    }
+  }
+  if (locked != focusLocked_) { focusLocked_ = locked; ++serial_; }
 }
 
 bool Ui::patternUsed(int pat) const {
@@ -381,7 +402,6 @@ void Ui::onKey(const KeyEvent& e, uint32_t nowMs) {
     rec_[k] = KeyRec{kActNone, 0, 0, 0};
     lastKeyMs_ = nowMs;
     if (banner_) banner_ = false;                  // the first key dismisses the banner AND acts (14.2)
-    if (k == kKG0) return;                         // no function in v1
     // Explain mode (10.10): keys describe themselves; only SPACE, ` and / act.
     if (explain_) {
       if (k == kKSlash || k == kKBacktick) {
@@ -395,6 +415,7 @@ void Ui::onKey(const KeyEvent& e, uint32_t nowMs) {
       }
       return;
     }
+    if (k == kKG0) return;                         // the firmware owns G0 (volume, diagnostics)
     // Modal dialogs swallow every key (16.15); confirm still lets SPACE play/stop.
     if (dialog_ != Dialog::None) {
       if (isModifierKey(k)) return;
@@ -1350,6 +1371,7 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   prunePending();
   runTimers();
   trackDirty();
+  updateFocusLock();
   if (env.sdPresent != listedSd_ && view_ == View::Project) refreshFiles();   // SD inserted / pulled
   autosave();
   if (clipUntil_ && after(now_, clipUntil_)) clipUntil_ = 0;

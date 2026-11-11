@@ -2,7 +2,7 @@
 // song chain once through or one pattern looped.
 //
 //   render_demo --demo N [--song | --pattern P [--loops L]] [--sr 44100|32000]
-//               [--mono] [--duck-off | --duck-beat] [--solo T] [--mute T[,T..]] [--tail S]
+//               [--mono] [--duck-off | --duck-beat] [--set T,I,V] [--solo T] [--mute T[,T..]] [--tail S]
 //               [--seed N] [--out PATH.wav]
 //
 // --song (default) plays the chain from slot 0 until the slot before the first
@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "common/wav.h"
-#include "pg/demo/demo_songs.h"
+#include "pg/demo/demo.h"
 #include "pg/engine/engine_hooks.h"
 #include "pg/instrument/instrument.h"
 
@@ -36,7 +36,7 @@ void mkdirs(const std::string& path) {
 void usage() {
   std::fprintf(stderr,
                "usage: render_demo --demo N [--song | --pattern P [--loops L]] [--sr 44100|32000] [--mono]\n"
-               "                   [--duck-off | --duck-beat] [--solo T] [--mute T,T..] [--tail S] [--seed N] [--out PATH.wav]\n");
+               "                   [--duck-off | --duck-beat] [--set T,I,V] [--solo T] [--mute T,T..] [--tail S] [--seed N] [--out PATH.wav]\n");
 }
 
 }  // namespace
@@ -48,6 +48,7 @@ int main(int argc, char** argv) {
   uint32_t seed = 0;
   float tail = 1.0f;
   std::string out, mutes;
+  std::vector<std::string> sets;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
     auto next = [&]() -> const char* {
@@ -64,25 +65,27 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(a, "--loops")) loops = std::atoi(next());
     else if (!std::strcmp(a, "--solo")) solo = std::atoi(next());
     else if (!std::strcmp(a, "--mute")) mutes = next();
+    else if (!std::strcmp(a, "--set")) sets.push_back(next());
     else if (!std::strcmp(a, "--tail")) tail = float(std::atof(next()));
     else if (!std::strcmp(a, "--seed")) seed = uint32_t(std::strtoul(next(), nullptr, 0));
     else if (!std::strcmp(a, "--out")) out = next();
     else { usage(); return 2; }
   }
   if (sr != 44100.0f && sr != 32000.0f) { std::fprintf(stderr, "--sr must be 44100 or 32000\n"); return 2; }
-  // The songs are called directly (not through pg::demo::build), so this
-  // renders them even while the ROM list in demo.cpp is being reworked.
-  using Builder = void (*)(const pg::Engine&, pg::Project&);
-  const Builder kSongs[] = {pg::demo::buildAcidJam, pg::demo::buildBassHaus, pg::demo::buildWarehous};
-  const int kNumSongs = int(sizeof(kSongs) / sizeof(kSongs[0]));
-  if (demo < 0 || demo >= kNumSongs) { std::fprintf(stderr, "--demo must be 0..%d\n", kNumSongs - 1); return 2; }
+  if (demo < 0 || demo >= pg::demo::count()) { std::fprintf(stderr, "--demo must be 0..%d\n", pg::demo::count() - 1); return 2; }
   if (pattern >= pg::kNumPatterns || loops < 1 || loops > 64) { usage(); return 2; }
 
   g_inst.init(sr, mono);
   pg::Engine& eng = g_inst.engine();
   pg::Project& p = g_inst.project();
-  kSongs[demo](eng, p);
+  pg::demo::build(eng, p, demo);
   eng.sanitizeProject(p);
+  for (const std::string& st : sets) {   // --set TRACK,PARAM,VALUE (e.g. 6,0,90 = bass cutoff 90)
+    int t = 0, i = 0, v = 0;
+    if (std::sscanf(st.c_str(), "%d,%d,%d", &t, &i, &v) == 3 && t >= 0 && t < pg::kNumTracks && i >= 0 &&
+        i < pg::kParamsPerTrack)
+      p.tracks[t].params[i] = uint8_t(v);
+  }
   if (duckOff) p.globals[pg::kGDuckSource] = 0;
   if (duckBeat) p.globals[pg::kGDuckSource] = 2;   // keeps ducking with the kick muted (solo measurements)
   if (solo >= 0 && solo < pg::kNumTracks)

@@ -9,6 +9,7 @@
 #include <esp_heap_caps.h>
 #include <esp_rom_sys.h>
 #include <esp_system.h>
+#include <cstdio>
 #include <cstring>
 #include <new>
 
@@ -139,9 +140,13 @@ void chipInfo(ChipInfo* out) {
     case ESP_RST_BROWNOUT:  rr = "BROWNOUT";  break;
     case ESP_RST_USB:       rr = "USB";       break;
     case ESP_RST_JTAG:      rr = "JTAG";      break;
+    case ESP_RST_PWR_GLITCH: rr = "PWR_GLITCH"; break;
+    case ESP_RST_CPU_LOCKUP: rr = "CPU_LOCKUP"; break;
     default:                rr = "UNKNOWN";   break;
   }
-  strlcpy(out->resetReason, rr, sizeof(out->resetReason));
+  // + the chip's raw reset cause (ROM code, e.g. 1 power-on, 21 USB-UART chip
+  // reset, 15 brownout, 16 RTC watchdog) so an unexpected mapping shows up.
+  snprintf(out->resetReason, sizeof(out->resetReason), "%s/%d", rr, static_cast<int>(esp_rom_get_reset_reason(0)));
 }
 
 HeapInfo heap() {
@@ -153,6 +158,35 @@ HeapInfo heap() {
   h.totalBytes   = heap_caps_get_total_size(caps);
   return h;
 }
+extern "C" {
+extern int _data_start, _bss_end;   // ESP-IDF linker script (sections.ld): start of .dram0.data, end of .bss
+}
+uint32_t staticDramBytes() {
+  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&_bss_end) - reinterpret_cast<uintptr_t>(&_data_start));
+}
+uint32_t stackFreeMinSelf() { return static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr)); }
+
+bool resetWasAbnormal() {
+  switch (esp_reset_reason()) {
+    case ESP_RST_PANIC:
+    case ESP_RST_INT_WDT:
+    case ESP_RST_TASK_WDT:
+    case ESP_RST_WDT:
+    case ESP_RST_BROWNOUT:
+    case ESP_RST_PWR_GLITCH:
+    case ESP_RST_CPU_LOCKUP:   // double exception
+      return true;
+    // Not abnormal: POWERON (power switch / USB plug), SW (esp_restart), EXT,
+    // and USB -- the reset esptool triggers through the USB-Serial/JTAG port
+    // after flashing (S3 ROM: "rst:0x15 USB_UART_CHIP_RESET") or that a
+    // terminal causes by toggling DTR/RTS. esptool's RTC-watchdog reset is
+    // used only for USB-OTG (TinyUSB) ports, which this firmware does not use.
+    default:
+      return false;
+  }
+}
+void restart() { esp_restart(); }
+
 void* allocInternal(size_t bytes) { return heap_caps_malloc(bytes, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
 void  freeInternal(void* p)       { heap_caps_free(p); }
 

@@ -2,6 +2,8 @@
 // choke fade.
 #include "drums.h"
 
+#include <cstring>
+
 namespace pg {
 namespace drums {
 
@@ -24,6 +26,9 @@ void DrumVoice::init(float sampleRate) {
 }
 
 void DrumVoice::setParams(const uint8_t* soundParams) {
+  // Called every quantum: the common "nothing changed" case is one 12-byte
+  // compare (unused slots of raw_ are 0, as the engine sends them).
+  if (std::memcmp(soundParams, raw_, kMaxParams) == 0) return;
   uint32_t changed = 0;
   for (int i = 0; i < numParams_; ++i) {
     const uint8_t v = soundParams[i];

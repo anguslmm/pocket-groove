@@ -468,8 +468,13 @@ void State::refreshGlobals() {
     const float hpT = clampf((tone - 40.0f) * (1.0f / 87.0f), 0.0f, 1.0f);
     const float lpHz = 400.0f * fastPow2(4.4919f * lpT);
     const float hpHz = 60.0f * fastPow2(4.6439f * hpT);
-    delay.setParams(0.95f * float(v[kGDelayFeedback]) * (1.0f / 127.0f), onePoleCoef(lpHz, half),
-                    onePoleCoef(hpHz, half), float(v[kGDelayWidth]) * (1.0f / 127.0f));
+    // The delay filters every echo once more than the previous one (see
+    // delay.h); the original line filtered echoes in pairs. Per-pass corners
+    // chosen so TWO passes have their -3 dB point where one pass used to
+    // (one-pole x2: LP corner * 1/sqrt(sqrt(2) - 1), HP corner * sqrt(sqrt(2) - 1)):
+    // the tail darkens at the same rate as before.
+    delay.setParams(0.95f * float(v[kGDelayFeedback]) * (1.0f / 127.0f), onePoleCoef(1.5538f * lpHz, half),
+                    onePoleCoef(0.6436f * hpHz, half), float(v[kGDelayWidth]) * (1.0f / 127.0f));
   }
   // Reverb: RT60 0.3 s .. 5 s, damping 9 kHz .. 900 Hz.
   {
@@ -1108,22 +1113,19 @@ void State::sequencerTick() {
   }
   // 3b. Roll hits.
   rollTick();
-  // 4. Slide-armed notes whose (long) gate ran out without anything to slide into.
-  for (int t = 0; t < kNumTracks; ++t) {
-    TrackRt& r = tr[t];
-    for (int i = 0; i < kMaxPend; ++i) {
-      PendNote& p = r.pend[i];
-      if (p.active && p.slideArmed && !p.holdToStep && p.cd < kDueTicks) { vOff(t, p.note); p.active = 0; }
-    }
-  }
-  // 5. Advance time.
+  // 4. Slide-armed notes whose (long) gate ran out without anything to slide
+  //    into; 5. advance time. One pass (4 never looks at other entries).
   gridCd -= kQuantumFP;
   if (sinceFire < (1 << 30)) sinceFire += kQuantumTicks;
   for (int t = 0; t < kNumTracks; ++t) {
     TrackRt& r = tr[t];
+    for (int i = 0; i < kMaxPend; ++i) {
+      PendNote& p = r.pend[i];
+      if (!p.active) continue;
+      if (p.slideArmed && !p.holdToStep && p.cd < kDueTicks) { vOff(t, p.note); p.active = 0; continue; }
+      if (p.cd > -(1 << 30)) p.cd -= kQuantumTicks;
+    }
     if (r.ratLeft) r.ratCd -= kQuantumTicks;
-    for (int i = 0; i < kMaxPend; ++i)
-      if (r.pend[i].active && r.pend[i].cd > -(1 << 30)) r.pend[i].cd -= kQuantumTicks;
   }
 }
 
@@ -1264,6 +1266,16 @@ void State::render(int16_t* out) {
       endL = r.outL; endR = r.outR; endD = r.sendD; endR2 = r.sendR;
       steady = true;
       sends = r.hasSends != 0;
+    } else if (r.settled && key == r.mixKey) {
+      // Only the ducker moved (a pumping track, every quantum): the general
+      // path below reduces to exactly this for a settled track.
+      const float duckF = 1.0f + float(r.eff[kMixDuck]) * (1.0f / 127.0f) * (duckEnd - 1.0f);
+      endL = r.gL * duckF;
+      endR = r.gR * duckF;
+      endD = r.sendD;
+      endR2 = r.sendR;
+      steady = endL == r.outL && endR == r.outR;
+      sends = r.hasSends != 0;
     } else {
       r.mixKey = key;
       const int level = r.eff[kMixLevel], pan = mono ? 64 : r.eff[kMixPan];
@@ -1334,6 +1346,17 @@ void State::render(int16_t* out) {
               sD[i] += a * gd;
               sR[i] += a * gv;
             }
+          }
+        } else if (sends && endD == r.sendD && endR2 == r.sendR) {
+          // Gain ramping (ducking), send gains steady: ramp only the gain.
+          float g = r.outL;
+          const float dg = (endL - g) * invN, gd = endD, gv = endR2;
+          for (int i = 0; i < kQuantum; ++i) {
+            g += dg;
+            const float a = x[i] * g;
+            busL[i] += a;
+            sD[i] += a * gd;
+            sR[i] += a * gv;
           }
         } else {
           float g = r.outL, gd = r.sendD, gv = r.sendR;
@@ -1571,7 +1594,9 @@ void Engine::setMonoOutput(bool mono) {
   s.monoOut = mono;
   for (int t = 0; t < kNumTracks; ++t)
     if (s.voice[t]) s.voice[t]->setMonoOutput(mono);
+  s.delay.setMono(mono);   // mono: always the plain (D-long) delay line
   s.resetFx();
+  s.gValid = false;        // re-derive the delay time / mode for the new layout
   for (int t = 0; t < kNumTracks; ++t) { s.tr[t].cPan = -1; s.tr[t].settled = 0; }
 }
 
@@ -1683,6 +1708,8 @@ bool Engine::post(const Command& c) {
   s.qTail.store(t + 1, std::memory_order_release);
   return true;
 }
+
+bool Engine::isPlaying() const { return impl_->aPlaying.load(std::memory_order_relaxed); }
 
 EngineStatus Engine::status() {
   engine_detail::State& s = *impl_;

@@ -404,6 +404,33 @@ static int row(const char* tag, const char* name) {
   return -1;
 }
 
+static void testMoreRowsAndBattery() {
+  R->start(true);
+  static Project p;
+  p = *R->proj;
+  for (int i = 0; i < 30; ++i) {
+    char name[9];
+    std::snprintf(name, sizeof(name), "F%02d", i);
+    CHECK(pg::io::saveProject(R->fs, "/int", name, p) == pg::io::Status::Ok);
+  }
+  tap("\\");
+  CHECK_EQ(R->ui.fileRows(), demo::count() + kListPerMount + 1);   // 24 files + "+6 MORE"
+  while (R->ui.projectCursor() < R->ui.fileRows() - 1) tap(".");
+  tap("ent");
+  CHECK(toastHas("24 FILES"));
+  CHECK(R->ui.dialog() == Dialog::None);
+  // unknown battery: never the emergency save
+  tap("`");
+  tap("1");
+  R->fs.arm();
+  R->env.batteryPct = kBatteryUnknown;
+  tap("spc");
+  R->run(500);
+  CHECK(!toastHas("BATTERY"));
+  CHECK_EQ(R->fs.writeCalls, 0);
+  R->env.batteryPct = 80;
+}
+
 int main() {
   static uih::Rig rig;
   R = &rig;
@@ -414,6 +441,7 @@ int main() {
   testLoadErrors();
   testNewProject();
   testSessionAndBoot();
+  testMoreRowsAndBattery();
   std::printf("itest_ui_files: %d checks, %d failed\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

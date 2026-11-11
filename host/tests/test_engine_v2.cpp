@@ -241,7 +241,10 @@ static void testMono() {
   }
   std::printf("  mono vs stereo (L+R)/2 with delay + reverb: max error %.1f LSB, L!=R %ld\n", maxErr, lr);
   CHECK(lr == 0);
-  CHECKF(maxErr <= 2.0, "mono error %.1f LSB", maxErr);
+  // The delay runs as one plain line in mono and as its exact ping-pong
+  // decomposition in stereo (delay.h): same signal, int16 rounding at
+  // different points, so a few LSB (-80 dBFS) apart at most.
+  CHECKF(maxErr <= 3.0, "mono error %.1f LSB", maxErr);
 
   // Pan is ignored in mono; a hard-left source plays at its centred level.
   rig.init();

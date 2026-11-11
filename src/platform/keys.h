@@ -4,7 +4,10 @@
 // A small task drains the controller's event FIFO whenever INT goes low and
 // turns the raw codes into pg::KeyEvent (down AND up, modifiers included). It
 // does not depend on the UI loop rate: a slow frame delays delivery to the UI
-// but loses nothing (64-entry queue behind the chip's own 10-entry FIFO).
+// but loses nothing (64-entry queue behind the chip's own 10-entry FIFO). If
+// the queue does fill up, a key-down is dropped together with its key-up, and
+// a key-up whose key-down was delivered is held back and re-sent, so the UI
+// never sees a key that stays down forever.
 //
 // Key ids follow lib/pg/src/pg/platform.h: id = row * 14 + col, row 0 = number
 // row, col 0 = leftmost key. Mapping verified against M5Cardputer 1.1.1
@@ -37,7 +40,7 @@ struct Event {
 struct Stats {
   bool     controllerPresent;   // TCA8418 answered at begin()
   uint32_t events;              // key events produced (matrix + G0)
-  uint32_t queueDrops;          // events lost because nobody called poll() (queue full)
+  uint32_t queueDrops;          // queue full: key-downs dropped (with their key-up), key-ups deferred and retried
   uint32_t unknownCodes;        // raw codes outside the 7x8 matrix (GPI events etc.)
   uint32_t fifoOverflows;       // the chip's 10-event FIFO overflowed
   uint32_t i2cErrors;
@@ -54,6 +57,11 @@ bool begin();
 
 // Next event, non-blocking. UI thread.
 bool poll(Event* out);
+// Next event, waiting up to timeoutMs for one (the UI loop sleeps here between
+// frames, so a key is handled as soon as it arrives, not at the next frame).
+bool waitEvent(Event* out, uint32_t timeoutMs);
+// Unused stack of the reader task (bytes, high-water mark), 0 if not running.
+uint32_t taskStackFree();
 
 // Keys currently held as seen by the reader task (bit n = key id n, bit 56 = G0).
 uint64_t heldMask();

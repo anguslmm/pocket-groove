@@ -323,3 +323,65 @@ After an erase the device does nothing until something is flashed. The download 
 **Why float, never double.** The ESP32-S3's Xtensa LX7 cores have a hardware **single-precision** FPU (add/multiply/fused multiply-add in a few cycles). **Double precision is emulated in software** and costs tens to hundreds of cycles per operation. It sneaks in easily in C++: `0.5` is a double literal, `sin(x)` is the double function, and `std::pow(x, 2)` may promote. Engine code writes `0.5f`, `sinf`, `expf`, and builds with `-Wdouble-promotion`. Division is also slow even in float (no single-cycle divider), so hot loops multiply by precomputed reciprocals. Library calls like `sinf`/`expf` cost hundreds of cycles, so they belong at control rate (once per 16-frame quantum), not per sample. The CPU page's `p` measurement shows all of this in real cycles on your unit. Budget per sample: 240 MHz / 44.1 kHz ≈ 5,440 cycles for everything, of which the engine plan (ARCHITECTURE.md) allows ~55%.
 
 **Two cores.** Core 1 runs the Arduino `loop()` (UI, display, files) and the keyboard task. Core 0 is left to audio. The display push (240x135x16 bit at 40 MHz SPI ≈ 13 ms per full frame) uses DMA on core 1 and does not touch the audio core. The smoke test lets you swap the audio task onto core 1 to see what sharing would cost.
+
+---
+
+## 8. Flashing the instrument
+
+Flash the smoke test first (section 3) and send its report if you can: the instrument uses the same platform layer, and the report tells us whether anything below will misbehave. Then flash the real groovebox. **Earbuds/headphones out of your ears for the first notes**, exactly as in section 4: the codec starts at **-39.5 dB** (register `0x70`), deliberately lower than the smoke test, because the instrument's music is about 7 dB hotter than the smoke test's sines.
+
+Build and flash from the repository root:
+
+```bash
+pio run -e cardputer-adv -t upload
+```
+
+Serial monitor (leave it open; the boot banner and a stats line every 5 s go there):
+
+```bash
+pio device monitor -e cardputer-adv
+```
+
+Or flash the prebuilt merged image (bootloader + partition table + app) at offset **0x0** with esptool (port as in section 3):
+
+```bash
+esptool --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write-flash 0x0 build/firmware/pocket-groove.bin
+```
+
+The browser flasher from section 3 works the same way with `pocket-groove.bin` at `0x0`. If the device does not take the upload, use download mode (section 3).
+
+**First boot** shows "FORMATTING STORAGE" for up to ~30 s if the internal partition holds no LittleFS yet (it does if the smoke test ran). Then the demo song loads, stopped. `SPACE` plays. The UI itself is documented in `docs/UX.md`.
+
+### Gestures the firmware adds
+
+| Gesture | Action |
+|---|---|
+| hold **G0** + `-` / `=` | codec (analog) output volume -2 / +2 dB, 0 dB maximum; a bar shows the level. Saved after 2 s, once playback is stopped. At power-on a saved level above -12 dB is restored as -12 dB. The UI's master volume is a separate, digital control. |
+| **G0** double-tap | diagnostics strip at the bottom of the screen on/off: audio CPU % and avg/max/period block time in µs, underruns (`U`), free heap / min-ever free heap, sample rate and backend, keyboard mode (`INT` = interrupt line works, `POLL` = found only by polling, `MIXED`, `NOKBD` = controller missing), UI frame time |
+| any key after the screen dimmed | only wakes the screen (it dims after 60 s without a key while stopped) |
+| serial `r` | full diagnostics report (`===== POCKET GROOVE REPORT` ... `===== END REPORT =====`); `h` prints the serial help |
+| serial `m` during the first ~0.3 s of boot | opens the boot menu (same as holding a key; rarely practical, because the USB port re-enumerates at every reset) |
+
+A red line at the bottom means audio did not start (with the reason) or the audio CPU load stayed above 90% for more than a second at 44.1 kHz (switch to 32 kHz in the boot menu). Double-tap G0 to see the details.
+
+### Boot menu
+
+**Hold any letter key while switching on** (not G0: holding G0 at power-on enters the ROM download mode). The menu also opens **by itself after a crash, watchdog reset or brownout** and shows the reset reason, so a bad saved state can never cause a boot loop. (After a brownout it adds "BATTERY LOW?": charge before playing loud.) Flashing over USB, a USB-cable reset and the power switch do **not** open it: the boot banner's `reset reason` then reads `USB/21` (or `USB/22`), `SOFTWARE/...` or `POWERON/1` (name, then the chip's raw reset code). If the menu does open by itself right after flashing, send us that line. Keys: `;` / `.` move, `ENTER` (or `SPACE`) changes or runs the selected item, `1`..`6` select **and run** that item at once (4 and 5 still ask for a second press), `` ` `` starts. Without a keyboard: G0 tap = next item, G0 hold 1 s = run the selected item (START is selected when the menu opens); over serial `1`..`6`, `j`/`k`, Enter.
+
+1. **Sample rate** 44.1 kHz / 32 kHz (saved).
+2. **Audio output** direct I2S / M5.Speaker fallback / off (saved).
+3. **Codec volume**: reset to the default -39.5 dB.
+4. **Reset session + settings**: deletes the auto-saved session (`_last.pgv`), the UI settings and these firmware settings (press twice). Saved songs stay.
+5. **Format internal storage**: erases every song on internal flash (press twice; takes up to ~30 s).
+6. **Start**.
+
+### What to report back
+
+1. The serial log from power-on (the `[boot]` lines, including `reset reason`), plus one `r` report after a few minutes of playing (or photos of the screen with the diagnostics strip on). The report's `[stack]` line (free stack per task) and `[keys]` line (`drops`, `fifo ovf`, `i2c err`) matter to us even when everything works.
+2. Did it boot to the demo? Any reboot (the boot menu will tell you the reason)?
+3. Sound: clean? Clicks, crackles or dropouts during normal playing? The `U` (underrun) count in the strip after a minute of play.
+4. Audio CPU % with the demo playing (the strip's first line), at 44.1 kHz and, if you try it, at 32 kHz.
+5. A save while playing (`ctrl` + `s`) is expected to cause a short dropout (writing flash pauses both cores). Anything worse (crash, stuck audio, silence afterwards) is a bug we need to hear about.
+6. Comfortable headphone volume and loud-enough speaker volume (the dB shown in the volume bar).
+7. Keyboard mode in the strip (`INT` or `POLL`) and whether keys ever stick or lag.
+8. With an SD card: do songs save to and load from it? Without one: does everything still work? The card is mounted once, at power-on: after inserting or swapping a card, switch off and on again (a card pulled out while running makes saves to it fail with an error, nothing else). The `[fs]` line of the report gives the card's mount time; a line `[fs] /sd mounted late` means it took longer than the UI's boot (tell us the time).

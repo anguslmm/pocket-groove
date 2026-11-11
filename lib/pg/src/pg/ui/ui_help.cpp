@@ -332,7 +332,7 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       {kKDot, "OCTAVE DOWN", "NOTE KEYS PLAY AN OCTAVE LOWER.", "STEP HELD: NOTE -1 SEMITONE."},
       {kKSlash, "HELP", "HOLD: KEY MAP. TAP: EXPLAIN MODE.", "/ OR ` LEAVES EXPLAIN MODE."},
       {kKSpace, "PLAY / STOP", "SHIFT: RESTART / CONTINUE.", ""},
-      {kKG0, "G0 BUTTON", "NOT USED.", ""},
+      {kKG0, "G0: VOLUME / DIAGNOSTICS", "HOLD G0 + -/=: HEADPHONE VOLUME.", "DOUBLE-TAP G0: DIAGNOSTICS STRIP."},
   };
   for (const T& t : kTexts)
     if (t.k == k) {
@@ -391,7 +391,7 @@ void Ui::drawHelp(Framebuffer& fb) {
       if (lab[0] && lab[0] != ' ') g.textC(kx + 8, ky + 5, lab, ink);
     }
   if (explain_) {
-    if (explainKey_ >= 0 && explainKey_ < kNumKeys) {
+    if (explainKey_ >= 0 && explainKey_ < kNumKeys) {   // (G0 has no cell in the grid)
       const int r = explainKey_ / 14, c = explainKey_ % 14;
       g.rframe(1 + c * 17 - 1, 14 + r * 19 - 1, 18, 19, WHITE);
     }

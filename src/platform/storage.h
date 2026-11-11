@@ -39,8 +39,14 @@ struct Info {
   uint64_t sdCardBytes, sdTotalBytes, sdUsedBytes;
 };
 
-// Mounts "/int". Blocking; can take seconds on the first boot (format).
-bool beginInternal();
+// Mounts "/int" and creates "/int/pg". Blocking; can take many seconds on the
+// first boot, when the partition has to be formatted. `beforeFormat` (if
+// given) is called just before that format starts, so the caller can put a
+// "formatting storage" screen up instead of leaving the display black.
+bool beginInternal(void (*beforeFormat)(void*) = nullptr, void* user = nullptr);
+// Erases and re-creates the internal LittleFS (every file on "/int" is lost),
+// then mounts it again. Blocking for seconds; never while audio plays.
+bool formatInternal();
 // Starts (or restarts) the SD mount in the background. Returns immediately.
 void sdMountAsync();
 void sdUnmount();
@@ -50,7 +56,10 @@ Info info();
 // Re-reads /int used/total bytes (walks the filesystem; call after writes, not per frame).
 void refreshUsage();
 
-// The FileSystem the app uses (paths start with "/int/" or "/sd/").
+// The FileSystem the app uses (paths start with "/int/" or "/sd/"). Implements
+// the streaming calls pg::io needs (open/readSome/writeSome/close, rename that
+// replaces, freeBytes, base-name listing) over the ESP-IDF VFS; parent
+// directories are created on open-for-write, "/int/pg" and "/sd/pg" at mount.
 pg::FileSystem& fs();
 
 }  // namespace storage

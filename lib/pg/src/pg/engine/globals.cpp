@@ -44,7 +44,10 @@ const ParamInfo kGlobalInfo[kGNumUsed] = {
 // LEVEL: clap +3.6 dB, open hat +3 dB, lead +3.3 dB after the first full-instrument
 // renders (integration): with the voices' own levels they sat 4-6 dB under the
 // gain-staging plan in master.h (clap ~0.4, lead ~0.3 in a busy bar).
-constexpr uint8_t kDefLevel[kNumTracks] = {104,  96, 106,  84,  94,  86,  98, 100};
+// Composer pass (demo songs): kick +1 dB so it clearly leads the bass (whose
+// peak sat 1.2 dB under it), clap +0.9 dB, closed hat +2.4 dB (it measured
+// 20 LU under the kick), lead +1 dB.
+constexpr uint8_t kDefLevel[kNumTracks] = {108,  96, 110,  92,  94,  86,  98, 104};
 constexpr uint8_t kDefPan[kNumTracks]   = { 64,  64,  64,  58,  70,  74,  64,  64};
 constexpr uint8_t kDefDelay[kNumTracks] = {  0,   0,  12,   0,  10,  28,   0,  48};
 constexpr uint8_t kDefRev[kNumTracks]   = {  0,  28,  44,  10,  24,  30,   0,  44};

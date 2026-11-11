@@ -117,6 +117,7 @@ class BassVoice final : public Voice {
   float lfoPhase_ = 0, lfoInc_ = 0, lfoVal_ = 0, lfoHold_ = 0;
   uint32_t rng_ = 0x1234567u;
   float cutLag_ = 0, dbgCutoffHz_ = 0;
+  float kneeStart_ = 7.03f;   // cutoff CV (octaves over 40 Hz) where the top soft knee begins
   // smoothed (per quantum) copies of the level-type params
   float sK_ = 1, sMakeup_ = 2, sPre_ = 0.5f, sDriveGain_ = 1, sBias_ = 0, sPostGain_ = 1;
   float sPulseMix_ = 0, sPw_ = 0.5f, sGainA_ = 1, sGainFm_ = 0, sSub_ = 0, sSubHp_ = 0;

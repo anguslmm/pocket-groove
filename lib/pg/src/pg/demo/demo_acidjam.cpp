@@ -5,12 +5,12 @@
 // p-locks, Am9 / Dm9 stabs through a dotted-eighth delay, kick ducker on bass
 // and stabs. Every pattern is four bars (64 steps).
 //
-//   P1 INTRO   kick, hats, rim; acid filtered, opening bar by bar
-//   P2 BUILD   + clap, open hat, ghost snare; acid brighter; stabs creep in
-//   P3 GROOVE  the full groove, Am9 / Dm9 stabs
-//   P4 JACK    second acid line (more jumps), push stabs, snare fill in bar 4
-//   P5 BREAK   no kick: held Am9 / Dm9 chords, filtered acid, snare-roll build
-//   P6 PEAK    acid wide open, accents, ratchets, every element in
+//   P1 GROOVE  the full groove, Am9 / Dm9 stabs
+//   P2 JACK    second acid line (more jumps), push stabs, snare fill in bar 4
+//   P3 PEAK    acid wide open, accents, ratchets, every element in
+//   P4 BREAK   no kick: held Am9 / Dm9 chords, filtered acid, snare-roll build
+//   P5 BUILD   + clap, open hat, ghost snare; acid brighter; stabs creep in
+//   P6 INTRO   kick, hats, rim; acid filtered, opening bar by bar
 //   P7 OUTRO   kick, hats, rim and a closing acid line
 //   P8 TOOL    kick + acid only (DJ-tool loop for jamming)
 #include "demo_songs.h"
@@ -24,6 +24,7 @@ using namespace util;
 constexpr int K = kTrackKick, SN = kTrackSnare, CP = kTrackClap, CH = kTrackHatClosed, OH = kTrackHatOpen,
               PC = kTrackPerc, BS = kTrackBass, LD = kTrackLead;
 constexpr int kCut = 0;      // bass + lead sound param 0 = cutoff
+constexpr int kEnv = 2;      // bass env mod
 constexpr int kLeadSus = 10; // lead sustain
 
 // Two 303 lines, one bar each, A minor pentatonic (A C D E G) so they sit
@@ -48,12 +49,15 @@ const N kLineBreak[] = {
     {10, A1, 96, A | S, 2, -1, 0}, {11, C2, 90, 0, 6, -1, 0}, {14, D2, 88, S, 2, -1, 0}, {15, E2, 84, 0, 2, -1, 0},
 };
 
-// Write one bar of a line at `bar`, cutoff locked from cutA (first step) to cutB (last).
+// Write one bar of a line at `bar`, `param` locked from a (first step) to b
+// (last). Arrangement patterns lock the cutoff (filtered-then-opening); the
+// jam patterns (P1-P3, P8) lock ENV instead so the bass CUT knob and the
+// SHIFT+[ ] sweep stay live. param < 0: no locks.
 template <int K2>
-void acidBar(Pattern& P, int bar, const N (&line)[K2], int cutA, int cutB) {
+void acidBar(Pattern& P, int bar, const N (&line)[K2], int a, int b, int param = kCut) {
   for (const N& n : line) {
     Step& s = noteStep(P, BS, n, bar * 16);
-    lock(s, kCut, cutA + (cutB - cutA) * n.step / 15);
+    if (param >= 0) lock(s, param, a + (b - a) * n.step / 15);
   }
 }
 
@@ -121,7 +125,7 @@ void groove(Pattern& P) {
   drumsBasic(P, true, true);
   for (int b = 0; b < 4; ++b) {
     drums(P, SN, kGhostSn, b * 16);
-    acidBar(P, b, kLineA, 48 + 2 * b, 56 + 2 * b);
+    acidBar(P, b, kLineA, 56 + 2 * b, 66 + 2 * b, kEnv);
     stabs(P, b, kStabMain, 4, 104);
   }
 }
@@ -130,7 +134,7 @@ void jack(Pattern& P) {
   drumsBasic(P, true, true);
   for (int b = 0; b < 4; ++b) {
     drums(P, PC, kRimBusy, b * 16);
-    acidBar(P, b, kLineB, 54 + 3 * b, 62 + 3 * b);
+    acidBar(P, b, kLineB, 62 + 2 * b, 72 + 2 * b, kEnv);
     stabs(P, b, kStabPush, 5, 104);
   }
   drums(P, SN, "g... ..g. g.g. xxXX", 48);   // fill: 909 snare build
@@ -166,8 +170,8 @@ void peak(Pattern& P) {
   for (int b = 0; b < 4; ++b) {
     drums(P, SN, kGhostSn, b * 16);
     drums(P, PC, kRimBusy, b * 16);
-    if (b & 1) acidBar(P, b, kLineB, 68, 78);
-    else acidBar(P, b, kLineA, 62, 72);
+    if (b & 1) acidBar(P, b, kLineB, 76, 86, kEnv);
+    else acidBar(P, b, kLineA, 70, 80, kEnv);
     stabs(P, b, kStabMain, 4, 108);
   }
   // hat ratchets at the end of bars 2 and 4
@@ -191,8 +195,8 @@ void tool(Pattern& P) {
   for (int b = 0; b < 4; ++b) {
     drums(P, K, kKick, b * 16);
     drums(P, CH, kHatCLow, b * 16);
-    if (b & 1) acidBar(P, b, kLineB, 46, 64);
-    else acidBar(P, b, kLineA, 46, 64);
+    if (b & 1) acidBar(P, b, kLineB, 0, 0, -1);
+    else acidBar(P, b, kLineA, 0, 0, -1);
   }
 }
 
@@ -228,7 +232,7 @@ void buildAcidJam(const Engine& engine, Project& p) {
   params(p, CH, {{1, 44}, {2, 84}});
   params(p, OH, {{1, 54}, {2, 74}});
   // TB-303-ish: saw, high resonance, big envelope, strong accent.
-  params(p, BS, {{0, 44}, {1, 112}, {2, 66}, {3, 50}, {4, 104}, {5, 52}, {9, 34}, {16, 58}, {17, 96}, {20, 50}});
+  params(p, BS, {{0, 52}, {1, 112}, {2, 66}, {3, 50}, {4, 104}, {5, 52}, {9, 34}, {16, 58}, {17, 96}, {20, 50}});
   // Saw stab: short, no sustain, a little drive.
   params(p, LD, {{0, 66}, {1, 28}, {2, 56}, {3, 46}, {6, 50}, {7, 54}, {10, 0}, {11, 40}, {15, 18}});
 
@@ -242,21 +246,21 @@ void buildAcidJam(const Engine& engine, Project& p) {
   mix(p, BS, 110, 64, 0, 0, 100);
   mix(p, LD, 106, 64, 70, 44, 84);
 
-  // ---- patterns
+  // ---- patterns (P1 = the main groove: what plays when a new user presses play)
   Pattern* P = p.patterns;
   for (int i = 0; i < 8; ++i) length(P[i], 64);
-  intro(P[0]);
-  build(P[1]);
-  groove(P[2]);
-  jack(P[3]);
-  breakdown(P[4]);
-  peak(P[5]);
+  groove(P[0]);
+  jack(P[1]);
+  peak(P[2]);
+  breakdown(P[3]);
+  build(P[4]);
+  intro(P[5]);
   outro(P[6]);
   tool(P[7]);
 
   // ---- song: 72 bars, about 2:19 at 124 BPM
-  song(p, {{0, 2}, {1, 2}, {2, 2}, {3, 2}, {4, 2}, {5, 4}, {3, 2}, {6, 2}});
-  p.songMode = 1;
+  song(p, {{5, 2}, {4, 2}, {0, 2}, {1, 2}, {3, 2}, {2, 4}, {1, 2}, {6, 2}});
+  p.songMode = 0;   // boots in loop mode on P1 (the main groove); SONG view plays the chain
 }
 
 }  // namespace pg::demo

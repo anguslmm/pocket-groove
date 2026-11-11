@@ -1,7 +1,7 @@
 // Pocket Groove — bass voice implementation. See bass.h for the signal path.
 #include "bass.h"
 
-#include <cmath>     // init()/param-change only (sqrtf); never per sample
+#include <cmath>     // init()/param-change only (sqrtf, log2f); never per sample
 #include <cstring>
 
 #include "bass_math.h"
@@ -68,6 +68,18 @@ constexpr float kResOnset = 0.97f;       // RES position where the loop gain rea
 constexpr float kOutGain = 0.33f;        // sets the default patch to about -9 dBFS peak
 constexpr float kSmooth = 0.2f;          // per-quantum one-pole for level-type params (~1.6 ms)
 constexpr float kCutLag = 0.26f;         // per-quantum one-pole on the cutoff CV (~1.2 ms)
+// Top of the cutoff range: the summed CV (CUT + env + accent + LFO + key
+// track, in octaves) runs into a soft knee that starts kKneeOct below the
+// fs/5 ceiling and approaches it asymptotically (slope 1 at the knee, so
+// everything below it is untouched). Inside the knee the ladder feedback
+// tapers towards its minimum, so a cutoff parked at the ceiling cannot ring
+// at a fixed pitch on every note; CUT keeps opening the filter up to 127.
+constexpr float kKneeOct = 0.75f;   // knee from ~5.2 kHz at 44.1 kHz: above anything the default patch reaches
+// Passband loss compensation goes from "half back" to "all back" as the
+// knob's static cutoff (CUT + key track, octaves over 40 Hz) rises from
+// ~640 Hz to ~3.6 kHz (CUT ~66 .. ~107 at key-track centre).
+constexpr float kCompLoOct = 4.0f;
+constexpr float kCompHiOct = 6.5f;
 constexpr float kTwo32 = 4294967296.0f;
 constexpr float kTwo24 = 16777216.0f;
 constexpr float kInt31ToFloat = 1.0f / 2147483648.0f;
@@ -89,6 +101,7 @@ void BassVoice::init(float sampleRate) {
   sr_ = sampleRate > 8000.0f ? sampleRate : 8000.0f;
   invSr_ = 1.0f / sr_;
   ctlDt_ = float(kQuantum) * invSr_;
+  kneeStart_ = log2f(0.2f * sr_ / kCutBaseHz) - kKneeOct;   // init only (libm is fine here)
   stage_ = kIdle;
   gate_ = false;
   accLp_ = 0.0f;
@@ -292,6 +305,156 @@ void BassVoice::choke() {
 // ============================================================================
 // Render
 // ============================================================================
+namespace {
+
+// The per-sample loop of BassVoice::render, specialised on which optional
+// sources are on. A source whose gain is exactly 0 contributes exactly +0 to
+// the sum, so skipping its sine lookups is bit-identical; its phase still
+// advances (per block instead of per sample, same value mod 2^32).
+struct BassLoop {
+  uint32_t incA, incM, incS, pwOff;
+  float invInc, gainA, gainFm, pulseMix, stepB, fmIdx24, foldMix, foldScale24;
+  float pre, B, e1, e2, e3, f1, f2, f3, a1, a2, a3, a4, gamma, k, D;
+  float postIn, bias, biasOut, postOut, hpC, subG, ampStep;
+  // state (in/out)
+  float amp;
+  uint32_t phA, phC, phM, phS, pos;
+  float s1, s2, s3, s4, drvZ, drvF, hpLp;
+  float* ring;
+};
+
+template <bool kFm, bool kFold, bool kSub, bool kPulse>
+void bassLoop(BassLoop& Lp, float* outL, float* outR, int n) {
+  const uint32_t incA = Lp.incA, incM = Lp.incM, incS = Lp.incS, pwOff = Lp.pwOff;
+  const float invInc = Lp.invInc, gainA = Lp.gainA, gainFm = Lp.gainFm, pulseMix = Lp.pulseMix, stepB = Lp.stepB;
+  const float fmIdx24 = Lp.fmIdx24, foldMix = Lp.foldMix, foldScale24 = Lp.foldScale24;
+  const float pre = Lp.pre, B = Lp.B, e1 = Lp.e1, e2 = Lp.e2, e3 = Lp.e3, f1 = Lp.f1, f2 = Lp.f2, f3 = Lp.f3;
+  const float a1 = Lp.a1, a2 = Lp.a2, a3 = Lp.a3, a4 = Lp.a4, gamma = Lp.gamma, k = Lp.k, D = Lp.D;
+  const float postIn = Lp.postIn, bias = Lp.bias, biasOut = Lp.biasOut, postOut = Lp.postOut, hpC = Lp.hpC;
+  const float subG = Lp.subG, ampStep = Lp.ampStep;
+  float amp = Lp.amp;
+  uint32_t phA = Lp.phA, phC = Lp.phC, phM = Lp.phM, phS = Lp.phS, pos = Lp.pos;
+  float s1 = Lp.s1, s2 = Lp.s2, s3 = Lp.s3, s4 = Lp.s4, drvZ = Lp.drvZ, drvF = Lp.drvF, hpLp = Lp.hpLp;
+  float* ring = Lp.ring;
+  (void)incM; (void)incS; (void)gainFm; (void)fmIdx24; (void)foldMix; (void)foldScale24; (void)subG;
+  for (int i = 0; i < n; ++i) {
+      // OSC A (naive saw minus a shifted saw) + OSC B (phase-modulated sine
+      // pair), wavefolded, all in the naive domain 8 samples ahead of the
+      // output. The waveform discontinuities are then band-limited with table
+      // BLEPs scaled by the *folded* jump, so folding never sees a steep
+      // band-limited edge (which would alias badly). With FOLD = 0 the jumps
+      // reduce to the plain saw/pulse steps.
+      phA += incA;
+      const uint32_t phB = phA + pwOff;
+      float naive = (kPulse ? float(int32_t(phA)) - pulseMix * float(int32_t(phB)) : float(int32_t(phA))) *
+                    (kInt31ToFloat * gainA);
+      if (kFm) {
+        phM += incM;
+        phC += incA;
+        const float mod = sineLerp(phM);
+        naive = naive + gainFm * sineLerp(phC + (uint32_t(int32_t(mod * fmIdx24)) << 8));
+      }
+      const float yN = kFold ? naive + foldMix * (sineLerp(uint32_t(int32_t(naive * foldScale24)) << 8) - naive) : naive;
+      ring[(pos + 8u) & 15u] += yN;
+      const uint32_t qA = phA + 0x80000000u, qB = phB + 0x80000000u;
+      if (qA < incA) {
+        // saw A wrapped: the value just before the edge was 2 * gainA higher
+        const float pre0 = naive + 2.0f * gainA;
+        const float yPre = kFold ? pre0 + foldMix * (sineLerp(uint32_t(int32_t(pre0 * foldScale24)) << 8) - pre0) : pre0;
+        const float jump = yN - yPre;
+        float t = float(int32_t(qA)) * invInc * float(kBlepPhases);
+        int ip = int(t);
+        float fr = t - float(ip);
+        const float* r0 = gBlep + ip * kBlepTaps;
+        for (uint32_t j = 0; j < 16u; ++j) {
+          float v = r0[j] + fr * (r0[j + kBlepTaps] - r0[j]);
+          ring[(pos + j) & 15u] += jump * v;
+        }
+      }
+      if (kPulse && qB < incA && pulseMix > 0.0f) {
+        // saw B wrapped: the (subtracted) value just before was 2 * gainA * pulseMix lower
+        const float pre0 = naive - stepB;
+        const float yPre = kFold ? pre0 + foldMix * (sineLerp(uint32_t(int32_t(pre0 * foldScale24)) << 8) - pre0) : pre0;
+        const float jump = yN - yPre;
+        float t = float(int32_t(qB)) * invInc * float(kBlepPhases);
+        int ip = int(t);
+        float fr = t - float(ip);
+        const float* r0 = gBlep + ip * kBlepTaps;
+        for (uint32_t j = 0; j < 16u; ++j) {
+          float v = r0[j] + fr * (r0[j + kBlepTaps] - r0[j]);
+          ring[(pos + j) & 15u] += jump * v;
+        }
+      }
+      float x = ring[pos];
+      ring[pos] = 0.0f;
+      pos = (pos + 1u) & 15u;
+
+      x *= pre;
+
+      // Diode ladder, zero-delay feedback with one saturator at the summing node.
+      const float c4 = B * s4;
+      const float c3 = e3 * c4 + f3 * s3;
+      const float c2 = e2 * c3 + f2 * s2;
+      const float c1 = e1 * c2 + f1 * s1;
+      const float sig = a4 * (a3 * (a2 * c1 + c2) + c3) + c4;
+      const float y4lin = (gamma * x + sig) * D;        // linear ZDF solution
+      const float u = softClip(x - k * y4lin);
+      const float y1 = a1 * u + c1;
+      const float y2 = a2 * y1 + c2;
+      const float y3 = a3 * y2 + c3;
+      const float y4 = a4 * y3 + c4;
+      s1 = 2.0f * y1 - s1;
+      s2 = 2.0f * y2 - s2;
+      s3 = 2.0f * y3 - s3;
+      s4 = 2.0f * y4 - s4;
+
+      // Post drive: asymmetric soft clip with first-order ADAA.
+      const float z = y4 * postIn + bias;
+      const float F = softClipInt(z);
+      const float dz = z - drvZ;
+      float dv;
+#ifndef PG_BASS_NO_ADAA
+      if (dz > 2.0e-3f || dz < -2.0e-3f) dv = (F - drvF) / dz;
+      else dv = softClip(0.5f * (z + drvZ));
+#else
+      (void)dz; dv = softClip(z);
+#endif
+      drvZ = z;
+      drvF = F;
+      const float drv = (dv - biasOut) * postOut;
+
+      // DC blocker / crossover high-pass, then the clean sub, then the VCA.
+      hpLp += hpC * (drv - hpLp);
+      float o = drv - hpLp;
+      if (kSub) {
+        phS += incS;
+        o += subG * sineLerp(phS);
+      }
+      o *= amp;
+      amp += ampStep;
+      outL[i] = o;
+      outR[i] = o;
+  }
+  if (!kFm) {
+    phM += incM * uint32_t(n);
+    phC += incA * uint32_t(n);
+  }
+  if (!kSub) phS += incS * uint32_t(n);
+  Lp.amp = amp;
+  Lp.phA = phA; Lp.phC = phC; Lp.phM = phM; Lp.phS = phS; Lp.pos = pos;
+  Lp.s1 = s1; Lp.s2 = s2; Lp.s3 = s3; Lp.s4 = s4; Lp.drvZ = drvZ; Lp.drvF = drvF; Lp.hpLp = hpLp;
+}
+
+using BassLoopFn = void (*)(BassLoop&, float*, float*, int);
+#define PG_BASS_LOOPS(P)                                                                          \
+  bassLoop<false, false, false, P>, bassLoop<false, false, true, P>, bassLoop<false, true, false, P>, \
+      bassLoop<false, true, true, P>, bassLoop<true, false, false, P>, bassLoop<true, false, true, P>, \
+      bassLoop<true, true, false, P>, bassLoop<true, true, true, P>
+const BassLoopFn kBassLoops[16] = {PG_BASS_LOOPS(false), PG_BASS_LOOPS(true)};
+#undef PG_BASS_LOOPS
+
+}  // namespace
+
 void BassVoice::render(float* outL, float* outR, int frames) {
   while (frames > 0) {
     const int n = frames < kQuantum ? frames : kQuantum;
@@ -359,10 +522,35 @@ void BassVoice::render(float* outL, float* outR, int frames) {
                    pAccOct_ * accLp_ + pLfoOct_ * lfo;
     if (snap_) cutLag_ = cutOct;
     cutLag_ += kCutLag * (cutOct - cutLag_);
-    float frN = kCutBaseHz * invSr_ * fastExp2(clampf(cutLag_, -2.0f, 12.0f));   // cycles per sample
+    // Soft knee towards the fs/5 ceiling (see kKneeOct). It starts at the
+    // knee point or at the knob's own static cutoff (CUT + key track),
+    // whichever is higher, so CUT itself is never compressed (it keeps
+    // moving the filter up to 127); only the modulation travel above it is.
+    float cutCv = cutLag_;
+    float kneeDepth = 0.0f;                           // 0 below the knee .. -> 1 at the ceiling
+    float openExt = 0.0f;                             // 0 .. 1: CUT's own position in the knee
+    // The knob's own (static) cutoff: CUT + key tracking, no modulation.
+    const float base = pCutOct_ + pKeyTrack_ * (noteCur_ - 36.0f) * (1.0f / 12.0f);
+    {
+      const float ceil = kneeStart_ + kKneeOct;
+      const float s0 = clampf(base, kneeStart_, ceil - 0.02f);
+      if (cutCv > s0) {
+        const float w = ceil - s0, u = cutCv - s0;
+        cutCv = s0 + w * u / (w + u);
+      }
+      if (cutCv > kneeStart_) kneeDepth = clampf((cutCv - kneeStart_) * (1.0f / kKneeOct), 0.0f, 1.0f);
+      // "Open" at the top of the knob: once CUT itself is in the knee, the
+      // resonance there is tapered away (below), so the fs/5 cap (which only
+      // exists to keep a strong resonance from aliasing through the loop
+      // saturator) can lift towards 0.36 fs: the last stretch of CUT opens the
+      // filter fully instead of leaving its own roll-off on the top octave.
+      openExt = clampf((base - kneeStart_) * (1.0f / kKneeOct), 0.0f, 1.0f);
+    }
+    float frN = kCutBaseHz * invSr_ * fastExp2(clampf(cutCv, -2.0f, 12.0f));   // cycles per sample
     // Ceiling at fs/5: the loop saturator's 3rd harmonic of the resonance then
     // aliases to >= 2x the cutoff, where the ladder has already rolled off.
-    frN = clampf(frN, 16.0f * invSr_, 0.2f);
+    if (openExt > 0.0f) frN *= 1.0f + openExt * 0.9f;   // up to ~0.93 octave further at CUT 127
+    frN = clampf(frN, 16.0f * invSr_, 0.2f + 0.16f * openExt);
     dbgCutoffHz_ = frN * sr_;
 
     // ------------------------------------------------- smoothed level params
@@ -431,10 +619,33 @@ void BassVoice::render(float* outL, float* outR, int frames) {
     const float e2 = h * d2, f2 = B * d2;
     const float e1 = G * d1, f1 = B * d1;
     const float gamma = a1 * a2 * a3 * a4;
-    const float k = sK_;
+    float k = sK_, makeup = sMakeup_;
+    // Passband compensation. sMakeup_ gives back half of the ladder's
+    // 1/(1+k) passband loss: right while the cutoff is low, where the
+    // resonant peak sits on the strong low harmonics and carries the level
+    // itself. Once the cutoff is up among the weak upper harmonics only the
+    // passband is left, so the rest is given back too, or opening the filter
+    // would hollow the bass out at high RES. Keyed to the knob's static
+    // cutoff (blend over kCompLoOct .. kCompHiOct), so envelope sweeps of a
+    // low-CUT patch sound exactly as before.
+    if (base > kCompLoOct) {
+      float b = clampf((base - kCompLoOct) * (1.0f / (kCompHiOct - kCompLoOct)), 0.0f, 1.0f);
+      b = b * b * (3.0f - 2.0f * b);                                       // smoothstep
+      makeup *= 1.0f + b * (sqrtf((1.0f + k) * (1.0f / (1.0f + kResMin))) - 1.0f);
+    }
+    if (kneeDepth > 0.0f) {
+      // Resonance taper inside the knee (the ladder's passband gain is
+      // 1/(1+k): compensate it fully so the taper changes tone, not level).
+      // Gentle at first (the acid squelch survives most of the knee), gone
+      // at the ceiling, where a parked cutoff would otherwise whistle.
+      const float t = 1.0f - kneeDepth * kneeDepth * kneeDepth;
+      const float kE = kResMin + (k - kResMin) * t;
+      makeup *= (1.0f + kE) / (1.0f + k);   // keep the passband level where the RES knob put it
+      k = kE;
+    }
     const float D = 1.0f / (1.0f + k * gamma);
     const float pre = sPre_;
-    const float postIn = sMakeup_ * sDriveGain_;       // ladder output -> clipper input
+    const float postIn = makeup * sDriveGain_;         // ladder output -> clipper input
     const float bias = sBias_;
     const float postOut = sPostGain_;
     const float biasOut = softClip(bias);
@@ -465,106 +676,22 @@ void BassVoice::render(float* outL, float* outR, int frames) {
     const float stepB = 2.0f * gainA * pulseMix;
 
     // ------------------------------------------------------------- inner loop
-    uint32_t phA = phA_, phC = phC_, phM = phM_, phS = phS_, pos = ringPos_;
-    float s1 = s1_, s2 = s2_, s3 = s3_, s4 = s4_;
-    float drvZ = drvZ_, drvF = drvF_, hpLp = hpLp_;
-    float* ring = ring_;
-
-    for (int i = 0; i < n; ++i) {
-      // OSC A (naive saw minus a shifted saw) + OSC B (phase-modulated sine
-      // pair), wavefolded, all in the naive domain 8 samples ahead of the
-      // output. The waveform discontinuities are then band-limited with table
-      // BLEPs scaled by the *folded* jump, so folding never sees a steep
-      // band-limited edge (which would alias badly). With FOLD = 0 the jumps
-      // reduce to the plain saw/pulse steps.
-      phA += incA;
-      const uint32_t phB = phA + pwOff;
-      phM += incM;
-      phC += incA;
-      const float mod = sineLerp(phM);
-      const float naive = (float(int32_t(phA)) - pulseMix * float(int32_t(phB))) * (kInt31ToFloat * gainA) +
-                          gainFm * sineLerp(phC + (uint32_t(int32_t(mod * fmIdx24)) << 8));
-      const float yN = naive + foldMix * (sineLerp(uint32_t(int32_t(naive * foldScale24)) << 8) - naive);
-      ring[(pos + 8u) & 15u] += yN;
-      const uint32_t qA = phA + 0x80000000u, qB = phB + 0x80000000u;
-      if (qA < incA) {
-        // saw A wrapped: the value just before the edge was 2 * gainA higher
-        const float pre0 = naive + 2.0f * gainA;
-        const float yPre = pre0 + foldMix * (sineLerp(uint32_t(int32_t(pre0 * foldScale24)) << 8) - pre0);
-        const float jump = yN - yPre;
-        float t = float(int32_t(qA)) * invInc * float(kBlepPhases);
-        int ip = int(t);
-        float fr = t - float(ip);
-        const float* r0 = gBlep + ip * kBlepTaps;
-        for (uint32_t j = 0; j < 16u; ++j) {
-          float v = r0[j] + fr * (r0[j + kBlepTaps] - r0[j]);
-          ring[(pos + j) & 15u] += jump * v;
-        }
-      }
-      if (qB < incA && pulseMix > 0.0f) {
-        // saw B wrapped: the (subtracted) value just before was 2 * gainA * pulseMix lower
-        const float pre0 = naive - stepB;
-        const float yPre = pre0 + foldMix * (sineLerp(uint32_t(int32_t(pre0 * foldScale24)) << 8) - pre0);
-        const float jump = yN - yPre;
-        float t = float(int32_t(qB)) * invInc * float(kBlepPhases);
-        int ip = int(t);
-        float fr = t - float(ip);
-        const float* r0 = gBlep + ip * kBlepTaps;
-        for (uint32_t j = 0; j < 16u; ++j) {
-          float v = r0[j] + fr * (r0[j + kBlepTaps] - r0[j]);
-          ring[(pos + j) & 15u] += jump * v;
-        }
-      }
-      float x = ring[pos];
-      ring[pos] = 0.0f;
-      pos = (pos + 1u) & 15u;
-
-      x *= pre;
-
-      // Diode ladder, zero-delay feedback with one saturator at the summing node.
-      const float c4 = B * s4;
-      const float c3 = e3 * c4 + f3 * s3;
-      const float c2 = e2 * c3 + f2 * s2;
-      const float c1 = e1 * c2 + f1 * s1;
-      const float sig = a4 * (a3 * (a2 * c1 + c2) + c3) + c4;
-      const float y4lin = (gamma * x + sig) * D;        // linear ZDF solution
-      const float u = softClip(x - k * y4lin);
-      const float y1 = a1 * u + c1;
-      const float y2 = a2 * y1 + c2;
-      const float y3 = a3 * y2 + c3;
-      const float y4 = a4 * y3 + c4;
-      s1 = 2.0f * y1 - s1;
-      s2 = 2.0f * y2 - s2;
-      s3 = 2.0f * y3 - s3;
-      s4 = 2.0f * y4 - s4;
-
-      // Post drive: asymmetric soft clip with first-order ADAA.
-      const float z = y4 * postIn + bias;
-      const float F = softClipInt(z);
-      const float dz = z - drvZ;
-      float dv;
-#ifndef PG_BASS_NO_ADAA
-      if (dz > 2.0e-3f || dz < -2.0e-3f) dv = (F - drvF) / dz;
-      else dv = softClip(0.5f * (z + drvZ));
-#else
-      (void)dz; dv = softClip(z);
-#endif
-      drvZ = z;
-      drvF = F;
-      const float drv = (dv - biasOut) * postOut;
-
-      // DC blocker / crossover high-pass, then the clean sub, then the VCA.
-      hpLp += hpC * (drv - hpLp);
-      phS += incS;
-      const float o = ((drv - hpLp) + subG * sineLerp(phS)) * amp;
-      amp += ampStep;
-      outL[i] = o;
-      outR[i] = o;
-    }
-
-    phA_ = phA; phC_ = phC; phM_ = phM; phS_ = phS; ringPos_ = pos;
-    s1_ = s1; s2_ = s2; s3_ = s3; s4_ = s4;
-    drvZ_ = drvZ; drvF_ = drvF; hpLp_ = hpLp;
+    BassLoop lp;
+    lp.incA = incA; lp.incM = incM; lp.incS = incS; lp.pwOff = pwOff;
+    lp.invInc = invInc; lp.gainA = gainA; lp.gainFm = gainFm; lp.pulseMix = pulseMix; lp.stepB = stepB;
+    lp.fmIdx24 = fmIdx24; lp.foldMix = foldMix; lp.foldScale24 = foldScale24;
+    lp.pre = pre; lp.B = B; lp.e1 = e1; lp.e2 = e2; lp.e3 = e3; lp.f1 = f1; lp.f2 = f2; lp.f3 = f3;
+    lp.a1 = a1; lp.a2 = a2; lp.a3 = a3; lp.a4 = a4; lp.gamma = gamma; lp.k = k; lp.D = D;
+    lp.postIn = postIn; lp.bias = bias; lp.biasOut = biasOut; lp.postOut = postOut; lp.hpC = hpC;
+    lp.subG = subG; lp.ampStep = ampStep; lp.amp = amp;
+    lp.phA = phA_; lp.phC = phC_; lp.phM = phM_; lp.phS = phS_; lp.pos = ringPos_;
+    lp.s1 = s1_; lp.s2 = s2_; lp.s3 = s3_; lp.s4 = s4_; lp.drvZ = drvZ_; lp.drvF = drvF_; lp.hpLp = hpLp_;
+    lp.ring = ring_;
+    kBassLoops[(pulseMix != 0.0f ? 8 : 0) + (gainFm != 0.0f ? 4 : 0) + (foldMix != 0.0f ? 2 : 0) + (subG != 0.0f ? 1 : 0)](
+        lp, outL, outR, n);
+    phA_ = lp.phA; phC_ = lp.phC; phM_ = lp.phM; phS_ = lp.phS; ringPos_ = lp.pos;
+    s1_ = lp.s1; s2_ = lp.s2; s3_ = lp.s3; s4_ = lp.s4;
+    drvZ_ = lp.drvZ; drvF_ = lp.drvF; hpLp_ = lp.hpLp;
     ampCur_ = ampTarget;
     if (finished) {
       stage_ = kIdle;

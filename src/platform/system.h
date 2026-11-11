@@ -70,6 +70,17 @@ struct HeapInfo {
   uint32_t totalBytes;
 };
 HeapInfo heap();
+// Static internal RAM of this image (.data + .bss + .noinit in DRAM), from
+// the linker symbols, and the heap the allocator was given at boot.
+uint32_t staticDramBytes();
+// Unused stack of the calling task, in bytes, since it started.
+uint32_t stackFreeMinSelf();
+
+// ---- reset cause -------------------------------------------------------------
+// true if the previous run ended in a crash, a watchdog reset or a brownout
+// (anything the firmware did not ask for): panic, int/task/other WDT, brownout.
+bool resetWasAbnormal();
+void restart();
 void* allocInternal(size_t bytes);   // internal RAM, nullptr on failure (never aborts)
 void  freeInternal(void* p);
 

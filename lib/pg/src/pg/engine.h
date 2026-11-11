@@ -104,6 +104,7 @@ class Engine {
   // ---- UI thread ----------------------------------------------------------
   bool post(const Command& c);       // false if the queue is full
   EngineStatus status();             // snapshot; resets peak hold
+  bool isPlaying() const;            // transport running? No side effects (status() resets the peak hold)
 
   // Stop touching the Project (output silence) so the UI thread can load a
   // new one into the same memory. suspend() returns once the audio thread has

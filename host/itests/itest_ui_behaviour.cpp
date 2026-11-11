@@ -488,6 +488,28 @@ static void testRollAndViews() {
   CHECK_EQ(R->ui.fullRedraws(), full);
 }
 
+static void testAuditFixes() {
+  R->start(true);                            // mockup project: bass step 14 locks CUT
+  CHECK(R->ui.focusLocked());                // focus BASS CUT is locked on a step
+  tap("9"); tap("x");                        // RES: not locked
+  R->run(50);
+  CHECK(!R->ui.focusLocked());
+  tap("z");
+  R->run(50);
+  CHECK(R->ui.focusLocked());
+  CHECK(!R->ui.playing());
+  tap("spc");
+  R->run(50);
+  CHECK(R->ui.playing());
+  // swing in half-percent steps
+  const ParamInfo* sw = Engine::globalParamInfo(kGSwing);
+  char buf[kValueTextCap];
+  formatValue(sw, ValueRef{true, 0, kGSwing}, 9, buf);
+  CHECK(std::strcmp(buf, "54.5%") == 0);
+  formatValue(sw, ValueRef{true, 0, kGSwing}, 50, buf);
+  CHECK(std::strcmp(buf, "75%") == 0);
+}
+
 int main() {
   static uih::Rig rig;
   R = &rig;
@@ -505,6 +527,7 @@ int main() {
   testSweepsAndGhosting();
   testPagesErase();
   testRollAndViews();
+  testAuditFixes();
   std::printf("itest_ui_behaviour: %d checks, %d failed\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

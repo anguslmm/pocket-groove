@@ -8,12 +8,12 @@
 // snare, shuffled hats, heavy ducking, sparse M1-style organ stabs.
 // Every pattern is four bars (64 steps); the riff is two bars.
 //
-//   P1 INTRO    kick, hats, shaker; the riff low-passed (cutoff locks)
-//   P2 BUILD    + clap/snare, open hats; the riff opens; snare roll in bar 4
-//   P3 DROP     the full riff with timbre locks, organ stabs
-//   P4 SWITCH   riff B (higher, jumpier), organ answer, hat ratchets
-//   P5 BREAK    no kick: held organ chords, one long LFO growl per bar, clap build
-//   P6 DROP 2   riff A/B alternating, extra perc, more organ
+//   P1 DROP     the full riff with timbre locks, organ stabs
+//   P2 SWITCH   riff B (higher, jumpier), organ answer, hat ratchets
+//   P3 DROP 2   riff A/B alternating, extra perc, more organ
+//   P4 BREAK    no kick: held organ chords, one long LFO growl per bar, clap build
+//   P5 BUILD    + clap/snare, open hats; the riff opens; snare roll in bar 4
+//   P6 INTRO    kick, hats, shaker; the riff low-passed (cutoff locks)
 //   P7 OUTRO    kick, hats and the riff closing down
 //   P8 TOOL     drums only (jam over it)
 #include "demo_songs.h"
@@ -27,19 +27,19 @@ using namespace util;
 constexpr int K = kTrackKick, SN = kTrackSnare, CP = kTrackClap, CH = kTrackHatClosed, OH = kTrackHatOpen,
               PC = kTrackPerc, BS = kTrackBass, LD = kTrackLead;
 // bass sound params
-constexpr int bCut = 0, bLfoRate = 7, bFmMix = 10, bFm = 11, bFold = 13, bLfoTimbre = 21;
+constexpr int bCut = 0, bEnv = 2, bLfoRate = 7, bFmMix = 10, bFm = 11, bFold = 13, bLfoTimbre = 21;
 constexpr int lSus = 10;
 
 const uint8_t A = kStepAccent, S = kStepSlide;
 // Riff A (two bars). F minor: F1 43.7 Hz .. F2 87.3 Hz, Eb2 77.8 Hz.
 // The downbeats are left to the kick; each note's lock gives it its own colour.
 const N kRiffA[] = {
-    {2, F1, 112, A, 3, bFold, 96},         {3, F1, 90, 0, 1, bCut, 50},
+    {2, F1, 112, A, 3, bFold, 96},         {3, F1, 90, 0, 1, bEnv, 60},
     {5, F2, 104, S, 2, bFm, 110},          {6, Eb2, 100, 0, 2, -1, 0},
     {7, F1, 108, A, 2, bLfoRate, 9},       {10, F1, 112, 0, 6, bLfoTimbre, 120},
     {13, Ab1, 104, A | S, 2, bFold, 60},   {14, C2, 100, 0, 2, bFmMix, 127},
-    {15, F1, 88, 0, 1, bCut, 44},
-    {18, F1, 112, A, 3, bFold, 96},        {19, F1, 90, 0, 1, bCut, 50},
+    {15, F1, 88, 0, 1, bEnv, 52},
+    {18, F1, 112, A, 3, bFold, 96},        {19, F1, 90, 0, 1, bEnv, 60},
     {21, F2, 104, S, 2, bFm, 110},         {22, Eb2, 100, 0, 2, -1, 0},
     {23, C2, 108, A, 2, bLfoRate, 9},      {26, Ab1, 112, 0, 4, bLfoRate, 10},
     {28, Bb1, 100, S, 2, bFold, 120},      {29, C2, 104, 0, 2, bFm, 127},
@@ -218,10 +218,11 @@ void buildBassHaus(const Engine& engine, Project& p) {
   params(p, CH, {{1, 36}, {2, 88}, {5, 56}});
   params(p, OH, {{1, 40}, {2, 80}});
   params(p, PC, {{0, 4}});          // shaker
-  // Growl: saw/pulse + FM pair (ratio 1) through the folder and ladder,
+  // Growl: saw/pulse + FM pair (ratio 1) through the folder and ladder.
+  // Drive 60 / sub 70 (not 85 / 90) so the CUT knob audibly sweeps it;
   // heavy drive, note-synced sine LFO on cutoff and timbre, big clean sub.
-  params(p, BS, {{bCut, 34}, {1, 70}, {2, 30}, {3, 70}, {4, 60}, {5, 85}, {6, 62}, {bLfoRate, 7},
-                 {8, 20}, {9, 90}, {bFmMix, 70}, {bFm, 70}, {12, 1}, {bFold, 60}, {14, 20}, {15, 1},
+  params(p, BS, {{bCut, 34}, {1, 70}, {2, 30}, {3, 70}, {4, 60}, {5, 60}, {6, 62}, {bLfoRate, 7},
+                 {8, 20}, {9, 70}, {bFmMix, 70}, {bFm, 70}, {12, 1}, {bFold, 60}, {14, 20}, {15, 1},
                  {17, 127}, {18, 40}, {20, 70}, {bLfoTimbre, 70}});
   // M1-style organ.
   params(p, LD, {{0, 104}, {1, 0}, {2, 24}, {3, 30}, {4, 7}, {5, 64}, {7, 60}, {lSus, 100}, {11, 16}, {18, 0},
@@ -237,21 +238,21 @@ void buildBassHaus(const Engine& engine, Project& p) {
   mix(p, BS, 102, 64, 0, 0, 120);
   mix(p, LD, 122, 64, 40, 40, 96);
 
-  // ---- patterns
+  // ---- patterns (P1 = the main groove: what plays when a new user presses play)
   Pattern* P = p.patterns;
   for (int i = 0; i < 8; ++i) length(P[i], 64);
-  intro(P[0]);
-  build(P[1]);
-  drop(P[2]);
-  sw(P[3]);
-  breakdown(P[4]);
-  drop2(P[5]);
+  drop(P[0]);
+  sw(P[1]);
+  drop2(P[2]);
+  breakdown(P[3]);
+  build(P[4]);
+  intro(P[5]);
   outro(P[6]);
   tool(P[7]);
 
   // ---- song: 72 bars, about 2:17 at 126 BPM
-  song(p, {{0, 2}, {1, 2}, {2, 4}, {3, 2}, {4, 2}, {5, 4}, {6, 2}});
-  p.songMode = 1;
+  song(p, {{5, 2}, {4, 2}, {0, 4}, {1, 2}, {3, 2}, {2, 4}, {6, 2}});
+  p.songMode = 0;   // boots in loop mode on P1 (the main groove); SONG view plays the chain
 }
 
 }  // namespace pg::demo

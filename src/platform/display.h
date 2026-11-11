@@ -29,6 +29,12 @@ bool  begin();
 void  present(const pg::Framebuffer& fb);
 // Only the rows [y0, y1) -- for partial updates.
 void  presentRows(const pg::Framebuffer& fb, int y0, int y1);
+// Same, with a compositing hook: after each strip of rows [y, y + rows) has been
+// expanded to RGB565 (panel byte order, i.e. byte-swapped, kScreenW px per row)
+// and before it is sent, hook(px, y, rows, user) may draw over it. This is how
+// firmware overlays sit on top of the UI without touching the Framebuffer.
+using StripHook = void (*)(uint16_t* px, int y, int rows, void* user);
+void  presentRows(const pg::Framebuffer& fb, int y0, int y1, StripHook hook, void* user);
 // Unbuffered text straight to the panel with the library's built-in font, for
 // boot and fatal-error messages before/without a Framebuffer. Not for the UI.
 void  directText(int x, int y, const char* text, uint16_t rgb565, uint8_t size = 1);

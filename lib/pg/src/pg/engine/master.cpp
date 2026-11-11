@@ -237,6 +237,26 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
     *peakR = pkR;
     return;
   }
+  if (kMono && pre_ == preTarget_ && c3_ == c3Target_ && post_ == postTarget_) {
+    // Drive on but settled: the general path below with zero ramps, bit for bit.
+    const float pre = pre_, c3 = c3_, post = post_;
+    float pkL = *peakL;
+    for (int i = 0; i < frames; ++i) {
+      float ul = l[i] * pre;
+      if (!(ul > -1.5f)) ul = -1.5f;
+      if (!(ul < 1.5f)) ul = 1.5f;
+      const float yl = post * (ul - c3 * ul * ul * ul);
+      float al = absf(yl);
+      float tl = (al - knee) * invRange;
+      tl = tl < 0.0f ? 0.0f : (tl > 2.0f ? 2.0f : tl);
+      al = (al < knee ? al : knee) + range * (tl - 0.25f * tl * tl);
+      if (al > pkL) pkL = al;
+      const int32_t il = int32_t(al * 32767.0f + 0.5f);
+      out[2 * i] = out[2 * i + 1] = int16_t(yl < 0.0f ? -il : il);
+    }
+    *peakL = pkL;
+    return;
+  }
   const float invN = 1.0f / float(frames);
   // Gains are smoothed (one-pole per quantum) and then ramped linearly inside it.
   const float preEnd = pre_ + (preTarget_ - pre_) * gainK_;

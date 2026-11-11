@@ -16,9 +16,11 @@
 namespace pg {
 namespace ui {
 
+constexpr uint8_t kBatteryUnknown = 0xFF;
+
 struct UiEnv {
   uint32_t nowMs;       // monotonic milliseconds (wraps; compared by difference)
-  uint8_t  batteryPct;  // 0..100
+  uint8_t  batteryPct;  // 0..100, or kBatteryUnknown (0xFF): empty icon, no low-battery save
   bool     sdPresent;
   uint8_t  cpuPct;      // audio CPU load, informational
 };
@@ -31,7 +33,8 @@ enum FxTab : uint8_t { kFxDuck = 0, kFxSpace, kFxMaster, kNumFxTabs };
 enum StepField : uint8_t { kFVel = 0, kFGate, kFProb, kFRatch, kFAcc, kFSlide, kFChord, kFLock, kNumFields };
 constexpr int kNumMixRows = 5;     // LEVEL DUCK DELAY REVERB PAN
 constexpr int kNumRollRates = 4;   // 1/8 1/16 1/16T 1/32
-constexpr int kMaxFileRows = 48;   // PROJECT list: ROM demos + INT + SD entries kept in RAM
+constexpr int kMaxFileRows = 56;   // PROJECT list: ROM demos + up to 24 per mount + a "+N MORE" row each
+constexpr int kListPerMount = 24;
 
 class Ui {
  public:
@@ -88,7 +91,9 @@ class Ui {
   bool helpVisible() const;
   bool explainMode() const { return explain_; }
   bool bannerVisible() const { return banner_; }
-  bool dirty() const { return dirty_; }
+  bool dirty() const { return dirty_; }               // unsaved changes to the named project
+  bool playing() const { return playing_; }          // transport, as of the last status seen
+  bool focusLocked() const { return focusLocked_; }  // focused param is p-locked on a step of its track
   const char* projectName() const { return curName_; }
   int projectMount() const { return curMount_; }
   int projectTab() const { return projTab_; }
@@ -252,6 +257,7 @@ class Ui {
   void pollStatus();
   void runTimers();
   void runRepeat();
+  void updateFocusLock();
 
   // drawing (ui_draw.cpp)
   void drawAll(Framebuffer& fb);
@@ -412,6 +418,9 @@ class Ui {
   uint32_t serial_ = 1;           // bumps on every UI state change
   uint32_t lastBodySig_ = 0, lastStatusSig_ = 0;
   bool drawn_ = false;
+  // focus lock marker cache (recomputed on focus / pattern / revision / step-edit change)
+  bool focusLocked_ = false;
+  uint32_t lockKey_ = 0;
   bool dirtyStatusOnly_ = false;
   uint32_t fullDraws_ = 0, statusDraws_ = 0;
 };

@@ -65,8 +65,9 @@ void formatValue(const ParamInfo* info, const ValueRef& ref, int v, char* out) {
     return;
   }
   const int lo = info->min, hi = info->max;
-  if (isSwing(info, ref)) {
+  if (isSwing(info, ref)) {   // 0..50 -> 50..75 % in half-percent steps: "54.5%"
     char* o = out + itoa10(50 + v / 2, out);
+    if (v & 1) o = put(o, ".5");
     put(o, "%");
     return;
   }

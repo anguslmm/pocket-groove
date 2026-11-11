@@ -125,8 +125,24 @@ static void testRollAndHeldNotes() {
   std::printf("  suspend: roll stopped (%zu hits before), held note released\n", rollHits);
 }
 
+// isPlaying(): the transport flag without status()'s side effect (peak-hold reset).
+static void testIsPlaying() {
+  rig.init();
+  rig.v[kTrackBass].mode = StubVoice::Dc;
+  rig.v[kTrackBass].amp = 0.5f;
+  CHECK(!rig.eng.isPlaying());
+  rig.post(cmd(CmdType::Play));
+  rig.run(20);
+  CHECK(rig.eng.isPlaying() && rig.eng.isPlaying());
+  CHECK(rig.eng.status().peakL > 0.1f);      // isPlaying() left the peak hold alone
+  rig.post(cmd(CmdType::Stop));
+  rig.run(2);
+  CHECK(!rig.eng.isPlaying());
+}
+
 int main() {
   std::printf("engine suspend/resume command semantics\n");
+  testIsPlaying();
   testDiscardWhileRunning();
   testDiscardWithoutAudio();
   testRollAndHeldNotes();

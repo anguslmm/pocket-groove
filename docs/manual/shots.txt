@@ -1,0 +1,199 @@
+# Screenshots used by docs/MANUAL.md and README.md.
+# Regenerate (from the repository root, after a host build into build/docs):
+#   build/docs/ui_shot docs/manual/shots.txt build/docs/manual-shots
+# then copy the 1x m-*.png files into docs/manual/, scaled 3x nearest-neighbour
+# (the committed images are 720x405, 64-colour PNGs).
+# Each block also checks a workflow the manual describes. `empty` + `boot` =
+# a first power-on, which loads the ROM demo ACIDJAM (the harness's `demo` is
+# the UX mockup project instead, so it is not used here).
+
+# Power-on: the banner over GROOVE (first boot: ACIDJAM)
+empty
+boot
+wait 200
+shot m-boot
+
+# Quick start: playing, BASS selected (the power-on selection)
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap spc
+until 6 6
+shot m-groove-bass
+
+# Quick start: FN held = mute strip; FN+d mutes the clap, FN+f the closed hat
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap spc
+down fn
+tap d
+tap f
+until 6 6
+shot m-mute
+up fn
+
+# DJ filter: hold ] (high-pass) - the pop-up shows the value
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap spc
+until 0 2
+down ]
+wait 700
+shot m-djfilter
+up ]
+
+# Pattern change: OPT held, queue P02
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap spc
+until 0 2
+down opt
+tap 2
+until 0 6
+shot m-pattern
+up opt
+
+# Programming drums: KICK selected silently, step 7 added, step 7 held = STEP EDIT, PROB field
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+down shift
+tap a
+up shift
+tap 7
+down 7
+wait 300
+tap d
+tap -
+tap -
+tap -
+tap -
+shot m-stepedit-drum
+up 7
+
+# Bass step edit: hold step 14 (key y) on the demo bass line, SLD field
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+down y
+wait 300
+tap h
+shot m-stepedit-bass
+up y
+
+# Step-write: empty project (C minor), bass selected, enter, write notes (hold z + press c = slide),
+# shift+v = accent, del = rest (MANUAL.md 6.2)
+empty
+down shift
+tap j
+up shift
+tap ent
+tap z
+tap z
+down z
+tap c
+up z
+down shift
+tap v
+up shift
+tap del
+tap b
+shot m-stepwrite
+tap ent
+
+# Lead chords: LEAD selected, AUTO, hold step 3
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+down shift
+tap k
+up shift
+down 4
+wait 300
+tap j
+shot m-stepedit-lead
+up 4
+
+# SOUND view of the bass, page 1, focus CUT
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap 9
+shot m-sound-bass
+
+# Parameter lock from SOUND: hold step 1, press = a few times
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap 9
+down 1
+wait 300
+tap =
+tap =
+tap =
+tap =
+tap =
+tap =
+tap =
+tap =
+shot m-sound-lock
+up 1
+
+# MIX view, DUCK row
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap 0
+tap x
+shot m-mix-duck
+
+# FX DUCK page while playing, focus DDEP; then a pad shows that track's amount
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap o
+tap x
+tap spc
+until 0 6
+shot m-fx-duck
+down shift
+tap j
+up shift
+until 0 6
+shot m-fx-duck-bass
+
+# FX MASTER tab
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap o
+tap o
+tap o
+tap v
+shot m-fx-master
+
+# TEMPO box: TAB held
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap spc
+down tab
+wait 400
+shot m-tempo
+up tab
+
+# SONG view: the demo chain, cursor on slot 3
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+tap p
+tap .
+tap .
+shot m-song
+
+# PROJECT view with a few files
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+fsave int MYJAM 124
+fsave int SKETCH01 128
+tap \
+shot m-project
+tap \
+shot m-project-save
+
+# HELP: hold /
+empty
+boot   # first boot: the ROM demo ACIDJAM, as on the device
+down /
+wait 600
+shot m-help
+up /

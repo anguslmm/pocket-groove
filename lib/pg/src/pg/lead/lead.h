@@ -58,6 +58,7 @@ enum Osc2Wave : uint8_t { kOsc2Saw = 0, kOsc2Pulse, kOsc2Tri, kOsc2Sine, kNumOsc
 enum FilterType : uint8_t { kFilterLP = 0, kFilterBP, kFilterHP, kNumFilterTypes };
 
 struct Tables;   // lead_tables.h
+struct Tab;
 
 constexpr int kIntervalCentre = 24;  // kPInterval value for 0 semitones (range +-24)
 constexpr int kMaxChordNotes  = 4;
@@ -134,6 +135,12 @@ class LeadVoice final : public Voice {
     float fmIdx, orgPos, orgPerc;   // previous-quantum values for per-sample ramps
     // filter state
     float ic1L, ic2L, ic1R, ic2R;
+    // fused mono path: oscillator increments / tables for the last pitches
+    float cP1, cP2;
+    uint32_t cInc1, cInc2;
+    const Tab* cT1;
+    const Tab* cT2;
+    uint8_t cSet1, cSet2, cValid;
   };
 
   struct OscShape {
@@ -162,6 +169,8 @@ class LeadVoice final : public Voice {
   int   killQuanta_ = 7;
 
   uint8_t cur_[kSoundParams];
+  uint8_t raw_[kSoundParams];     // last setParams() input, for the unchanged fast path
+  bool rawValid_ = false;
   bool paramsSnap_ = true;
 
   // ---- derived from params (targets) ----

@@ -48,7 +48,7 @@ bool begin() {
   return true;
 }
 
-void presentRows(const pg::Framebuffer& fb, int y0, int y1) {
+void presentRows(const pg::Framebuffer& fb, int y0, int y1, StripHook hook, void* user) {
   if (!s_ok) return;
   if (y0 < 0) y0 = 0;
   if (y1 > kH) y1 = kH;
@@ -71,6 +71,7 @@ void presentRows(const pg::Framebuffer& fb, int y0, int y1) {
       dst[i + 2] = s_pal[src[i + 2]];
       dst[i + 3] = s_pal[src[i + 3]];
     }
+    if (hook) hook(dst, y, rows, user);
     M5.Display.writePixelsDMA(dst, n, false);    // returns once the transfer is started
     buf ^= 1;
   }
@@ -90,7 +91,8 @@ void presentRows(const pg::Framebuffer& fb, int y0, int y1) {
   }
 }
 
-void present(const pg::Framebuffer& fb) { presentRows(fb, 0, kH); }
+void presentRows(const pg::Framebuffer& fb, int y0, int y1) { presentRows(fb, y0, y1, nullptr, nullptr); }
+void present(const pg::Framebuffer& fb) { presentRows(fb, 0, kH, nullptr, nullptr); }
 
 void directText(int x, int y, const char* text, uint16_t rgb565, uint8_t size) {
   if (!s_ok || !text) return;

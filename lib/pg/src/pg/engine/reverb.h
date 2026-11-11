@@ -20,7 +20,9 @@ namespace engine_detail {
 
 class Reverb {
  public:
-  static constexpr int kPoolLen = 13800;     // int16 samples -> 27.6 KB
+  // int16 samples -> 26.9 KB: exactly what the prime-rounded lengths need at
+  // 44.1 kHz (lower rates scale every line down; init() never exceeds it).
+  static constexpr int kPoolLen = 13452;
   static constexpr int kMaxBlock = 8;
   static constexpr int kNumAp = 6;
   static constexpr int kNumLines = 8;

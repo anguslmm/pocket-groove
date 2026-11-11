@@ -1,0 +1,136 @@
+# Hand-written descriptions for the generated parameter reference in docs/MANUAL.md.
+# Format: SECTION SHORTNAME | text   (SECTION = KICK SNAR CLAP CHH OHH PERC BASS LEAD MIX GLOBAL)
+# Used by host/tools/param_reference.cpp. Physical ranges are from the voices' ParamInfo
+# comments (lib/pg/src/pg/drums/*.cpp, bass/bass.h, lead/lead.cpp, engine/globals.cpp).
+
+KICK TUNE | Body pitch, 28 to 101 Hz (exponential): 50 is about 46 Hz, 60 about 51 Hz, 66 about 55 Hz (A1). Tune it to the song's root or fifth so the kick and bass don't fight.
+KICK DCY | Body decay, 20 ms to 1 s. Low = tight and short (techno, busy bass lines); high = long 808 boom.
+KICK PNCH | Depth of the pitch drop at the start of each hit. More = a harder, "zappier" punch. Accent deepens it further.
+KICK SWP | How fast that pitch drop settles, 3 to 120 ms. Short = click-thump; long = a laser-like "dooo".
+KICK CLK | Level of the click transient. It's what makes the kick audible on earbuds and small speakers.
+KICK DRV | Saturation of the body. Higher = denser, louder, harder (techno); 20-40 = classic house.
+KICK TONE | Low-pass over the whole kick, 150 Hz to 14 kHz. Lower = round and dull, higher = bright attack.
+KICK HOLD | Keeps the body at full level for 0 to 180 ms before it decays: weight and "push" without a longer tail.
+KICK HARM | Adds a second harmonic. More presence on small speakers, slightly less clean sub.
+KICK CTON | Character of the click: low = short tick, high = longer noisy thwack.
+
+SNAR TUNE | Pitch of the tonal body, 110 to 330 Hz.
+SNAR DCY | Decay of the noise (the snare wires), 15 to 400 ms.
+SNAR SNAP | Balance of noise against the tonal body. High = crackier, more snare; low = more tom-like.
+SNAR TONE | High-pass on the noise, 700 Hz to 9 kHz. Higher = thinner and brighter.
+SNAR BODY | Decay of the tonal body, 12 to 250 ms.
+SNAR BEND | Depth of the downward pitch sweep on the body.
+SNAR RING | Level of the upper tonal mode (the "ring" of a tuned snare).
+SNAR DTUN | Interval between body and upper mode (ratio 1.2 to 2.6): changes the pitched character.
+SNAR DRV | Saturation of the whole snare.
+
+CLAP TONE | Centre of the band-pass, 500 Hz to 3.2 kHz. Low = thick, high = papery.
+CLAP DCY | Decay of the tail (the room), 20 to 500 ms.
+CLAP SPRD | Gap between the hand bursts, 4 to 28 ms: tight single clap vs. a loose group of hands.
+CLAP TAIL | Level of the tail relative to the bursts.
+CLAP BRST | Number of early bursts before the tail, 0 to 4. 0 = a single snap.
+CLAP RES | Q of the band-pass, 0.7 to 4.5. High = narrow and ringing (808-ish).
+CLAP AIR | High-passed noise layer on top: sizzle and width of the attack.
+CLAP DRV | Saturation, the 909-style crunch.
+
+CHH TUNE | Pitch of the six-oscillator metallic bank.
+CHH DCY | Decay, 4 to 120 ms. The closed hat cuts (chokes) a ringing open hat.
+CHH TONE | High-pass, 3 to 12 kHz. Higher = thinner and crisper.
+CHH MTL | Balance of noise (0) against the metallic oscillators (127).
+CHH COLR | Filter resonance: adds a ringing colour.
+CHH SNAP | Level of the short attack tick: crispness that cuts through the mix.
+CHH SPRD | Spacing of the metallic partials: low = tighter, more tonal; high = clangier.
+
+OHH TUNE | Pitch of the six-oscillator metallic bank.
+OHH DCY | Decay, 40 ms to 1 s. Any closed-hat hit cuts it off (choke), as on the classic machines.
+OHH TONE | High-pass, 3 to 12 kHz.
+OHH MTL | Balance of noise (0) against the metallic oscillators (127).
+OHH COLR | Filter resonance: adds a ringing colour.
+OHH SNAP | Level of the short attack tick.
+OHH SPRD | Spacing of the metallic partials.
+
+PERC MODL | Which percussion model plays: tom, rim, cowbell, clave, shaker or zap. The change takes effect on the next hit. The other knobs mean different things per model: see the table above.
+PERC TUNE | Pitch: tom 45-290 Hz, rim 250-1000 Hz, cowbell 270-1080 Hz, clave 0.9-6.7 kHz, zap 60-1200 Hz; shaker: filter frequency.
+PERC DCY | Length of the tail (zap: length of the sweep).
+PERC TONE | Tom: upper mode and noise; rim, clave: upper mode level; cowbell: band-pass frequency; shaker: resonance; zap: octave partial.
+PERC BEND | Tom, rim, clave: pitch drop; cowbell: pitch envelope up or down; shaker: attack time; zap: sweep depth.
+PERC HARM | Tom, rim, clave: ratio of the two modes; cowbell: interval of its two oscillators; shaker: graininess; zap: partial ratio.
+PERC NOIS | Tom: stick noise; rim, clave: click; cowbell: breath; shaker: dry noise; zap: noise.
+PERC DRV | Saturation.
+
+BASS CUT | Filter cutoff, 40 Hz to 8.6 kHz (exponential). The main acid knob, and the target of SHIFT+`[` `]`. A CUT p-lock on a step overrides it (the factory demos lock it on most bass steps).
+BASS RES | Resonance of the 303-style diode ladder. About 123 is the edge of self-oscillation; 127 sings. 100-115 = squelch.
+BASS ENV | Filter envelope depth, 0 to +6 octaves: how far each note opens the filter. With RES this is the "wow".
+BASS DCY | Filter envelope decay, 20 ms to 2.5 s. Short = plucky blips, long = vowel-like sweeps.
+BASS ACC | Accent amount: accented steps get louder (up to +3.5 dB) and an extra, faster filter kick.
+BASS DRV | Drive into the filter plus overdrive after it, 0 to +30 dB. Grit, growl, loudness.
+BASS LFO | Tempo-synced LFO to cutoff, 0 to +6 octaves (it only opens). The bass-house "wub".
+BASS RATE | LFO rate as a note length, from 2 bars to 1/32 (dotted and triplet values included).
+BASS WAVE | Oscillator shape: 0 saw, 64 square, 127 narrow (10 %) pulse, morphing in between.
+BASS SUB | Level of a clean sine sub, mixed after the distortion: weight under the grit.
+BASS FMIX | Crossfade from the saw/pulse oscillator to the FM pair. Basis of growls and metallic bass.
+BASS FM | FM index (brightness of the FM pair); 0 = a pure sine.
+BASS RATI | FM ratio, modulator to carrier. 1 = warm, 2 = hollow, 3.5 and 7 = metallic and clangy.
+BASS FOLD | Wavefolder before the filter: adds buzzy harmonics, the bass-house growl.
+BASS TENV | How much the filter envelope also moves FM index and fold, so the timbre changes per note.
+BASS LSHP | LFO shape: triangle, sine, ramp down, ramp up, square, sample-and-hold.
+BASS SLID | Glide time for slid notes, 5 to 640 ms. Slides only happen on steps with SLD on (or legato playing).
+BASS ADCY | Amp decay while the note is held, 50 ms to 4.5 s; 127 = sustain. Low values make short plucks.
+BASS REL | Release after the note ends, 2 to 500 ms.
+BASS ATK | Amp attack, 0.7 to 180 ms. Raise it to soften the start of each note.
+BASS KTRK | How much the cutoff follows the note pitch (pivot C2). Higher keeps high notes from sounding dull.
+BASS LTMB | LFO to FM index and fold: the LFO moves the timbre as well as the cutoff.
+BASS SUBO | Sub at the note (UNI) or one octave below (-1OCT).
+BASS TUNE | Transposes the main oscillator and FM pair by -24 to +24 semitones; the sub stays on the note.
+
+LEAD CUT | Filter cutoff, about 46 Hz to the top of the audio band.
+LEAD RES | Filter resonance (Q 0.6 to 12). Level is compensated, so high values don't jump out.
+LEAD ENV | Filter envelope amount, 0 to +6 octaves. The "bite" of a stab.
+LEAD FDCY | Filter envelope decay, 30 ms to 12 s. The envelope has no sustain: CUT sets the held brightness.
+LEAD WAVE | Oscillator 1: SAW, PULS (pulse), TRI, SUPR (five detuned saws), FM1 (e-piano-like), FM2 (hollow), BELL, ORGN (drawbar organ).
+LEAD SHP | Shape, meaning depends on WAVE: saw adds an octave-up saw; pulse narrows the width; tri morphs to saw; SUPR spreads energy to the side saws; FM waves raise the modulation index; ORGN pulls out more drawbars.
+LEAD DET | Detune of oscillator 2 against oscillator 1 (up to 80 cents) and the spread of SUPR.
+LEAD DCY | Amp decay to the sustain level, 20 ms to 12 s.
+LEAD ATK | Amp attack, 1 ms to 4 s. 0 for stabs, higher for pads.
+LEAD WID | Stereo width. Has no effect on the device (mono output); only desktop stereo renders use it.
+LEAD SUS | Sustain level. 0 = stab or pluck (the note dies after DCY); high = held chords and organ.
+LEAD REL | Release after the note ends, 20 ms to 10 s.
+LEAD FATK | Filter envelope attack, 0 to 2 s: swells instead of plucks.
+LEAD FLT | Filter type: low-pass, band-pass, high-pass.
+LEAD KTRK | How much the cutoff follows the note pitch.
+LEAD DRV | Drive into a soft limiter: fatter, louder stabs.
+LEAD OSC2 | Oscillator 2 wave: SAW, PULS, TRI or SINE.
+LEAD INTV | Oscillator 2 interval, -24 to +24 semitones (-12 = an octave below, a sub layer; +7 = a fifth).
+LEAD MIX | Balance of the oscillators: -64 = oscillator 1 only, 0 = equal, +63 = oscillator 2 only.
+LEAD LFO | LFO rate, 0.1 to 20 Hz (free running, not tempo-synced).
+LEAD VIB | LFO to pitch (vibrato), up to +-1 semitone.
+LEAD LSHP | LFO to SHP: pulse-width modulation on PULS, movement on the other waves.
+LEAD LCUT | LFO to cutoff, up to +-2 octaves.
+LEAD GLID | Glide time for slid notes, 2 ms to 0.5 s.
+
+MIX LVL | Track level. 100 = unity (0 dB), 127 = about +6 dB, 64 = about -12 dB (cubic taper).
+MIX DUCK | How much the sidechain ducker pulls this track down. 0 % = untouched; 100 % = the full DDEP dip. The dip a track gets is roughly DDEP x DUCK.
+MIX DLY | Send to the tempo-synced delay (squared taper: the first half of the travel is subtle).
+MIX REV | Send to the reverb (squared taper).
+MIX PAN | Stored and saved, but the headphone output is mono: on the device pan has no effect. Desktop stereo renders use it.
+
+GLOBAL DSRC | What triggers the ducker. KICK: every kick that actually sounds (ratchets and ghosts included; a muted kick or a step that loses its probability roll does not pump). BEAT: every quarter note of the grid while playing, whatever the kick does. OFF: no ducking.
+GLOBAL DDEP | Depth: how far ducked tracks are pulled down at the trigger, before each track's DUCK amount scales it. 100 % silences a track whose DUCK is 100 %.
+GLOBAL DHLD | Time the duck stays at full depth before it recovers: 200 ms x (value/127)^2. 0 = none, 49 = 30 ms, 127 = 200 ms.
+GLOBAL DREL | Recovery time, 20 ms to 1 s (exponential): 60 = 127 ms, 78 = 221 ms, 90 = 320 ms, 100 = 435 ms. Match it to the tempo: one beat is 476 ms at 126 BPM.
+GLOBAL DCRV | Shape of the recovery. Negative = fast start (the dip snaps back, subtle); 0 = linear; positive = slow start (stays down longer, then swells: the obvious "pump").
+GLOBAL DFX | How much the delay and reverb returns are ducked too. Keeps echoes and room from washing over the kick.
+GLOBAL DTIM | Delay time as a note length: 1/32 to 1/4, with triplet (T) and dotted (D) values. 1/8D is the classic house echo.
+GLOBAL DFB | Delay feedback: how many echoes (each echo is 0.95 x value/127 of the previous).
+GLOBAL DTON | Filter in the delay's feedback loop: negative = darker dub echoes, positive = thinner.
+GLOBAL RSIZ | Reverb size: decay time 0.3 to 5 s.
+GLOBAL RDMP | Reverb damping, 9 kHz down to 900 Hz: higher = darker room.
+GLOBAL DWID | Delay stereo width (ping-pong). No effect on the device (mono); desktop stereo renders only.
+GLOBAL BPM | Tempo, 60 to 200 BPM. Also on TAB: hold TAB + `-`/`=`, or tap TAB three or more times.
+GLOBAL SWNG | Swing: delays every second 16th. 50 % = straight, 54-58 % = house shuffle, 75 % = triplet feel. The display moves in 1 % steps, every second raw step.
+GLOBAL VOL | Master volume (digital), 100 = unity. The headphone volume itself is the codec volume on G0 + `-`/`=`.
+GLOBAL FILT | DJ filter: OFF in the middle, LP (low-pass, closing) below, HP (high-pass, opening) above. Normally played with `[` `]` from any view.
+GLOBAL FRES | Resonance of the DJ filter (Q 0.7 to 6). Higher = a more obvious, whistling sweep.
+GLOBAL DRIV | Master bus saturation: glue and loudness. 0 = clean.
+GLOBAL ROOT | Root note of the project scale used by the note keys.
+GLOBAL SCAL | Scale for the note keys: CHRO (chromatic), MAJ, MIN, DOR (Dorian), PHRY (Phrygian), MIXO (Mixolydian), MPEN and JPEN (minor and major pentatonic), BLUE (blues), HMIN (harmonic minor). Changing it never rewrites notes already written.

@@ -192,7 +192,8 @@ uint32_t Ui::statusSignature() const {
   const int n = rnd((meter_ > 1.0f ? 1.0f : meter_) * 34.0f);
   h = fnv(h, uint32_t(n) | uint32_t(clipUntil_ != 0) << 8);
   h = fnv(h, uint32_t(rnd((1.0f - st_.duckGain) * 9.0f)));
-  h = fnv(h, uint32_t(env_.batteryPct) | uint32_t(env_.batteryPct < 10 ? (now_ / 500) % 4 == 0 : 0) << 8);
+  h = fnv(h, uint32_t(env_.batteryPct) | uint32_t(env_.batteryPct < 10 ? (now_ / 500) % 4 == 0 : 0) << 8 |
+                 uint32_t(focusLocked_) << 9);
   return h;
 }
 
@@ -258,6 +259,8 @@ void Ui::drawStatus(Framebuffer& fb) {
     g.text(94, 2, tag, BG);
     g.text(92 + w + 3, 2, name, TEXT);
     g.textR(165, 2, val, WHITE);
+    // Locked on some steps: those steps won't follow this value (UX 7).
+    if (focusLocked_) g.text(166, 2, PG_ICON_LOCK, AMBER);
   }
   // Level meter (mono: one bar), x 171..204
   const float p = meter_ > 1.0f ? 1.0f : meter_;
@@ -270,10 +273,11 @@ void Ui::drawStatus(Framebuffer& fb) {
   g.rect(208, 1, 4, 9, RAISED);
   g.rect(208, 1, 4, rnd((1.0f - st_.duckGain) * 9.0f), CYAN);
   // Battery
-  const int pct = env_.batteryPct > 100 ? 100 : env_.batteryPct;
-  const uint8_t bc = pct > 30 ? GREEN : (pct > 10 ? AMBER : RED);
   g.frame(217, 2, 16, 7, DIM);
   g.rect(233, 4, 2, 3, DIM);
+  if (env_.batteryPct == kBatteryUnknown) return;     // unknown: an empty battery
+  const int pct = env_.batteryPct > 100 ? 100 : env_.batteryPct;
+  const uint8_t bc = pct > 30 ? GREEN : (pct > 10 ? AMBER : RED);
   const bool lit = !(pct < 10 && (now_ / 500) % 4 == 0);   // below 10 %: off 0.5 s every 2 s
   if (lit) g.rect(219, 4, rnd(12.0f * float(pct) / 100.0f), 3, bc);
 }
@@ -982,10 +986,10 @@ void Ui::drawOverlay(Framebuffer& fb) {
         g.rect(x + 112 + b * 8, y + 8, 5, 5, (ms >= 0 && (ms / 4) % 4 == b) ? WHITE : LINE);
       g.text(x + 8, y + 50, "SWING", DIM);
       const int sw = globalValue(kGSwing);
-      cat(catInt(buf, 50 + sw / 2), "%");
+      formatValue(Engine::globalParamInfo(kGSwing), ValueRef{true, 0, kGSwing}, sw, buf);
       g.textR(x + 68, y + 50, buf, WHITE);
       g.rect(x + 76, y + 52, 66, 3, RAISED);
-      g.rect(x + 76, y + 52, (sw / 2) * 66 / 25, 3, WHITE);
+      g.rect(x + 76, y + 52, sw * 66 / 50, 3, WHITE);
       g.rect(x + 1, y + 62, w - 2, 1, LINE);
       g.text(x + 8, y + 66, "-/= BPM", TEXT);
       g.textR(x + w - 9, y + 66, PG_ICON_UP PG_ICON_DOWN " SWING", TEXT);
@@ -1009,7 +1013,9 @@ void Ui::drawPopup(Framebuffer& fb) {
   char title[16], val[kValueTextCap];
   upperCopy(info->longName, title, sizeof(title));
   g.text(x + 6, y + 5, title, TEXT);
-  g.text(x + 6, y + 15, r.global ? kFxTabNames[fxTabOfGlobal(r.index)] : kTrackNames[r.track & 7], col);
+  const int sx = g.text(x + 6, y + 15, r.global ? kFxTabNames[fxTabOfGlobal(r.index)] : kTrackNames[r.track & 7], col);
+  if (focusLocked_ && !r.global && r.track == focus_.track && r.index == focus_.index)
+    g.text(sx + 6, y + 15, PG_ICON_LOCK "LOCKED", AMBER);
   const int v = valueOf(r);
   formatValue(info, r, v, val);
   g.textR(x + w - 7, y + 4, val, WHITE, 2);

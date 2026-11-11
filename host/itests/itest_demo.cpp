@@ -1,7 +1,7 @@
 // System test for the factory demo songs (pg::demo):
 //   1. every demo builds a project that Engine::sanitizeProject leaves
-//      byte-identical (only legal values), with the right name, tempo, a song
-//      chain of 1.5 .. 3.5 minutes and the ducker on;
+//      byte-identical (only legal values), with the right name, tempo, loop
+//      mode at boot, a song chain of 1.5 .. 3.5 minutes and the ducker on;
 //   2. each one plays through its whole chain in device mode (mono, 44.1 kHz)
 //      without engine faults, int16 wrap or a pinned limiter, with integrated
 //      loudness (BS.1770, gated) and sample peak inside the bounds the mix was
@@ -133,6 +133,17 @@ void testStatic(int d) {
             g_a.globals[kGTempo]);
   const double sec = double(songSteps(g_a)) * 15.0 / double(g_a.globals[kGTempo]);
   it::check(sec >= 90.0 && sec <= 210.0, "demo %d: song chain lasts %.0f s (want 1.5 .. 3.5 min)", d, sec);
+  // Jam patterns (P1-P3 and the P8 loop): the bass and lead CUT must not be
+  // locked, or the CUT knob / SHIFT+[ ] bass sweep would do nothing.
+  for (int pt : {0, 1, 2, 7})
+    for (int t : {int(kTrackBass), int(kTrackLead)})
+      for (int s = 0; s < kMaxSteps; ++s) {
+        const Step& st = g_a.patterns[pt].tracks[t].steps[s];
+        it::check(!((st.flags & kStepOn) && st.lockParam == 1), "demo %d P%d: %s CUT locked on step %d (jam pattern)",
+                  d, pt + 1, t == kTrackBass ? "bass" : "lead", s + 1);
+      }
+  it::check(g_a.songMode == 0, "demo %d: must boot in loop mode (songMode 0) on pattern 1", d);
+  it::check(g_a.song[0].repeats > 0, "demo %d: the song chain must be programmed for the SONG view", d);
   it::check(g_a.globals[kGDuckSource] != 0 && g_a.tracks[kTrackBass].params[kMixDuck] > 0,
             "demo %d: the sidechain ducker should be on and pulling the bass", d);
   std::printf("  demo %d %-8s %3d BPM  song %.0f s\n", d, g_a.name, g_a.globals[kGTempo], sec);

@@ -172,19 +172,29 @@ static void testDelayTime() {
       r.proj.globals[kGDelayTime] = uint8_t(c.div);
       r.proj.globals[kGDelayFeedback] = 64;
       r.proj.globals[kGDelayWidth] = 0;
-    }, (3.2 * expect) / double(c.sr) + 0.05, c.sr, c.bpm);
+    }, (3.7 * expect) / double(c.sr) + 0.05, c.sr, c.bpm);
     const int hook = engine_detail::delayTimeSamples();
     const size_t D = size_t(expect + 0.5);
     std::vector<double> m(w.size());
     for (size_t i = 0; i < w.size(); ++i) m[i] = w.mono(i);
     const size_t e1 = peakIndex(m, D / 2, D + D / 2), e2 = peakIndex(m, D + D / 2, 2 * D + D / 2);
+    const size_t e3 = peakIndex(m, 2 * D + D / 2, 3 * D + D / 2);
     const double spacing = double(e2) - double(e1);
+    // Every echo is one more pass through the in-loop tone filter, whose phase
+    // may move an echo's peak by up to ~0.1 ms: allow that on top of 2 samples.
+    const double spacingTol = std::fmax(2.0, 1.0e-4 * double(c.sr));
     CHECKF(std::fabs(double(hook) - expect) <= 2.0, "sr %.0f bpm %d div %d: delay %d samples, expected %.1f", double(c.sr), c.bpm, c.div, hook, expect);
-    CHECKF(std::fabs(spacing - expect) <= 2.0, "sr %.0f bpm %d div %d: echo spacing %.0f, expected %.1f", double(c.sr), c.bpm, c.div, spacing, expect);
+    CHECKF(std::fabs(spacing - expect) <= spacingTol, "sr %.0f bpm %d div %d: echo spacing %.0f, expected %.1f", double(c.sr), c.bpm, c.div, spacing, expect);
     CHECKF(std::fabs(double(e1) - expect) <= 8.0, "sr %.0f bpm %d div %d: first echo at %zu, expected %.1f (+latency)", double(c.sr), c.bpm, c.div, e1, expect);
-    // Echo 2 is echo 1 times the per-echo feedback (same filtering).
+    // Each echo is the previous one times the per-echo feedback and one more
+    // pass of the tone filter (the high-pass trims a click's peak a little):
+    // echo 2 / echo 1 is at most the feedback gain and not far below it at
+    // this tone setting, and the third echo keeps decaying the same way.
+    const double fbGain = 0.95 * 64.0 / 127.0;
     const double ratio = std::fabs(m[e2]) / std::fmax(1e-9, std::fabs(m[e1]));
-    CHECKF(std::fabs(ratio - 0.95 * 64.0 / 127.0) < 0.03, "div %d: echo ratio %.3f", c.div, ratio);
+    const double ratio23 = std::fabs(m[e3]) / std::fmax(1e-9, std::fabs(m[e2]));
+    CHECKF(ratio > 0.8 * fbGain && ratio < fbGain + 0.03, "div %d: echo ratio %.3f for feedback %.3f", c.div, ratio, fbGain);
+    CHECKF(ratio23 > 0.8 * fbGain && ratio23 < fbGain + 0.03, "div %d: echo 3/2 ratio %.3f for feedback %.3f", c.div, ratio23, fbGain);
     if (k++ % 3 == 0 || c.bpm == 60) std::printf("  delay sr %.0f bpm %3d div %d: %d samples (%.1f ms), echo spacing %.0f, first echo +%.0f\n",
                                                  double(c.sr), c.bpm, c.div, hook, 1000.0 * hook / double(c.sr), spacing, double(e1) - expect);
   }

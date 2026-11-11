@@ -85,19 +85,52 @@ void setHeld(uint8_t key, bool down) {
   else { const uint32_t b = 1u << (key - 32); if (down) s_heldHi = s_heldHi | b; else s_heldHi = s_heldHi & ~b; }
 }
 
+// Key-ups that did not fit into the queue (this task only). A lost key-up
+// would leave the UI with a key held forever (stuck note), so it is retried
+// until there is room; a lost key-down is simply forgotten (held state
+// reverted, so its key-up is dropped as a duplicate too).
+uint64_t s_pendUp = 0;
+
+void flushPendingUps() {
+  if (!s_pendUp || !s_queue) return;
+  for (uint8_t k = 0; k < kNumIds; ++k) {
+    if (!((s_pendUp >> k) & 1u)) continue;
+    Event e;
+    e.ev.key = k;
+    e.ev.down = false;
+    e.ev.timeUs = 0;
+    e.raw = 0;
+    e.tIntUs = e.tReadUs = static_cast<uint32_t>(esp_timer_get_time());
+    if (xQueueSend(s_queue, &e, 0) != pdTRUE) return;   // still full: next wake-up
+    s_pendUp &= ~(1ull << k);
+  }
+}
+
 void emit(uint8_t key, bool down, uint8_t raw, uint32_t tInt, uint32_t tRead) {
   if (isHeld(key) == down) return;           // duplicate (e.g. release after an overflow flush)
+  flushPendingUps();                         // keep older releases ahead of this event
   setHeld(key, down);
   Event e;
   e.ev.key = key;
   e.ev.down = down;
+  e.ev.timeUs = 0;
   e.raw = raw;
   e.tIntUs = tInt;
   e.tReadUs = tRead;
   s_events = s_events + 1;
   auto fn = s_listener;
   if (fn) fn(e, s_listenerUser);
-  if (s_queue && xQueueSend(s_queue, &e, 0) != pdTRUE) s_drops = s_drops + 1;
+  const uint64_t bit = 1ull << key;
+  if (down && (s_pendUp & bit)) {            // its previous release is still pending: drop this press
+    setHeld(key, false);
+    s_drops = s_drops + 1;
+    return;
+  }
+  if (s_queue && xQueueSend(s_queue, &e, 0) != pdTRUE) {
+    s_drops = s_drops + 1;
+    if (down) setHeld(key, false);           // forget the press: its release is then a duplicate
+    else s_pendUp |= bit;                    // the UI saw the press: the release must arrive
+  }
 }
 
 void releaseAll(uint32_t now) {
@@ -163,6 +196,7 @@ void keyTask(void*) {
   uint32_t tick = 0;
   for (;;) {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
+    flushPendingUps();
     pollG0();
     if (!s_present) continue;
     const uint32_t now = millis();
@@ -188,18 +222,27 @@ void keyTask(void*) {
 bool setupController() {
   // Same writes as Adafruit_TCA8418::begin(), matrix(7, 8), flush(),
   // enableInterrupts() in M5Cardputer 1.1.1 -- plus the overflow interrupt.
+  // Order differs from the library on purpose: the matrix is switched off
+  // first, the FIFO flushed, and the matrix switched on LAST. A key already
+  // held at power-on (the boot-menu gesture) is then reported as a fresh
+  // press after the flush instead of possibly being flushed with the stale
+  // events, and after a warm reset (the chip keeps its state, it is not reset
+  // with the ESP32) leaving keypad mode makes it scan the held keys again.
   bool ok = true;
+  ok = wr(REG_KP_GPIO_1, 0x00) && ok;                                            // matrix off (all GPIO)
+  ok = wr(REG_KP_GPIO_1 + 1, 0x00) && ok;
   for (uint8_t i = 0; i < 3; ++i) ok = wr(REG_GPIO_DIR_1 + i, 0x00) && ok;       // all inputs
   for (uint8_t i = 0; i < 3; ++i) ok = wr(REG_GPI_EM_1 + i, 0xFF) && ok;         // GPI event mode
   for (uint8_t i = 0; i < 3; ++i) ok = wr(REG_GPIO_INT_LVL_1 + i, 0x00) && ok;   // falling
   for (uint8_t i = 0; i < 3; ++i) ok = wr(REG_GPIO_INT_EN_1 + i, 0xFF) && ok;
-  ok = wr(REG_KP_GPIO_1, 0x7F) && ok;                                            // rows 0..6 in the matrix
-  ok = wr(REG_KP_GPIO_1 + 1, 0xFF) && ok;                                        // cols 0..7 in the matrix
   if (!ok) return false;
   uint8_t v = 0;
   for (int n = 0; n < 16 && rd(REG_KEY_EVENT_A, &v) && v != 0; ++n) {}           // flush key events
   for (uint8_t i = 0; i < 3; ++i) rd(REG_GPIO_INT_STAT_1 + i, &v);               // flush GPI status
   wr(REG_INT_STAT, 0x1F);
+  ok = wr(REG_KP_GPIO_1, 0x7F) && ok;                                            // rows 0..6 in the matrix
+  ok = wr(REG_KP_GPIO_1 + 1, 0xFF) && ok;                                        // cols 0..7 in the matrix
+  if (!ok) return false;
   uint8_t cfg = 0;
   if (!rd(REG_CFG, &cfg)) return false;
   cfg |= (CFG_KE_IEN | CFG_GPI_IEN | CFG_OVR_FLOW_IEN);
@@ -230,6 +273,13 @@ bool poll(Event* out) {
   if (!s_queue || !out) return false;
   return xQueueReceive(s_queue, out, 0) == pdTRUE;
 }
+
+bool waitEvent(Event* out, uint32_t timeoutMs) {
+  if (!s_queue || !out) return false;
+  return xQueueReceive(s_queue, out, pdMS_TO_TICKS(timeoutMs)) == pdTRUE;
+}
+
+uint32_t taskStackFree() { return s_task ? static_cast<uint32_t>(uxTaskGetStackHighWaterMark(s_task)) : 0; }
 
 uint64_t heldMask() {
   return (static_cast<uint64_t>(s_heldHi) << 32) | s_heldLo;

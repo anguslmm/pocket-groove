@@ -8,12 +8,12 @@
 // Probability keeps ghost hits and hat ticks moving. Every pattern is four
 // bars (64 steps); the polymetric tracks re-align at each pattern start.
 //
-//   P1 INTRO   kick + rumble, clave (7), hat ticks
-//   P2 BUILD   + rolling bass (closed), rim (12), open hats
-//   P3 MAIN    + clap, dub stab (12), bass opens a little
-//   P4 SHIFT   clave on 5, rim on 10, 16th hats with ratchets, bass to G2/D2
-//   P5 BREAK   no kick: stab sweep in the delay, bass rolling on (closed), hats
-//   P6 PEAK    stab open, ghost kicks, everything, ratchet fills
+//   P1 MAIN    + clap, dub stab (12), bass opens a little
+//   P2 SHIFT   clave on 5, rim on 10, 16th hats with ratchets, bass to G2/D2
+//   P3 PEAK    stab open, ghost kicks, everything, ratchet fills
+//   P4 BREAK   no kick: stab sweep in the delay, bass rolling on (closed), hats
+//   P5 BUILD   + rolling bass (closed), rim (12), open hats
+//   P6 INTRO   kick + rumble, clave (7), hat ticks
 //   P7 OUTRO   kick, rumble, clave, hats
 //   P8 TOOL    kick, rumble and the rolling bass only
 #include "demo_songs.h"
@@ -26,8 +26,8 @@ using namespace util;
 
 constexpr int K = kTrackKick, SN = kTrackSnare, CP = kTrackClap, CH = kTrackHatClosed, OH = kTrackHatOpen,
               PC = kTrackPerc, BS = kTrackBass, LD = kTrackLead;
-constexpr int bCut = 0;
-constexpr int lCut = 0;
+constexpr int bCut = 0, bEnv = 2;
+constexpr int lCut = 0, lEnv = 2;
 
 // ---- drums
 const char* kKick  = "x... x... x... x...";
@@ -37,14 +37,16 @@ const char* kHatT  = "..o. ..g: ..o. .:o.";   // off-beat ticks
 const char* kHat16 = "-g-o -g-o -g-o -gxo";
 const char* kHatO  = "..o. ..o. ..o. ..x.";
 
-// Rolling bass: the three 16ths after every kick. `cut` locks per beat.
-void roll(Pattern& P, int bar, int note, int cutA, int cutB, bool ghosts = true) {
+// Rolling bass: the three 16ths after every kick, `param` locked per beat from
+// a to b. Arrangement patterns lock the cutoff; the jam patterns (P1-P3, P8)
+// lock ENV so the bass CUT knob and the SHIFT+[ ] sweep stay live.
+void roll(Pattern& P, int bar, int note, int cutA, int cutB, bool ghosts = true, int param = bCut) {
   for (int beat = 0; beat < 4; ++beat) {
     const int c = cutA + (cutB - cutA) * beat / 3;
     for (int k = 1; k < 4; ++k) {
       const int i = bar * 16 + beat * 4 + k;
       Step& s = put(P, BS, i, k == 1 ? 108 : (k == 2 ? 86 : 96), note, 2);
-      lock(s, bCut, c + (k == 3 ? 6 : 0));
+      lock(s, param, c + (k == 3 ? 6 : 0));
       if (k == 3 && beat == 3) s.flags |= kStepAccent;
       if (ghosts && k == 2 && (beat & 1)) prob(s, 70);
     }
@@ -53,10 +55,11 @@ void roll(Pattern& P, int bar, int note, int cutA, int cutB, bool ghosts = true)
 
 // Em9 dub stab (E3 G3 D4 F#4) on a 12-step loop: steps 0 and 7, so the
 // pair phases 3-against-4 over the bar. Cutoff locks per stab.
-void stabLoop(Pattern& P, int cutA, int cutB) {
+// Locks the lead's ENV (not CUT: the lead CUT knob stays live in jam patterns).
+void stabLoop(Pattern& P, int envA, int envB) {
   P.tracks[LD].length = 12;
-  lock(chord(put(P, LD, 0, 108, E3, 2), kChordMin9), lCut, cutA);
-  lock(chord(put(P, LD, 7, 92, E3, 2), kChordMin9), lCut, cutB);
+  lock(chord(put(P, LD, 0, 108, E3, 2), kChordMin9), lEnv, envA);
+  lock(chord(put(P, LD, 7, 92, E3, 2), kChordMin9), lEnv, envB);
 }
 
 void percPoly(Pattern& P, int pcLen, const char* pc, int snLen, const char* sn) {
@@ -93,10 +96,10 @@ void mainP(Pattern& P) {
     drums(P, CH, kHat16, b * 16, 85);
     drums(P, OH, kHatO, b * 16);
     drums(P, CP, kClap, b * 16);
-    roll(P, b, E2, 24 + 2 * b, 30 + 2 * b);
+    roll(P, b, E2, 40 + 2 * b, 46 + 2 * b, true, bEnv);
   }
   percPoly(P, 7, "o..g.?.", 12, "..g. .:o. ..?.");
-  stabLoop(P, 34, 42);
+  stabLoop(P, 40, 50);
 }
 
 void shift(Pattern& P) {
@@ -105,12 +108,12 @@ void shift(Pattern& P) {
     drums(P, CH, kHat16, b * 16);
     drums(P, OH, kHatO, b * 16);
     drums(P, CP, kClap, b * 16);
-    roll(P, b, b < 2 ? E2 : (b == 2 ? G2 : D2), 32, 40);
+    roll(P, b, b < 2 ? E2 : (b == 2 ? G2 : D2), 48, 56, true, bEnv);
   }
   ratchet(at(P, CH, 31), 2);
   ratchet(at(P, CH, 63), 3);
   percPoly(P, 5, "o.g.?", 10, "..o. :.g. .?");
-  stabLoop(P, 46, 56);
+  stabLoop(P, 56, 66);
 }
 
 void breakdown(Pattern& P) {
@@ -135,11 +138,11 @@ void peak(Pattern& P) {
     drums(P, CH, kHat16, b * 16);
     drums(P, OH, kHatO, b * 16);
     drums(P, CP, kClap, b * 16);
-    roll(P, b, E2, 40 + 4 * b, 46 + 4 * b, false);
+    roll(P, b, E2, 56 + 3 * b, 62 + 3 * b, false, bEnv);
   }
   at(P, K, 0).flags |= kStepAccent;
   percPoly(P, 7, "o..o.g?", 12, "..g. .oo. ..?g");
-  stabLoop(P, 62, 74);
+  stabLoop(P, 74, 86);
   ratchet(at(P, CH, 47), 2);
   ratchet(put(P, CP, 62, 90), 2);
   ratchet(put(P, CP, 63, 100), 4);
@@ -157,7 +160,7 @@ void outro(Pattern& P) {
 void tool(Pattern& P) {
   for (int b = 0; b < 4; ++b) {
     drums(P, K, kKick, b * 16);
-    roll(P, b, E2, 30, 38);
+    roll(P, b, E2, 40, 46, true, bEnv);
   }
 }
 
@@ -197,7 +200,7 @@ void buildWarehous(const Engine& engine, Project& p) {
   // Low woodblock clave for the 7-step loop.
   params(p, PC, {{0, 3}, {1, 22}, {2, 50}, {3, 96}, {5, 40}});
   // Rolling sub bass: saw + strong sub, short amp decay, low cutoff.
-  params(p, BS, {{bCut, 26}, {1, 44}, {2, 40}, {3, 30}, {4, 70}, {5, 64}, {7, 2}, {9, 84},
+  params(p, BS, {{bCut, 32}, {1, 44}, {2, 40}, {3, 30}, {4, 70}, {5, 64}, {7, 2}, {9, 84},
                  {15, 1}, {17, 30}, {18, 20}, {20, 30}});
   // Dub stab: two detuned saws, resonant low-pass, plucky.
   params(p, LD, {{0, 40}, {1, 64}, {2, 44}, {3, 38}, {6, 44}, {7, 50}, {10, 0}, {11, 50}, {15, 30}});
@@ -212,21 +215,21 @@ void buildWarehous(const Engine& engine, Project& p) {
   mix(p, BS, 100, 64, 0, 0, 110);
   mix(p, LD, 110, 64, 96, 50, 70);
 
-  // ---- patterns
+  // ---- patterns (P1 = the main groove: what plays when a new user presses play)
   Pattern* P = p.patterns;
   for (int i = 0; i < 8; ++i) length(P[i], 64);
-  intro(P[0]);
-  build(P[1]);
-  mainP(P[2]);
-  shift(P[3]);
-  breakdown(P[4]);
-  peak(P[5]);
+  mainP(P[0]);
+  shift(P[1]);
+  peak(P[2]);
+  breakdown(P[3]);
+  build(P[4]);
+  intro(P[5]);
   outro(P[6]);
   tool(P[7]);
 
   // ---- song: 72 bars, about 2:10 at 133 BPM
-  song(p, {{0, 2}, {1, 2}, {2, 3}, {3, 3}, {4, 2}, {5, 4}, {6, 2}});
-  p.songMode = 1;
+  song(p, {{5, 2}, {4, 2}, {0, 3}, {1, 3}, {3, 2}, {2, 4}, {6, 2}});
+  p.songMode = 0;   // boots in loop mode on P1 (the main groove); SONG view plays the chain
 }
 
 }  // namespace pg::demo
