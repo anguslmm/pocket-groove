@@ -1,4 +1,4 @@
-# PlatformIO extra script (pre:) for env:cardputer-adv-ram and env:profile-ram.
+# PlatformIO extra script (pre:) for env:cardputer-adv and the profile envs.
 #
 # Places the audio hot path in internal RAM without touching lib/pg sources
 # and without rebuilding the ESP-IDF libraries:
