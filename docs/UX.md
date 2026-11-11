@@ -23,7 +23,7 @@ Status: complete for v1 implementation. Mockups are in `docs/ux/` (contact sheet
 1. **Sound in one key press, beat in ten seconds.** Nothing has to be configured before it plays. Every default sounds good, and the demo is loaded.
 2. **One home, no dead ends.** `` ` `` always goes home. View keys go straight to their view from anywhere. Overlays exist only while their key is held. Dialogs always accept `` ` `` to cancel.
 3. **Keys never lie.** A physical key does the same thing in every performance view. When a view reuses a key, it's for the local "column / row / page" selection, the screen shows it (the column labels print the key letter), and the help overlay shows it too.
-4. **Two keys at most.** No gesture needs more than two non-modifier keys held at once. That's the ghosting limit. FN, SHIFT, CTRL, OPT and ALT may be added on top.
+4. **Two keys at most.** No gesture needs more than two non-modifier keys held at once. FN, SHIFT, CTRL, OPT and ALT may be added on top. The matrix has no diodes, so three held keys can produce a phantom fourth; the UI filters phantoms (16.1) and no gesture relies on a key combination that is electrically ambiguous (docs/ghosting-audit.md).
 5. **The selected track is the cursor.** The pads choose the track. Steps, notes, SOUND, MIX lane and the step strip all follow it.
 6. **What you touched last is on `-`/`=`.** The focus chip in the status bar always tells you what those keys will change.
 7. **Looks like an instrument.** Track colours carry meaning, there are big pads, there's very little text, and all text is upper case at 7 px or larger.
@@ -202,11 +202,11 @@ Images: `docs/ux/keys-groove.png`, `keys-step-held.png`, `keys-step-write.png`, 
 | `\` | PROJECT | PROJECT | PROJECT | PROJECT | PROJECT | PROJECT | PROJECT | LOAD/SAVE tab | - |
 | `a`-`k` | pad: play + select | field VEL GATE/PTCH PROB RTCH ACC SLD CHRD LOCK | pad: play + select | pad (show its sound) | pad (select strip) | pad; DUCK tab: focus its duck | pad | pad | type |
 | `l` | chord mode (lead) | chord next (lead) | chord mode | - | - | - | - | type L |
-| `;` | octave + | note +1 semi (SHIFT +12) | octave + | page prev | row prev | tab prev | slot up | list up | - |
+| `;` | octave + | note +1 semi (CTRL +12) | octave + | page prev | row prev | tab prev | slot up | list up | - |
 | `'` | page | page (to copy across) | page | step page | step page | - | - | - | - |
 | `enter` | REC on/off | - | REC off | REC | REC | REC | chain on/off | load / save | OK |
 | `z`-`,` | notes 1-8 | set note 1-8 (drum: velocity) | write note + advance | column 1-8 | row LEVEL DUCK DELAY REVERB PAN (`n` `m` `,` -) | column 1-8 | notes | notes | type (`,` -) |
-| `.` | octave - | note -1 semi (SHIFT -12) | octave - | page next | row next | tab next | slot down | list down | - |
+| `.` | octave - | note -1 semi (CTRL -12) | octave - | page next | row next | tab next | slot down | list down | - |
 | `/` | help (hold) / explain (tap) | G | G | G | G | G | G | G | - |
 | `space` | play / stop | G | play (to live rec) | G | G | G | G | G | type `_` |
 
@@ -226,10 +226,10 @@ STEP HELD in SOUND or MIX is the same as the SOUND/MIX column, except that `-`/`
 | SHIFT + `[`/`]` | Bass cutoff sweep. |
 | SHIFT + `'` | Add page. |
 | SHIFT + `l` | Previous chord mode. |
-| SHIFT + `;`/`.` (step held) | Note ±12. |
 | SHIFT + space | Playing: restart from step 1 (`Play a=0`). Stopped: continue from the current position (`Play a=1`). |
 | SHIFT + step in SONG | Insert pattern before the cursor. |
 | CTRL + `z` | Undo / redo (toggle). |
+| CTRL + `;`/`.` (step held) | Note ±12. |
 | CTRL + `x` / `c` / `v` | Cut / copy / paste the selected track. |
 | CTRL + SHIFT + `x` / `c` | Cut / copy the whole pattern (paste is CTRL+V; the clip knows its type). |
 | CTRL + SHIFT + step | Selected track length. |
@@ -266,7 +266,7 @@ Modifier overlays appear 200 ms after the modifier goes down, **or immediately**
 | `k` LOCK | ✓ | ✓ | ✓ | the locked value (see below) |
 
 * When the panel opens, the **last-used field** is selected. It's VEL the first time.
-* The note row writes the step's note and auditions it: the scale degree at the track octave for synths, or velocity levels for drums. `;`/`.` move it ±1 semitone (chromatic, not scale-locked, so any note can be reached). SHIFT moves it ±12.
+* The note row writes the step's note and auditions it: the scale degree at the track octave for synths, or velocity levels for drums. `;`/`.` move it ±1 semitone (chromatic, not scale-locked, so any note can be reached). CTRL moves it ±12 (not SHIFT: with step 1 held, SHIFT+`;` and SHIFT+`-` close the same scan rectangle, 16.1).
 * `l` (lead) moves the chord to the next type.
 * **Tap another step key = copy the held step there** (all 8 bytes). Tapping `'` while the step stays held flips the shown page, so a step can be copied across pages. Each copy is one `SetStep`. No undo snapshot is stored, because the copies are visible and each one can be toggled off.
 * `del` removes the step's p-lock (`lockParam = 0`).
@@ -593,7 +593,7 @@ The BPM column is the tempo field of each file's header, read by `io::listProjec
 
 ## 16. Edge cases
 
-1. **Ghosting / 3 keys.** If a third non-modifier key appears while two are held, the UI ignores the newest one (no action, no sound) until one is released. This protects against phantom keys if the matrix has no diodes. It costs nothing, because no gesture needs 3 keys.
+1. **Ghosting / 3 keys.** The matrix has no diodes (confirmed on the device): three closed keys on three corners of a rectangle of the TCA8418's 7x8 scan matrix make it report the fourth corner too, in the same batch as the third key, in either order. Every key event goes through a phantom filter (`ui/ghost.h`) before the UI sees it. A down whose scan row and column are already connected through closed keys is a phantom and is dropped. A down that would close a loop is held back until its partner corner arrives (same batch, within 3 ms); the two are electrically interchangeable, so the one that, pressed last, completes a known three-key gesture is kept, and if both or neither do, both are dropped. A dropped key's key-up is swallowed; any key-up first releases held-back downs; no release order leaves a key stuck. A held-back down with no partner (no phantom came) is delivered by the next frame. Three keys that close no rectangle all act. docs/ghosting-audit.md has every three-key gesture, its phantom and the outcome, and the one remap it required (STEP EDIT octave: CTRL+`;`/`.` instead of SHIFT).
 2. **Key down in one view, up in another.** Every key-up is delivered to whatever owns the key-down: a held note always gets its `NoteOff`, a held step always closes, and a roll always stops. On view change, all sounding UI-initiated notes are kept; releasing the key ends them.
 3. **Stop while notes are held.** The engine releases sequenced notes. Live keys still send NoteOff on release.
 4. **Pattern switch while a step is held.** The STEP EDIT panel closes (toast "PATTERN CHANGED"). The edit target follows the playing pattern, and edits are never sent to a pattern you can't see.

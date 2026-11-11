@@ -76,7 +76,7 @@ Pressing a pad plays the track and *selects* it. The selected track is the curso
 | `ctrl` | edit commands: undo, cut, copy, paste, save, new |
 | `/` | key map |
 
-**Two keys at most.** No action needs more than two non-modifier keys at once; `fn`, `shift`, `ctrl`, `opt` and `alt` can be added on top. If you press a third non-modifier key while two are held, it is ignored until you release one (this protects against keyboard ghosting).
+**Two keys at most.** No action needs more than two non-modifier keys at once; `fn`, `shift`, `ctrl`, `opt` and `alt` can be added on top. The keyboard has no anti-ghosting diodes: some combinations of three held keys make it report a fourth key you didn't press. Pocket Groove recognises these phantom keys and ignores them. When it can't tell which of two keys is the phantom (for example three pads `a` `s` `d`, or holding note `z` while pressing `opt`+`1`), it ignores both; release a key and press again. [ghosting-audit.md](ghosting-audit.md) lists every case.
 
 **Keys that mean the same everywhere** (except while typing a file name): `space` play/stop, `` ` `` home, the five view keys, `[` `]` DJ filter, `tab` tempo, `/` help, the pads, `fn`+pad mute, `opt`+step pattern, and the `ctrl` combos.
 
@@ -159,12 +159,14 @@ The key-map images are the designer's diagrams; the tables are the implemented b
 ![STEP EDIT key map](manual/keys-step-held.png)
 ![STEP EDIT on a bass step, SLD field selected](manual/m-stepedit-bass.png)
 
+The key map says "with SHIFT one octave"; the octave is `ctrl`+`;`/`.` now (ghosting, see the table).
+
 | Key | Action |
 |---|---|
 | pads `a`-`k` | Choose the field that `-`/`=` changes: `a` VEL, `s` GATE (drums: PTCH), `d` PROB, `f` RTCH, `g` ACC, `h` SLD (bass, lead), `j` CHRD (lead), `k` LOCK. The last field used is selected when the panel opens. |
 | `-` `=` | Change the field. ACC and SLD flip on/off. Both together = field default (VEL 100, GATE 0.5 step, PTCH 0, PROB 100 %, RTCH x1, no chord, no lock). |
 | notes | Set the step's note (synth: scale degree at the track octave; drum: velocity) and hear it. |
-| `;` `.` | Note +1 / -1 semitone, chromatic, so any note is reachable; `shift` = an octave. Drums: pitch -24..+24. |
+| `;` `.` | Note +1 / -1 semitone, chromatic, so any note is reachable; `ctrl`+`;` / `ctrl`+`.` = an octave (earlier builds used `shift`; with step 1 held the keyboard can't tell `shift`+`;` from `shift`+`-`). Drums: pitch -24..+24. |
 | `l` | Lead: next chord type (`shift`: previous). |
 | other step keys | Copy the held step there (all fields). |
 | `'` | Flip the page while holding, to copy across pages. |
@@ -308,12 +310,12 @@ Pads and notes play, and `opt`+step still queues a pattern.
 | `shift`+`[`/`]` | Sweep the BASS cutoff down / up. `shift`+both = back to where the sweep started. |
 | `shift`+`'` | Add a page: every track grows by 16 steps (max 64), copying its previous 16. Undoable. |
 | `shift`+`l` | Previous chord mode. |
-| `shift`+`;`/`.` (step held) | Note ±12. |
 | `shift`+`space` | Playing: restart from step 1. Stopped: continue from where it stopped. |
 | `ctrl`+`z` | Undo; again = redo. |
 | `ctrl`+`x` / `c` / `v` | Cut / copy / paste the selected track. |
 | `ctrl`+`shift`+`x` / `c` | Cut / copy the whole pattern (paste with `ctrl`+`v`). |
 | `ctrl`+`shift`+step | Length of the selected track only (polymeter). Undoable. |
+| `ctrl`+`;`/`.` (step held) | Note ±12. |
 | `ctrl`+`s` | Save (straight to the open file; a demo or unnamed project opens SAVE AS). |
 | `ctrl`+`n` | New project (asks first if there are unsaved changes). |
 | `opt` (hold) | Pattern pads appear: green = playing, amber frame = queued, grey = has steps, dark = empty. |

@@ -1,6 +1,6 @@
 # M5Stack Cardputer-Adv — hardware notes for firmware
 
-Researched 2026-11-11. Nothing here was tested on a device. Every fact carries a source and a confidence tag.
+Researched 2026-11-11 from source code. Every fact carries a source and a confidence tag. What has since been measured on a real device is in section 11, which wins where they differ.
 
 ## 0. How to read this file
 
@@ -11,6 +11,7 @@ Researched 2026-11-11. Nothing here was tested on a device. Every fact carries a
 | **[3P]** | Stated by a third-party project. "hw" means its author says it ran on a Cardputer-Adv. |
 | **[SNIPPET]** | Content of a docs.m5stack.com page seen only through web-search result summaries. The page itself could not be opened from this sandbox. Treat as unverified until someone reads the page. |
 | **UNVERIFIED** | Could not be confirmed from a primary source. Collected in section 10. |
+| **[HW]** | Observed on a Cardputer-Adv running this project's firmware (section 11). |
 
 **Access limits of this research session.** Only github.com and raw.githubusercontent.com were reachable. These were blocked: docs.m5stack.com (product page, pin map), the M5Stack document server that hosts the schematic PDF (`Sch_M5CardputerAdv_v1.0_2025_06_20_17_19_58.pdf`, name from a search result), registry.platformio.org, espressif.com. **The Cardputer-Adv schematic was not read.** Everything about wiring comes from source code that runs on the board.
 
@@ -334,7 +335,7 @@ Behaviour that matters for an instrument, all read from the source:
 - It uses `std::vector` on every update. Keep it out of the audio task.
 - The bundled header comment says "bit 7 ... press = 0 or release == 1". The code treats bit 7 set as pressed, and that is what works on the device.
 
-**Rollover.** The TCA8418 queues key events in a FIFO (10 deep per the TI datasheet, which was not fetched here) and the library drains it one event per `update()`, so several held keys are tracked. Whether the ADV matrix has per-key diodes, and so whether three keys on the corners of a matrix rectangle produce a ghost fourth key, is **UNVERIFIED**. If it has none, a+s+d would register f (see the formula in 4.5). The original Cardputer example carries the comment "max press 3 button at the same time". Test this on hardware before designing chord input. Debounce time inside the TCA8418 is also unchecked (datasheet not read).
+**Rollover.** The TCA8418 queues key events in a FIFO (10 deep per the TI datasheet, which was not fetched here) and the library drains it one event per `update()`, so several held keys are tracked. **The ADV matrix has no per-key diodes [HW]:** three keys on three corners of a rectangle of the 7x8 scan matrix register the fourth corner, so a+s+d registers f (formula in 4.5; section 11.3). The original Cardputer example carries the comment "max press 3 button at the same time". Test this on hardware before designing chord input. Debounce time inside the TCA8418 is also unchecked (datasheet not read).
 
 ### 4.4 Getting real key-down and key-up events
 
@@ -413,7 +414,7 @@ Coordinates are `Point2D_t{x, y}` with x = column from the left, y = row from th
 | Size | 1.14", 240 x 135 in landscape. Panel memory is 135 x 240 with offsets x 52, y 40, colours inverted. | [SRC] [M5GFX.cpp L2694-L2795 @0.2.36](https://github.com/m5stack/M5GFX/blob/0.2.36/src/M5GFX.cpp#L2694-L2795) |
 | Pins | SCLK 36, MOSI 35, DC 34, CS 37, RST 33, no MISO (3-wire), backlight 38 | same; Meshtastic variant.h L3-L11 |
 | Bus | `SPI3_HOST`, 40 MHz write, 16 MHz read | same |
-| Backlight | PWM on GPIO38, 256 Hz, LEDC channel 7. `M5Cardputer.Display.setBrightness(0..255)`. | same |
+| Backlight | PWM on GPIO38, 256 Hz, 9-bit duty, brightness offset 16. M5GFX asks for LEDC channel 7, but on Arduino core 3.x its `Light_PWM` calls `ledcAttach()`, which takes the first free channel and timer. Level 255 = duty 512/512 = always on (DC). `M5Cardputer.Display.setBrightness(0..255)`. **256 Hz is audible on the headphone output at dimmed levels [HW]; this firmware retunes it to 39 kHz (section 11.2).** | same; `Light_PWM.inl`, `esp32-hal-ledc.c` (section 11.2) |
 
 **Rotation trap.** Up to M5GFX 0.2.36 the library sets rotation 1 for this board, so `getRotation()` is 1 and every Cardputer example calls `setRotation(1)`. **M5GFX 0.3.0 (2026-11-05) renumbers rotations**: "Rotation 0 is the board's upright orientation on every board", old `setRotation(n)` is now `setRotation((n + 3) % 4)`, and for the Cardputer the start-up picture is unchanged but `getRotation()` reads 0 ([0.3.0 release notes](https://github.com/m5stack/M5GFX/releases/tag/0.3.0), commit [a1e39fe](https://github.com/m5stack/M5GFX/commit/a1e39fe02abce9f85d4e326b8f537d3f8af34b6a)). Safest: never call `setRotation()` with a literal; the default is already landscape in both lines.
 
@@ -646,9 +647,9 @@ Not confirmed from a primary source in this session:
 
 1. **Anything from the schematic.** Absence of an MCLK trace (inferred from four codebases), the NS4150B enable circuit and HP_DET transistor, whether the jack carries the mono signal on both tip and ring, whether the jack has a mic contact, pull-ups on INT and I2C.
 2. **Everything tagged [SNIPPET]** from docs.m5stack.com: module name Stamp-S3A, the download-mode procedure, EXT header pin numbers (pins 3, 6, 8, 10, 12, 14 have no second source), UART direction on G13/G15, "amplifier disabled when headphones are inserted", mic part and SNR, battery capacity (1750 vs 1500 mAh).
-3. **BMI270 address**: 0x69 in two device scans, 0x68 in espp's header.
-4. **Key rollover and ghosting** beyond two keys, and TCA8418 debounce latency.
-5. **32 kHz output** on this codec configuration; no project uses it.
+3. **BMI270 address**: 0x69 in two device scans, 0x68 in espp's header. *Answered: 0x69 (11.1).*
+4. **Key rollover and ghosting** beyond two keys, and TCA8418 debounce latency. *Ghosting answered: no diodes (11.3); debounce still unmeasured.*
+5. **32 kHz output** on this codec configuration; no project uses it. *Answered: works (11.1).*
 6. **Real latency and glitch behaviour** of both audio options. The option B code is compile-checked only.
 7. `I2S_SLOT_MODE_MONO` with the IDF driver on this board.
 8. **Measured display frame rate** with M5GFX.
@@ -660,3 +661,57 @@ Not confirmed from a primary source in this session:
 14. ESP32-S3 core count and total SRAM are from general knowledge of the Espressif datasheet, not fetched here.
 
 To close most of these: allow docs.m5stack.com and the M5Stack document host in the session's network settings and read the product page and schematic PDF; items 3-8 need a device.
+
+---
+
+## 11. Measured on hardware
+
+Reported by the user from a Cardputer-Adv running this project's smoke test and instrument firmware (2026-11-11). These supersede the inferences above.
+
+### 11.1 Confirmed device facts
+
+| Item | Result | Closes |
+|---|---|---|
+| Mono DAC and the jack | The ES8311 plays the **LEFT** I2S slot; that one signal reaches **both tip and ring** of the headphone jack. Whatever goes in the right slot is not heard. | 2.4 "both tip and ring", 10.1 |
+| 32 kHz output | Works (the codec follows BCLK as expected). | 2.2, 10.5 |
+| M5.Speaker fallback path | Works (option A, boot-menu backend). | 3.1 |
+| Keyboard INT line (GPIO11) | Works: events are drained on INT, not by the 20 ms poll. | 4.1 |
+| Key matrix diodes | **None**: ghosting confirmed (11.3). | 4.3, 10.4 |
+| IMU address | **0x69**. | 6 IMU, 10.3 |
+| PSRAM | None (confirmed). | 1 |
+| G0 side button | Works (GPIO0, active low). | 4.5 |
+| LittleFS write of 64 KB | **248-302 ms** (internal flash). Both cores stall during flash writes; see storage.h. | - |
+| Display colours | Correct (inversion and RGB565 byte order as configured). | 5 |
+
+### 11.2 Backlight PWM noise on the audio output
+
+**Report:** changing the brightness put a little noise on the headphone line at certain levels (smoke test, brightness 128 and 200 of 255).
+
+**Cause (read from the pinned sources).** M5GFX 0.2.36 sets the Cardputer / Cardputer-Adv backlight up with `_set_pwm_backlight(GPIO_NUM_38, 7, bl_freq = 256, invert = false, bl_offset = 16)` (`src/M5GFX.cpp` L2771-L2794). Its `Light_PWM` (`lgfx/v1/platforms/esp32/Light_PWM.inl`) uses 9-bit duty (`PWM_BITS = 9`) and on Arduino core 3.x attaches with `ledcAttach(pin, freq, bits)` (L42), which ignores the requested channel 7 and takes the first free LEDC channel and timer (`esp32-hal-ledc.c` L299). The LEDC clock is the 40 MHz XTAL (`LEDC_DEFAULT_CLK LEDC_USE_XTAL_CLK`, L45). Brightness b maps to duty `(b * 241 + 16 * 255 + 64) >> 7` of 512, and `ledcWrite()` turns 511 or more into 512 = always on (L337):
+
+| Brightness | Duty | Output |
+|---|---|---|
+| 0 | 0/512 | DC low (backlight off) |
+| 16 | 62/512 (12 %) | switching |
+| 128 | 273/512 (53 %) | switching |
+| 160 (old instrument default) | 333/512 (65 %) | switching |
+| 200 | 408/512 (80 %) | switching |
+| 254 | 510/512 | switching (narrow pulses) |
+| **255** | **512/512** | **DC high, no edges** |
+
+So every level except 0 and 255 switched the backlight current at **256 Hz**, square-wave with harmonics all through the audio band, and the load steps coupled into the analog supply of the codec / headphone driver. The instrument also ran at 160, i.e. it switched all the time.
+
+**Fix (firmware).** `plat::display::begin()` calls `ledcChangeFrequency(38, 39062, 9)` after M5GFX's init (`esp32-hal-ledc.c` L476: it reconfigures that pin's timer and keeps the 9-bit resolution, so M5GFX's `setBrightness()` duty values stay valid). 40 MHz / 512 / 2 = **39,062.5 Hz** with an integer divider (no fractional-divider jitter), above the audio band and above the ~25 kHz floor; 9 bits at that rate is well inside the LEDC's 14-bit, 40 MHz limits (78 kHz is the 9-bit ceiling). The instrument runs at brightness **255 (DC)** whenever anything can be heard, and dims to 16 (39 kHz PWM, 12 %) only after 60 s without a key while stopped and at least 10 s after the transport last ran (FX tails). The smoke test uses the same display code (starting at 255) and prints `[display] backlight PWM ... Hz (M5GFX set ... Hz), 9-bit, duty n/512 = x% (DC, no switching | switching)` in its report; the instrument prints the same facts in a `[boot] backlight:` line.
+
+| | Before | After |
+|---|---|---|
+| PWM frequency | 256 Hz | 39,062 Hz (read back from the LEDC timer and printed) |
+| Resolution | 9 bit | 9 bit (unchanged) |
+| Instrument while playing / sound possible | 160 = 65 % duty, switching | 255 = DC, no switching |
+| Instrument idle dim | 16 at 256 Hz | 16 at 39 kHz, never while playing or within 10 s of stop |
+
+**Still to check on the device:** no noise at any smoke-test level ('b' cycles 32, 80, 128, 200, 255); the report shows 39062 Hz and "DC" at 255; dim levels still look dim and steady (the backlight driver's response to 39 kHz PWM was not documented; if dimming looks wrong, a lower frequency down to ~25 kHz is the next step).
+
+### 11.3 Key ghosting
+
+Three closed keys on three corners of a rectangle of the TCA8418 scan matrix (scan row = col / 2, scan col = row + 4 * (col & 1); 4.5) make the controller report the fourth corner, in the same FIFO batch as the third key. The smoke test saw the phantom arrive in the same batch. Four deliberately pressed keys that close no rectangle read correctly. The rectangles are in the scan matrix, not the printed layout: a+s+d ghosts f. The UI's handling and the full audit are in docs/ghosting-audit.md.

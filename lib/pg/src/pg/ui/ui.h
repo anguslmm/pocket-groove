@@ -12,6 +12,7 @@
 #include "../platform.h"
 #include "../project.h"
 #include "format.h"
+#include "ghost.h"
 
 namespace pg {
 namespace ui {
@@ -51,7 +52,9 @@ class Ui {
 
   // Key events, UI thread. The one-argument form uses the clock of the last
   // update(); the firmware should prefer passing millis() so holds are timed
-  // from the key itself rather than from the last frame.
+  // from the key itself rather than from the last frame. Every matrix event
+  // first goes through the phantom-key filter (ghost.h, UX.md 16.1); a down it
+  // holds back is delivered by the next event or the next update().
   void onKey(const KeyEvent& e) { onKey(e, now_); }
   void onKey(const KeyEvent& e, uint32_t nowMs);
 
@@ -107,6 +110,8 @@ class Ui {
   uint32_t droppedCommands() const { return dropped_; }
   uint32_t fullRedraws() const { return fullDraws_; }
   uint32_t statusRedraws() const { return statusDraws_; }
+  uint64_t heldKeys() const { return held_; }        // keys the UI considers down (bit = key id)
+  const GhostFilter& ghostFilter() const { return ghost_; }
 
   // Effective (pending-aware) reads of the edit target, also used by the drawing code.
   Step stepAt(int track, int idx) const;
@@ -136,9 +141,9 @@ class Ui {
   static constexpr int kOutbox = 96;
 
   // input
+  void keyEvent(const KeyEvent& e, uint32_t nowMs);   // after the ghost filter
   void keyDown(int k, bool shift);
   void keyUp(int k);
-  int heldNonModifiers() const;
   bool isHeld(int k) const { return (held_ >> k) & 1; }
 
   void home();
@@ -149,7 +154,7 @@ class Ui {
   void stepUp(int k);
   void padDown(int k, int t, bool shift);
   void noteDown(int k, int n, bool shift);
-  void semicolonDot(int dir, bool shift);
+  void semicolonDot(int dir, bool octave);
   void pageKey(bool shift);
   void chordKey(bool shift);
   void recToggle();
@@ -313,7 +318,8 @@ class Ui {
   uint8_t stepCursor_ = 0;
 
   // keys
-  uint64_t held_ = 0, ignored_ = 0;
+  uint64_t held_ = 0;
+  GhostFilter ghost_;
   uint32_t downMs_[57] = {};
   KeyRec rec_[57] = {};
   uint8_t comboMods_ = 0;      // bit per modifier (0 fn,1 opt,2 alt,3 tab) that has been used in a combo

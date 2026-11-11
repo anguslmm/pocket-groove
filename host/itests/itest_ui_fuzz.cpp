@@ -2,6 +2,9 @@
 // events, random timing, random holds. Asserts no crash, framebuffer writes stay
 // inside the buffer (guard bytes) and only use defined palette entries, and the
 // UI's own state stays in range. Also built with ASan/UBSan (see the report).
+// Keys go through the diode-less matrix model (common/ghost_matrix.h), half of
+// the events with the phantoms last in their batch and half with them first;
+// whenever every key has been released, no key may still be down in the UI.
 //   itest_ui_fuzz [events] [seed]
 #include <cstdio>
 #include <cstdlib>
@@ -28,11 +31,13 @@ int main(int argc, char** argv) {
   pg::ui::initPalette(g.fb);
   rig.target = &g.fb;
   bool held[pg::ui::kNumKeyIds] = {};
-  long fails = 0;
+  bool junkHeld[pg::ui::kNumKeyIds] = {};
+  long fails = 0, releaseChecks = 0;
   long seenView[6] = {}, seenDialog = 0, seenExplain = 0, seenHelp = 0, samples = 0;
   uint32_t fullTotal = 0;
   // Bias towards the keys that matter (steps, pads, notes, -/=, modifiers) but hit all of them.
   for (long i = 0; i < events; ++i) {
+    rig.matrix.order = i < events / 2 ? uih::GhostOrder::PhantomLast : uih::GhostOrder::PhantomFirst;
     int k;
     const uint32_t r = rnd() % 100;
     if (r < 10) k = int(rnd() % pg::ui::kNumKeyIds);
@@ -55,10 +60,27 @@ int main(int argc, char** argv) {
     // Keep the transport mostly running and avoid huge numbers of held keys.
     rig.key(k, !held[k]);
     held[k] = !held[k];
-    if (rnd() % 64 == 0)
+    if (rnd() % 64 == 0) {
       for (int j = 0; j < pg::ui::kNumKeyIds; ++j)
         if (held[j]) { rig.key(j, false); held[j] = false; }
-    if (rnd() % 4 == 0) rig.ui.onKey(pg::KeyEvent{uint8_t(rnd() % 70), (rnd() & 1) != 0, 0}, rig.now());  // junk ids, stray ups
+      for (int j = 0; j < pg::ui::kNumKeyIds; ++j)
+        if (junkHeld[j]) { rig.ui.onKey(pg::KeyEvent{uint8_t(j), false, 0}, rig.now()); junkHeld[j] = false; }
+      rig.run(5);                     // a frame: the ghost filter lets go of anything held back
+      rig.frame();
+      ++releaseChecks;
+      const pg::ui::GhostFilter& gf = rig.ui.ghostFilter();
+      if (rig.ui.heldKeys() != 0 || gf.holding() || gf.realMask() != 0 || gf.phantomMask() != 0) {
+        ++fails;
+        std::printf("keys still down after releasing all at event %ld: ui %llx real %llx phantom %llx\n", i,
+                    (unsigned long long)rig.ui.heldKeys(), (unsigned long long)gf.realMask(),
+                    (unsigned long long)gf.phantomMask());
+      }
+    }
+    if (rnd() % 4 == 0) {             // junk ids, stray downs and ups, straight to the UI
+      const pg::KeyEvent je{uint8_t(rnd() % 70), (rnd() & 1) != 0, 0};
+      rig.ui.onKey(je, rig.now());
+      if (je.key < pg::ui::kNumKeyIds) junkHeld[je.key] = je.down;
+    }
     // storage chaos: faults, a full disk, the SD card coming and going, power cuts
     if (rnd() % 512 == 0) {
       rig.fs.arm();
@@ -71,7 +93,7 @@ int main(int argc, char** argv) {
     if (rnd() % 4096 == 0) rig.fs.powerLossOp = int(rnd() % 30);
     if (rig.fs.dead && rnd() % 8 == 0) rig.fs.powerCycle();
     if (rnd() % 8192 == 0) {           // reboot with whatever the file system holds now
-      for (int j = 0; j < pg::ui::kNumKeyIds; ++j) held[j] = false;
+      for (int j = 0; j < pg::ui::kNumKeyIds; ++j) held[j] = junkHeld[j] = false;
       rig.fs.powerCycle();
       fullTotal += rig.ui.fullRedraws();
       rig.boot();
@@ -110,6 +132,9 @@ int main(int argc, char** argv) {
   }
   std::printf("itest_ui_fuzz: %ld events, %u full redraws, %u dropped commands, %ld failures\n", events,
               fullTotal + rig.ui.fullRedraws(), rig.ui.droppedCommands(), fails);
+  std::printf("  matrix model: %u phantom downs, %u phantom ups injected; %ld all-released checks\n",
+              rig.matrix.phantomDowns, rig.matrix.phantomUps, releaseChecks);
+  if (rig.matrix.phantomDowns == 0 || releaseChecks == 0) { std::printf("FAIL: the ghost model never fired\n"); fails++; }
   std::printf("  time share: GROOVE %ld%% SOUND %ld%% MIX %ld%% FX %ld%% SONG %ld%% PROJECT %ld%%, dialog %ld%%, explain %ld%%, help %ld%%\n",
               seenView[0] * 100 / samples, seenView[1] * 100 / samples, seenView[2] * 100 / samples,
               seenView[3] * 100 / samples, seenView[4] * 100 / samples, seenView[5] * 100 / samples,

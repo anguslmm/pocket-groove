@@ -35,10 +35,31 @@ void  presentRows(const pg::Framebuffer& fb, int y0, int y1);
 // firmware overlays sit on top of the UI without touching the Framebuffer.
 using StripHook = void (*)(uint16_t* px, int y, int rows, void* user);
 void  presentRows(const pg::Framebuffer& fb, int y0, int y1, StripHook hook, void* user);
+// Backlight. M5GFX 0.2.36 drives GPIO38 with LEDC at 256 Hz / 9 bit for this
+// board (M5GFX.cpp _set_pwm_backlight(GPIO_NUM_38, 7, 256, false, 16); on Arduino
+// core 3.x the channel number is ignored and ledcAttach() takes the first free
+// channel). 256 Hz edges coupled into the headphone output as an audible buzz
+// at dimmed levels, so begin() moves that LEDC timer to kBacklightPwmHz, keeping
+// M5GFX's 9-bit duty scale. Level 255 is duty 512/512: the pin is held high, DC,
+// no PWM edges at all; 0 is held low. Anything in between switches at
+// kBacklightPwmHz, above the audio band.
+constexpr uint8_t  kBrightnessFull  = 255;      // DC: what the instrument uses while sound can be heard
+constexpr uint32_t kBacklightPwmHz  = 39062;    // 40 MHz XTAL / 512 / 2: integer divider, no fractional jitter
+struct Backlight {
+  bool     reconfigured;   // the LEDC timer now runs at pwmHz
+  uint32_t stockHz;        // what M5GFX had set up (read back from the LEDC timer), 0 = unknown
+  uint32_t pwmHz;          // read back after the change (0 = change failed: still stockHz)
+  uint8_t  bits;           // duty resolution (9, M5GFX's)
+  uint32_t duty;           // current raw duty, 0..dutyFull
+  uint32_t dutyFull;       // 1 << bits = always on
+  bool     dc;             // duty is 0 or full: no switching edges
+};
+Backlight backlight();
+
 // Unbuffered text straight to the panel with the library's built-in font, for
 // boot and fatal-error messages before/without a Framebuffer. Not for the UI.
 void  directText(int x, int y, const char* text, uint16_t rgb565, uint8_t size = 1);
-void  setBrightness(uint8_t level);       // 0..255
+void  setBrightness(uint8_t level);       // 0..255 (255 = DC, see Backlight)
 uint8_t brightness();
 Stats stats();
 void  resetStats();

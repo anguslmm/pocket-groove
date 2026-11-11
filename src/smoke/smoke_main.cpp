@@ -766,6 +766,14 @@ void printReport() {
   rp("[battery] %d %% %d mV\n", b.percent, b.millivolts);
   rp("[display] full-frame present avg %.0f us max %.0f us, %.1f fps now, %lu frames, brightness %u\n", ds.avgUs,
      ds.maxUs, ds.fps, static_cast<unsigned long>(ds.frames), disp::brightness());
+  {
+    const disp::Backlight bl = disp::backlight();
+    const unsigned pm = static_cast<unsigned>((bl.duty * 1000u) / (bl.dutyFull ? bl.dutyFull : 1u));
+    rp("[display] backlight PWM %lu Hz (M5GFX set %lu Hz%s), %u-bit, duty %lu/%lu = %u.%u%% %s\n",
+       static_cast<unsigned long>(bl.reconfigured ? bl.pwmHz : bl.stockHz), static_cast<unsigned long>(bl.stockHz),
+       bl.reconfigured ? "" : ", RETUNE FAILED", bl.bits, static_cast<unsigned long>(bl.duty),
+       static_cast<unsigned long>(bl.dutyFull), pm / 10, pm % 10, bl.dc ? "(DC, no switching)" : "(switching)");
+  }
   rp("[fs /int] mounted %s%s in %lu ms, %lu/%lu bytes used\n", si.intMounted ? "yes" : "NO",
      si.intFormatted ? " (FORMATTED at boot)" : "", static_cast<unsigned long>(si.intMountMs),
      static_cast<unsigned long>(si.intUsedBytes), static_cast<unsigned long>(si.intTotalBytes));
@@ -1303,7 +1311,7 @@ void systemKey(char c) {
       int i = 0;
       while (i < 5 && lv[i] <= disp::brightness()) ++i;
       disp::setBrightness(lv[i % 5]);
-      flash("brightness %u", disp::brightness());
+      flash("brightness %u%s", disp::brightness(), disp::backlight().dc ? " (DC)" : " (PWM 39 kHz)");
       break;
     }
     default: break;

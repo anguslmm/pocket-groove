@@ -379,24 +379,21 @@ void Ui::showPopup(const ValueRef& r) {
 
 // ============================================================== key input ====
 
-int Ui::heldNonModifiers() const {
-  int n = 0;
-  for (int k = 0; k < kNumKeyIds; ++k)
-    if (isHeld(k) && !isModifierKey(k)) ++n;
-  return n;
+void Ui::onKey(const KeyEvent& e, uint32_t nowMs) {
+  if (e.key >= kNumKeyIds || !proj_) return;
+  // Phantom keys of the diode-less matrix are dropped here (16.1, ghost.h).
+  GhostFilter::Out out[GhostFilter::kMaxOut];
+  const int n = ghost_.push(e, nowMs, out);
+  for (int i = 0; i < n; ++i) keyEvent(out[i].ev, out[i].ms);
 }
 
-void Ui::onKey(const KeyEvent& e, uint32_t nowMs) {
+void Ui::keyEvent(const KeyEvent& e, uint32_t nowMs) {
   const int k = e.key;
-  if (k >= kNumKeyIds || !proj_) return;
   now_ = nowMs;
   const uint64_t bit = 1ull << k;
   ++serial_;
   if (e.down) {
     if (held_ & bit) return;                       // duplicate down
-    if (ignored_ & bit) return;
-    // Ghosting (16.1): a third non-modifier key is ignored until one is released.
-    if (!isModifierKey(k) && heldNonModifiers() >= 2) { ignored_ |= bit; return; }
     held_ |= bit;
     downMs_[k] = nowMs;
     rec_[k] = KeyRec{kActNone, 0, 0, 0};
@@ -443,7 +440,6 @@ void Ui::onKey(const KeyEvent& e, uint32_t nowMs) {
     if (isHeld(kKTab)) comboMods_ |= 8;
     keyDown(k, isHeld(kKShift));
   } else {
-    if (ignored_ & bit) { ignored_ &= ~bit; return; }
     if (!(held_ & bit)) return;
     held_ &= ~bit;
     keyUp(k);
@@ -477,6 +473,8 @@ void Ui::keyDown(int k, bool shift) {
   if (alt) { altCombo(k); return; }
   if (ctrl) {
     if (shift && step >= 0 && view_ != View::Song && view_ != View::Project) stepDown(k, step, true, true);
+    else if (heldStep_ >= 0 && view_ == View::Groove && (k == kKSemicolon || k == kKDot))
+      semicolonDot(k == kKSemicolon ? 1 : -1, true);   // CTRL+;/. = note +-12 (was SHIFT: ghosting, 16.1)
     else ctrlCombo(k, shift);
     return;
   }
@@ -510,8 +508,8 @@ void Ui::keyDown(int k, bool shift) {
   if (pad >= 0) { padDown(k, pad, shift); return; }
   if (note >= 0) { noteDown(k, note, shift); return; }
   switch (k) {
-    case kKSemicolon: semicolonDot(1, shift); return;
-    case kKDot: semicolonDot(-1, shift); return;
+    case kKSemicolon: semicolonDot(1, false); return;
+    case kKDot: semicolonDot(-1, false); return;
     case kKQuote: pageKey(shift); return;
     case kKL: chordKey(shift); return;
     case kKEnter: recToggle(); return;
@@ -789,7 +787,7 @@ void Ui::stepWriteNote(int k, int n, bool shift) {
   shownPage_ = uint8_t(stepCursor_ / 16);
 }
 
-void Ui::semicolonDot(int dir, bool shift) {
+void Ui::semicolonDot(int dir, bool octave) {
   if (heldStep_ >= 0) {
     if (view_ != View::Groove) {
       // fall through to the view's page/row/tab keys below
@@ -797,7 +795,7 @@ void Ui::semicolonDot(int dir, bool shift) {
       const int t = heldTrack_;
       Step s = stepAt(t, heldStep_);
       const int lo = isSynth(t) ? 0 : 36, hi = isSynth(t) ? 127 : 84;
-      const int nn = clampi(s.note + dir * (shift ? 12 : 1), lo, hi);
+      const int nn = clampi(s.note + dir * (octave ? 12 : 1), lo, hi);
       if (nn == s.note) return;
       s.note = uint8_t(nn);
       heldEdited(s);
@@ -1360,6 +1358,12 @@ void Ui::pollStatus() {
 bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   if (!eng_ || !proj_) return false;
   env_ = env;
+  {
+    // Downs the ghost filter held back for a partner that never came.
+    GhostFilter::Out out[GhostFilter::kMaxOut];
+    const int n = ghost_.tick(env.nowMs, out);
+    for (int i = 0; i < n; ++i) keyEvent(out[i].ev, out[i].ms);
+  }
   now_ = env.nowMs;
   ++frame_;
   flushOutbox();

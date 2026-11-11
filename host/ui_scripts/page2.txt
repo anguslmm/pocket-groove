@@ -6,9 +6,9 @@ up shift
 # bass (selected): step 5 = A2 accent, step 16 = G1 x3 ratchet
 down 5
 wait 300
-down shift
+down ctl
 tap ;
-up shift
+up ctl
 tap g
 tap =
 up 5

@@ -274,10 +274,14 @@ static void testHelp() {
 int main() {
   static uih::Rig rig;
   R = &rig;
+  for (uih::GhostOrder order : {uih::GhostOrder::PhantomLast, uih::GhostOrder::PhantomFirst}) {
+  rig.matrix.order = order;
+  std::printf("-- key matrix model: %s\n", uih::ghostOrderName(order));
   testClipboardUndo();
   testUndoAfterPatternSwitch();
   testSong();
   testHelp();
+  }
   std::printf("itest_ui_edit: %d checks, %d failed\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

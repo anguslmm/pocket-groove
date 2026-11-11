@@ -434,6 +434,9 @@ static void testMoreRowsAndBattery() {
 int main() {
   static uih::Rig rig;
   R = &rig;
+  for (uih::GhostOrder order : {uih::GhostOrder::PhantomLast, uih::GhostOrder::PhantomFirst}) {
+  rig.matrix.order = order;
+  std::printf("-- key matrix model: %s\n", uih::ghostOrderName(order));
   testSaveLoadRoundTrip();
   testNameEntry();
   testSdAndDelete();
@@ -442,6 +445,7 @@ int main() {
   testNewProject();
   testSessionAndBoot();
   testMoreRowsAndBattery();
+  }
   std::printf("itest_ui_files: %d checks, %d failed\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

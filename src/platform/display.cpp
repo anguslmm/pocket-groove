@@ -13,6 +13,7 @@
 #include "display.h"
 
 #include <M5Unified.h>
+#include <esp32-hal-ledc.h>
 #include <esp_timer.h>
 
 namespace plat {
@@ -27,8 +28,12 @@ constexpr int kStripPx = kW * kStripRows;
 uint16_t s_strip[2][kStripPx];                   // DMA source, internal RAM
 uint16_t s_pal[256];                             // palette in panel byte order
 
+constexpr uint8_t kPinBacklight = 38;            // M5GFX: GPIO_NUM_38 for Cardputer / Cardputer-Adv
+constexpr uint8_t kPwmBits = 9;                  // M5GFX Light_PWM PWM_BITS: its duty values assume 9 bits
+
 bool     s_ok = false;
-uint8_t  s_brightness = 128;
+uint8_t  s_brightness = kBrightnessFull;
+uint32_t s_stockHz = 0, s_pwmHz = 0;
 uint32_t s_frames = 0, s_fpsFrames = 0;
 int64_t  s_fpsT0 = 0;
 float    s_lastUs = 0, s_maxUs = 0, s_avgUs = 0, s_fps = 0;
@@ -42,7 +47,15 @@ bool begin() {
   if (!s_ok) return false;
   // M5GFX's default for this board is already landscape 240x135 (rotation 1
   // in 0.2.x, renumbered to 0 in 0.3.0): never call setRotation with a literal.
+  // Retune the backlight's LEDC timer (attached by M5GFX's Light_PWM::init via
+  // ledcAttach(38, 256, 9)). ledcChangeFrequency keeps the pin, channel and
+  // 9-bit resolution, so M5GFX's setBrightness() duty values stay correct;
+  // ledcWrite() turns duty 511/512 into 512 = always on (esp32-hal-ledc.c).
+  // ledcReadFreq() reads 0 while the duty is 0, hence the brightness first.
   M5.Display.setBrightness(s_brightness);
+  s_stockHz = ledcReadFreq(kPinBacklight);
+  s_pwmHz = ledcChangeFrequency(kPinBacklight, kBacklightPwmHz, kPwmBits);
+  M5.Display.setBrightness(s_brightness);        // re-latch the duty on the retuned timer
   M5.Display.fillScreen(0);
   s_fpsT0 = esp_timer_get_time();
   return true;
@@ -106,6 +119,18 @@ void setBrightness(uint8_t level) {
   if (s_ok) M5.Display.setBrightness(level);
 }
 uint8_t brightness() { return s_brightness; }
+
+Backlight backlight() {
+  Backlight b;
+  b.reconfigured = s_pwmHz != 0;
+  b.stockHz = s_stockHz;
+  b.pwmHz = s_pwmHz;
+  b.bits = kPwmBits;
+  b.dutyFull = 1u << kPwmBits;
+  b.duty = s_ok ? ledcRead(kPinBacklight) : 0;
+  b.dc = b.duty == 0 || b.duty >= b.dutyFull;
+  return b;
+}
 
 Stats stats() {
   Stats st;

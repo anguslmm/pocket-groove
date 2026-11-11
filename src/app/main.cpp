@@ -60,8 +60,11 @@ app::Settings g_set;
 
 // ---- constants -----------------------------------------------------------------
 constexpr uint32_t kFrameMs = 33;              // ~30 fps
-constexpr uint8_t kBrightFull = 160, kBrightDim = 16;
+// Full = 255 = DC on the backlight pin (no PWM edges to couple into the audio
+// line); dim = 39 kHz PWM, only while nothing can be heard (see display.h).
+constexpr uint8_t kBrightFull = disp::kBrightnessFull, kBrightDim = 16;
 constexpr uint32_t kDimAfterMs = 60000;
+constexpr uint32_t kDimTailMs = 10000;          // after stop: delay / reverb tails may still ring
 constexpr uint32_t kVolShowMs = 1500;
 constexpr uint32_t kVolSaveDelayMs = 2000;
 constexpr uint32_t kStatsEveryMs = 5000;
@@ -81,13 +84,14 @@ bool g_diagOn = false;
 bool g_dimmed = false;
 bool g_playing = false;
 uint32_t g_lastKeyMs = 0;
+uint32_t g_lastPlayingMs = 0;     // last frame the transport ran
 bool g_g0Held = false, g_g0UsedForVol = false, g_g0HaveTap = false;
 uint32_t g_g0DownUs = 0, g_g0LastTapUs = 0;   // keys::Event::tIntUs (wraps; compared by difference)
 bool g_sdRecovered = false;      // pg::io::recoverAfterPowerLoss has run on the current SD mount
 uint32_t g_volShowUntil = 0, g_volChangedMs = 0;
 bool g_volDirty = false;
 uint8_t g_volReg = app::kVolDefault;   // current codec volume (may differ from g_set at boot: ceiling)
-uint32_t g_overSinceMs = 0;
+uint32_t g_overSinceMs = 0, g_underSinceMs = 0;
 bool g_overloadWarn = false, g_overloadAck = false;
 float g_frameUs = 0, g_frameMaxUs = 0;
 uint32_t g_lastDiagMs = 0, g_lastStatsMs = 0, g_lastBattMs = 0;
@@ -232,15 +236,21 @@ void printReport() {
   sp("[audio] %s, %lu Hz, %s, core %d, codec %s, vol 0x%02X (%s dB)%s%s\n", g_audioOk ? "RUNNING" : "NOT RUNNING",
      static_cast<unsigned long>(sampleRate()), app::backendName(g_set.backend), as.taskCore,
      audio::codecPresent() ? "ACK" : "NO-ACK", g_volReg, db, g_audioErr[0] ? " err: " : "", g_audioErr);
-  sp("[audio] block avg %dus max %dus period %dus cpu %d.%d%% | blocks %lu underruns %lu%s late %lu wrErr %lu "
+  sp("[audio] block avg %dus max %dus (ever) recent %dus period %dus cpu %d.%d%% | blocks %lu underruns %lu%s late %lu wrErr %lu "
      "yields %lu maxGap %dus latency %lu fr\n",
-     static_cast<int>(as.avgUs), static_cast<int>(as.maxUs), static_cast<int>(as.blockPeriodUs),
-     tenths(as.cpuPercent) / 10, tenths(as.cpuPercent) % 10, static_cast<unsigned long>(as.blocks),
+     static_cast<int>(as.avgUs), static_cast<int>(as.maxUs), static_cast<int>(as.recentMaxUs),
+     static_cast<int>(as.blockPeriodUs), tenths(as.cpuPercent) / 10, tenths(as.cpuPercent) % 10,
+     static_cast<unsigned long>(as.blocks),
      static_cast<unsigned long>(as.underruns), as.underrunsValid ? "" : "(n/a)",
      static_cast<unsigned long>(as.lateBlocks), static_cast<unsigned long>(as.writeErrors),
      static_cast<unsigned long>(as.overloadYields), static_cast<int>(as.maxPeriodUs),
      static_cast<unsigned long>(audio::latencyFrames()));
-  sp("[audio] overload warning %s\n", g_overloadWarn ? "LATCHED (>90% for >1 s at 44.1 kHz: try 32 kHz)" : "no");
+  sp("[audio] overload warning %s\n", g_overloadWarn ? "ON (avg >90% of the block period for >1 s; clears after 5 s <70%)" : "no");
+  {
+    char pl[240];
+    audio::placementLine(pl, sizeof(pl));
+    sp("%s", pl);
+  }
   sp("[keys] controller %s, mode %s, events %lu, INT drains %lu, polled events %lu, drops %lu, fifo ovf %lu, "
      "i2c err %lu, INT->read max %luus\n",
      ks.controllerPresent ? "OK" : "MISSING", keyMode(), static_cast<unsigned long>(ks.events),
@@ -263,10 +273,11 @@ void printReport() {
 
 void printStatsLine() {
   const audio::Stats as = audio::stats();
+  const float winMaxUs = audio::takeMaxUs();   // max since the previous stats line, not since boot
   const sys::HeapInfo h = sys::heap();
   sp("[stats] t=%lus cpu %d.%d%% avg %dus max %dus/%dus und %lu late %lu heap %luk min %luk key %s ui %dus%s\n",
      static_cast<unsigned long>(sys::millis() / 1000), tenths(as.cpuPercent) / 10, tenths(as.cpuPercent) % 10,
-     static_cast<int>(as.avgUs), static_cast<int>(as.maxUs), static_cast<int>(as.blockPeriodUs),
+     static_cast<int>(as.avgUs), static_cast<int>(winMaxUs), static_cast<int>(as.blockPeriodUs),
      static_cast<unsigned long>(as.underruns), static_cast<unsigned long>(as.lateBlocks),
      static_cast<unsigned long>(h.freeBytes / 1024), static_cast<unsigned long>(h.minEverFree / 1024), keyMode(),
      static_cast<int>(g_frameUs), g_overloadWarn ? " OVERLOAD" : "");
@@ -317,7 +328,7 @@ void updateOverlays(uint32_t now) {
     const int cpu = tenths(as.cpuPercent);
     if (g_audioOk) {
       snprintf(d.text[0], sizeof(d.text[0]), "AUD %d.%d%% %d/%d/%dus U%lu", cpu / 10, cpu % 10,
-               static_cast<int>(as.avgUs), static_cast<int>(as.maxUs), static_cast<int>(as.blockPeriodUs),
+               static_cast<int>(as.avgUs), static_cast<int>(as.recentMaxUs), static_cast<int>(as.blockPeriodUs),
                static_cast<unsigned long>(as.underruns));
       d.fg[0] = cpu >= 900 ? app::kRgbRed : cpu >= 700 ? app::kRgbAmber : app::kRgbGreen;
     } else {
@@ -329,7 +340,8 @@ void updateOverlays(uint32_t now) {
              g_set.backend == app::AudioBackend::M5Speaker ? "M5SPK" : "I2S");
     d.fg[1] = h.minEverFree < 16384 ? app::kRgbAmber : app::kRgbWhite;
     if (g_overloadWarn) {
-      snprintf(d.text[2], sizeof(d.text[2]), "CPU>90%%: USE 32KHZ (BOOT MENU)");
+      snprintf(d.text[2], sizeof(d.text[2]), g_set.rate == app::Rate::k44100 ? "CPU>90%%: USE 32KHZ (BOOT MENU)"
+                                                                            : "CPU>90%%: AUDIO OVERLOADED");
       d.fg[2] = app::kRgbRed;
     } else {
       const int fu = static_cast<int>(g_frameUs / 100.0f);
@@ -353,7 +365,8 @@ void updateOverlays(uint32_t now) {
     else if (!g_audioOk)
       snprintf(a.text[0], sizeof(a.text[0]), "NO AUDIO: %.26s", g_audioErr[0] ? g_audioErr : "INIT FAILED");
     else
-      snprintf(a.text[0], sizeof(a.text[0]), "CPU>90%% - TRY 32KHZ  (G0 X2 = INFO)");
+      snprintf(a.text[0], sizeof(a.text[0]), g_set.rate == app::Rate::k44100 ? "CPU>90%% - TRY 32KHZ  (G0 X2 = INFO)"
+                                                                            : "CPU>90%% - OVERLOAD  (G0 X2 = INFO)");
   }
 }
 
@@ -429,6 +442,13 @@ void setup() {
      static_cast<unsigned long>(g_heapBoot.freeBytes), static_cast<unsigned long>(g_heapBoot.largestBlock),
      static_cast<unsigned long>(g_heapBoot.totalBytes));
 
+  {
+    const disp::Backlight bl = disp::backlight();
+    sp("[boot] backlight: LEDC %lu Hz (M5GFX set %lu Hz)%s, duty %lu/%lu%s\n",
+       static_cast<unsigned long>(bl.reconfigured ? bl.pwmHz : bl.stockHz), static_cast<unsigned long>(bl.stockHz),
+       bl.reconfigured ? "" : " RETUNE FAILED", static_cast<unsigned long>(bl.duty),
+       static_cast<unsigned long>(bl.dutyFull), bl.dc ? " = DC" : "");
+  }
   g_keysOk = keys::begin();
   sp("[boot] keyboard TCA8418: %s\n", g_keysOk ? "OK" : "NOT FOUND (G0 and serial still work)");
   const uint32_t tKeys = sys::millis();
@@ -516,16 +536,32 @@ void loop() {
 
   // Transport state: a side-effect-free read (status() would reset the meter's peak hold).
   g_playing = g_inst.engine().isPlaying();
+  if (g_playing) g_lastPlayingMs = now;
 
-  // Overload: moving-average load > 90% for > 1 s at 44.1 kHz -> latched warning.
-  if (g_audioOk && g_set.rate == app::Rate::k44100 && as.cpuPercent > 90.0f) {
+  // Overload: moving-average load > 90% of the block period at the CURRENT
+  // rate (cpuPercent is avg / (128 / rate)) for > 1 s -> warning; it clears
+  // again after 5 s below 70%.
+  if (g_audioOk && as.cpuPercent > 90.0f) {
+    g_underSinceMs = 0;
     if (!g_overSinceMs) g_overSinceMs = now | 1u;
     else if (now - g_overSinceMs > 1000 && !g_overloadWarn) {
       g_overloadWarn = true;
-      sp("[audio] OVERLOAD: >90%% for >1 s at 44.1 kHz. Consider 32 kHz (boot menu).\n");
+      sp("[audio] OVERLOAD: >90%% for >1 s at %lu Hz.%s\n", static_cast<unsigned long>(sampleRate()),
+         g_set.rate == app::Rate::k44100 ? " Consider 32 kHz (boot menu)." : "");
     }
   } else {
     g_overSinceMs = 0;
+    if (g_overloadWarn && (!g_audioOk || as.cpuPercent < 70.0f)) {
+      if (!g_underSinceMs) g_underSinceMs = now | 1u;
+      else if (now - g_underSinceMs > 5000) {
+        g_overloadWarn = false;
+        g_overloadAck = false;
+        g_underSinceMs = 0;
+        sp("[audio] overload cleared\n");
+      }
+    } else {
+      g_underSinceMs = 0;
+    }
   }
 
   updateOverlays(now);
@@ -535,8 +571,9 @@ void loop() {
   g_frameUs = (g_frameUs == 0.0f) ? us : g_frameUs + (us - g_frameUs) * (1.0f / 16.0f);
   if (us > g_frameMaxUs) g_frameMaxUs = us;
 
-  // Backlight: dim after 60 s without a key while stopped.
-  if (!g_dimmed && !g_playing && now - g_lastKeyMs > kDimAfterMs) {
+  // Backlight: dim after 60 s without a key while stopped, never while the
+  // transport runs or its FX tails can still be heard.
+  if (!g_dimmed && !g_playing && now - g_lastKeyMs > kDimAfterMs && now - g_lastPlayingMs > kDimTailMs) {
     g_dimmed = true;
     disp::setBrightness(kBrightDim);
   } else if (g_dimmed && g_playing) {

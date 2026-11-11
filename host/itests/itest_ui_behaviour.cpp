@@ -197,7 +197,11 @@ static void testStepEditFields() {
   CHECK_EQ(S(6, 13).note, 36);
   tap(";");
   CHECK_EQ(S(6, 13).note, 37);
-  down("shift"); tap("."); up("shift");
+  down("ctl"); tap("."); up("ctl");          // CTRL+. = an octave down (SHIFT before the ghosting remap)
+  CHECK_EQ(S(6, 13).note, 25);
+  down("shift"); tap(";"); up("shift");      // SHIFT no longer changes ;/. in STEP EDIT
+  CHECK_EQ(S(6, 13).note, 26);
+  tap(".");
   CHECK_EQ(S(6, 13).note, 25);
   // copy the held step to step 2 (tap '2')
   tap("2");
@@ -414,12 +418,20 @@ static void testSweepsAndGhosting() {
   CHECK(P(6, 0) > cut + 20);
   down("["); R->run(30); up("["); up("]"); up("shift");
   CHECK_EQ(P(6, 0), cut);
-  // ghosting: a third non-modifier key is ignored
+  // ghosting (16.1): 1 + 2 + 3 closes a scan rectangle with ` (home). The two
+  // new downs can't be told apart and no gesture uses them: both are dropped.
+  // A third key that closes no rectangle works (no more "two keys at most" cut).
   R->start(false);
   down("1"); down("2"); down("3");
   R->run(50);
-  CHECK(on(6, 0) && on(6, 1) && !on(6, 2));
+  if (R->matrix.order != uih::GhostOrder::Off) CHECK(on(6, 0) && on(6, 1) && !on(6, 2));
   up("3"); up("2"); up("1");
+  CHECK_EQ(R->ui.heldKeys(), 0);
+  down("1"); down("2"); down("4");           // no rectangle: all three act (2 and 4 copy the held step 1)
+  R->run(50);
+  CHECK(on(6, 0) && on(6, 1) && on(6, 3));
+  up("4"); up("2"); up("1");
+  CHECK_EQ(R->ui.heldKeys(), 0);
 }
 
 static void testPagesErase() {
@@ -513,6 +525,9 @@ static void testAuditFixes() {
 int main() {
   static uih::Rig rig;
   R = &rig;
+  for (uih::GhostOrder order : {uih::GhostOrder::PhantomLast, uih::GhostOrder::PhantomFirst}) {
+  rig.matrix.order = order;
+  std::printf("-- key matrix model: %s\n", uih::ghostOrderName(order));
   testStepToggle();
   testHoldVsTap();
   testValueEditing();
@@ -528,6 +543,7 @@ int main() {
   testPagesErase();
   testRollAndViews();
   testAuditFixes();
+  }
   std::printf("itest_ui_behaviour: %d checks, %d failed\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

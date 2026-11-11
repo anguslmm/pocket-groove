@@ -216,7 +216,7 @@ The screen shows the 4x14 keyboard in the same layout as the device. Held keys t
 1. Press **every key once**, including `fn`, `Aa`/shift, `ctrl`, `opt`, `alt`, `del`, `Enter`, `space`, and the **G0** button. Check that each one lights **in the right place** and goes green when released. At the end the counter should say `seen 57/57`.
 2. Hold one key for a few seconds and release it: one down, one up, nothing else.
 3. **3-key chords** that form a rectangle in the controller's matrix: hold `a` + `s` + `d` and watch whether `f` lights up without being touched. Then `2` + `w` + `4` (watch `r`). A key lighting that you are not touching is **ghosting**. When the firmware sees four held keys forming a matrix rectangle it shows `rect ...` (red with `GHOST?` if the fourth key arrived in the same controller read as the third, which is the ghost signature).
-4. **4-key chords:** `a+s+d+f` (a rectangle), then `q+w+e+r` and `z+x+c+v` (not rectangles). Do all four light? Does the `max` counter reach 4? Try 5 or 6 keys at once too.
+4. **4-key chords:** `a+s+d+f` (a rectangle). Careful: `q+w+e+r` and `z+x+c+v` are **not** free of rectangles in the scan matrix (`q+w+e` closes one with `tab`, `z+x+c` one with `alt`; docs/ghosting-audit.md section 1), so expect `tab` / `alt` to light there. `q+w+r+y` and `z+v+n+,` close none: all four should light and nothing else. Does the `max` counter reach 4? Try 5 or 6 keys at once too.
 5. Fast typing / rolling over keys: no stuck yellow keys afterwards.
 6. `Fn` + `del` clears the key statistics if you want to start over.
 7. If keys only react sluggishly (about 20 ms late) or the page shows an orange `INT line DEAD` / `flaky` line, the keyboard's interrupt line is not reaching the ESP32 and the firmware is falling back to polling. The report's `[keys] INT line` row says `WORKS`, `NOT WORKING` or `UNRELIABLE`; we need that row.
@@ -262,7 +262,7 @@ Keys: `1` PolyBLEP saw, `2` TPT state-variable filter, `3` one-pole + tanh appro
 
 Automatically filled shortly after boot: chip, flash size, **PSRAM** (expected: none), heap, an allocation test of the instrument's expected memory footprint (70 + 55 + 32 + 28 KB blocks), battery, display frame time, an internal-flash file test (64 KB write/read/verify), SD detection + the same test, and an **I2C scan** of the internal bus (expected: codec `18`, keyboard `34`, IMU `68` or `69`).
 
-Keys: `a` allocation test, `l` internal flash test, `s` (re)mount SD and test it, `i` I2C scan, `b` cycle display brightness.
+Keys: `a` allocation test, `l` internal flash test, `s` (re)mount SD and test it, `i` I2C scan, `b` cycle display brightness (32, 80, 128, 200, 255; 255 is DC, the others PWM at 39 kHz; listen for noise on headphones at each level).
 
 1. Check every line is green. Note anything red.
 2. With an SD card: insert it, press `s`. Without a card: press `s` anyway and check that nothing hangs and audio keeps playing (have a tone on).

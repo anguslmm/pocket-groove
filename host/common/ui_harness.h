@@ -8,6 +8,7 @@
 #include <initializer_list>
 #include <vector>
 
+#include "common/ghost_matrix.h"
 #include "common/memfs.h"
 #include "pg/demo/demo.h"
 #include "pg/engine.h"
@@ -167,6 +168,9 @@ struct Rig {
   pg::Framebuffer* target = &fb;   // where frame() draws (the fuzz test points it at a guarded buffer)
   pg::Project* proj;
   pg::ui::UiEnv env{0, 80, true, 30};
+  // Every key() goes through the diode-less matrix model: the UI sees the
+  // phantoms the device would report. Tests set the order (or Off) per run.
+  GhostMatrix matrix;
   uint64_t samples = 0;
   uint32_t frames = 0;
   bool engineRuns = true;
@@ -193,6 +197,7 @@ struct Rig {
     }
     pg::ui::initPalette(fb);
     std::memset(fb.px, 0, sizeof(fb.px));
+    matrix.reset();
     ui.init(eng, *proj, &fs);
     resetClock();
     frame();
@@ -201,6 +206,7 @@ struct Rig {
   void boot() {
     inst.init(kSr, false);
     pg::ui::initPalette(fb);
+    matrix.reset();
     ui.init(eng, *proj, &fs);
     resetClock();
     ui.boot(now());
@@ -227,9 +233,22 @@ struct Rig {
     }
   }
 
+  // A physical press / release. Matrix keys go through the ghost model (one
+  // controller batch: same timestamp); G0 and junk ids go straight to the UI.
   void key(int k, bool down) {
-    pg::KeyEvent e{uint8_t(k), down, uint32_t(samples * 1000000 / uint64_t(kSr))};
-    ui.onKey(e, now());
+    const uint32_t t = uint32_t(samples * 1000000 / uint64_t(kSr));
+    if (k < 0 || k >= pg::kNumKeys) {
+      ui.onKey(pg::KeyEvent{uint8_t(k), down, t}, now());
+      return;
+    }
+    pg::KeyEvent ev[pg::kNumKeys];
+    const int n = matrix.change(k, down, t, ev);
+    for (int i = 0; i < n; ++i) ui.onKey(ev[i], now());
+  }
+  // Releases every physically held key (lowest id first).
+  void releaseAll() {
+    for (int k = 0; k < pg::kNumKeys; ++k)
+      if ((matrix.phys >> k) & 1) key(k, false);
   }
   void down(int k) { key(k, true); }
   void up(int k) { key(k, false); }
