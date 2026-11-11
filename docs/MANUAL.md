@@ -20,10 +20,11 @@ Headphones first: the jack is driven straight from the codec and the firmware ca
 12. [Song mode](#12-song-mode)
 13. [Copy, paste, undo](#13-copy-paste-undo)
 14. [Projects and files](#14-projects-and-files)
-15. [Device matters](#15-device-matters)
-16. [Known limitations of v1](#16-known-limitations-of-v1)
-17. [Troubleshooting](#17-troubleshooting)
-18. [Parameter reference](#18-parameter-reference)
+15. [Bouncing stems](#15-bouncing-stems)
+16. [Device matters](#16-device-matters)
+17. [Known limitations of v1](#17-known-limitations-of-v1)
+18. [Troubleshooting](#18-troubleshooting)
+19. [Parameter reference](#19-parameter-reference)
 
 ---
 
@@ -152,7 +153,7 @@ The key-map images are the designer's diagrams; the tables are the implemented b
 | `/` | Hold: key map of this view. Tap: explain mode. |
 | `space` | Play / stop. Play always starts at step 1. |
 | `fn` `shift` `ctrl` `opt` `alt` | Modifiers: hold one and press another key (4.9). |
-| G0 (side button) | Not used by the instrument; the firmware uses it for volume and diagnostics (chapter 15). |
+| G0 (side button) | Not used by the instrument; the firmware uses it for volume and diagnostics (chapter 16). |
 
 ### 4.2 STEP EDIT (a step held in GROOVE)
 
@@ -502,7 +503,7 @@ The bass drops about 16 dB at each kick and swells back over half a beat. To pus
 
 ## 9. Sound design recipes
 
-Values are as shown on screen; a raw value in brackets where the screen shows something else (`-`/`=` move the raw value). Anything not listed stays at its default (chapter 18). To start from the defaults, press `-` and `=` together on each parameter, or begin a new project with `ctrl`+`n`. Page numbers are SOUND pages (`9` again or `.` for the next).
+Values are as shown on screen; a raw value in brackets where the screen shows something else (`-`/`=` move the raw value). Anything not listed stays at its default (chapter 19). To start from the defaults, press `-` and `=` together on each parameter, or begin a new project with `ctrl`+`n`. Page numbers are SOUND pages (`9` again or `.` for the next).
 
 ### Bass
 
@@ -722,7 +723,76 @@ They load in loop mode on P1, with a song chain ready (about 2 minutes 10-20 s):
 
 ---
 
-## 15. Device matters
+## 15. Bouncing stems
+
+To mix a song properly in a DAW you want each part on its own track. The device can't record (it has one mono output and maybe no SD card), so the bounce happens on your computer: the song's project file comes off the device over the USB cable, and the desktop build of the same engine renders it, in stereo, to one WAV file per track plus the effect returns and the full mix. The sound engine on the computer is the device's own code, so the stems are the song as the instrument plays it, in stereo: PAN, the lead's WID and the delay's ping-pong are heard, while the device's headphone jack plays the mono sum of the same mix.
+
+**What you need**: this repository on a Mac or PC, PlatformIO (its Python comes with pyserial, which the transfer needs), CMake and a C++ compiler (on a Mac: `xcode-select --install` and `brew install cmake`). The device must run firmware with USB transfer (this version), be switched on and showing the instrument (not the boot menu), and no serial monitor may be open on its port.
+
+**Commands** (from the repository root, device on USB):
+
+| Command | Does |
+|---|---|
+| `tools/pg ls` | lists the projects on the device: name, INT (flash) or SD, tempo, size, and the autosaved `session` |
+| `tools/pg pull MYSONG` | copies MYSONG to `./projects/MYSONG.pgv` (`--sd` / `--int` if both have one, `--out FILE`) |
+| `tools/pg pull session` | copies the autosaved session (what was loaded at power-off, unsaved changes included) to `./projects/SESSION.pgv` |
+| `tools/pg bounce MYSONG` | pulls MYSONG, then renders its stems to `./bounces/MYSONG/` |
+| `tools/pg bounce session` | the same for the session |
+| `tools/pg bounce path/to/file.pgv` | renders a file already on disk (no device needed) |
+| `tools/pg push path/to/file.pgv` | copies a project to the device's internal flash (`--sd` for the card, `--name NAME` to rename it) |
+
+The first `bounce` builds the renderer (`build/host/bounce`, a minute or two); it rebuilds by itself when the source changes. `--port /dev/cu.usbmodem...` picks the port if auto-detection (Espressif USB ID `303A`) finds none or several.
+
+**Bounce options** (after `tools/pg bounce NAME`):
+
+| Option | Effect |
+|---|---|
+| `--pattern P --loops N` | render pattern P (1-16) N times (default 1) instead of the song |
+| `--tail S` | at most S seconds after the last step (default 8); cut 0.1 s after everything has faded below -100 dBFS |
+| `--bits 16`, `24`, `32f` | sample format, default `32f` (32-bit float) |
+| `--sr 44100` or `32000` | sample rate, default 44100 |
+| `--wet-stems` | each track stem carries its own delay and reverb; no separate return files |
+| `--no-duck` | stems rendered with the sidechain ducker off (to sidechain in the DAW); the mix file still pumps |
+| `--out DIR`, `--name NAME` | output folder (default `bounces/NAME`), file-name prefix |
+
+What gets rendered: the project's song chain from slot 1 to the first END, if the chain has anything in it (whether the project was saved in song mode or not); otherwise pattern 1 once; `--pattern` overrides. The render starts at the first downbeat. After the last step the sequencer simply stops triggering: notes play out their gates and releases, the delay and reverb ring out. Nothing is choked, unlike pressing stop.
+
+**The files** (here for a song MYSONG at 124 BPM):
+
+| File | Contents |
+|---|---|
+| `MYSONG_124bpm_01_kick.wav` ... `_06_perc.wav` | the six drum tracks |
+| `MYSONG_124bpm_07_bass.wav`, `_08_lead.wav` | bass and lead |
+| `MYSONG_124bpm_09_delay.wav` | the delay return (everything the tracks sent to it, after the FX duck) |
+| `MYSONG_124bpm_10_reverb.wav` | the reverb return |
+| `MYSONG_124bpm_mix.wav` | the full mix through the master section: exactly what the instrument plays, in stereo |
+| `MYSONG_124bpm_info.txt` | what was rendered, the song length in bars, where the song ends, the master settings and every file's peak |
+
+All files are stereo, start at the same sample and have the same length: drop them all at bar 1 in a DAW set to the song's tempo and they line up. A muted track gives a silent file, so the numbering never shifts. A re-bounce replaces the previous files of that project.
+
+**What a stem is.** A track's stem is the track after its own LVL, PAN, mute and sidechain ducking, exactly as it goes into the mix bus, before the master section. With the default dry stems, the 8 track stems + the delay return + the reverb return add up to the mix bus sample for sample (to float rounding: tested). The master section (20 Hz rumble filter, DJ filter, DRIV, master VOL and the limiter) is not in the stems: it is nonlinear, so it can't be split per track. It is in `mix.wav` only; `info.txt` lists its settings so you can rebuild it on the DAW's master bus.
+
+**Levels and headroom.** Stems keep the mix's own gain: no normalising, no limiting, no clipping. A full-scale `mix.wav` sample is 1.0 = 0 dBFS, and the stems are on the same scale before the master section, so with every stem fader at 0 dB the DAW's master bus carries exactly the instrument's mix bus. In the default 32-bit float files, values above 0 dBFS are kept (float has the headroom). In 24- and 16-bit files every stem and return is lowered by the same amount, in whole 3 dB steps, until the loudest one peaks at -1 dBFS or below; `info.txt` and the tool's output say by how much (usually 0 dB). The mix file is never changed. 16-bit files are dithered.
+
+**Wet stems** (`--wet-stems`) render the song once per track, each time with only that track feeding the delay and reverb, and add the result to the track's stem. The delay and reverb keep their audio in 16-bit memory and round inside their feedback loops, so the eight wet stems add up to the mix bus only to about -65 dB, not exactly. Fine for mixing; use the dry stems if you need the exact sum.
+
+**`--no-duck`**: the stems and returns come from a second render with the ducker source OFF (no track or FX ducking); everything else, including which probability steps fire, is identical. They add up to the mix bus of that unducked render, not to `mix.wav`.
+
+**The main limit.** The bounce renders the song *as programmed*: patterns, song chain, sound and mixer settings, parameter locks, and the mutes as saved in the project. **Live performance moves are not captured**: filter sweeps, mutes, rolls, pattern changes or knob moves played by hand while the song ran, and anything changed after the last save (pull `session` to get the latest state, including unsaved edits). Also: steps with a probability below 100 % fall the same way in every bounce (the random generator starts from a fixed seed), but not necessarily the way they fell when you played the song on the device.
+
+**Transfers.** `ls` and `pull` work while the sequencer plays. `push` writes flash, which interrupts the audio, so it is refused while playing (stop first, or add `--force`). A pushed file is checked byte for byte and installed the same way the device saves its own files (written to a temporary file, verified, then renamed over the old one), so a cut cable or a reset in the middle leaves the old project intact; the device drops a half transfer after 5 s. Pushing over a name replaces that file; the project open on the device is not changed (load the new one from PROJECT; if the list was open, leave and reopen it). Opening the port does not reset the device (the tool never toggles the reset lines). A project is 2-10 KB and takes a second or two.
+
+**If something goes wrong**
+
+- `Pocket Groove not found on USB`: switch the device on, use a data cable, or give `--port`.
+- `... is busy: close the serial monitor`: another program (`pio device monitor`, `screen`) has the port.
+- `the device did not answer`: the firmware is older than USB transfer, the device is in the boot menu, or a monitor is reading the port.
+- `pyserial is missing` / `no Python 3 with pyserial found`: install PlatformIO, or see the message for a virtualenv.
+- `no project X on the device (it has: ...)`: check the name with `tools/pg ls`.
+
+---
+
+## 16. Device matters
 
 The gestures in this chapter are handled by the device firmware (`src/app`), which was still being finished when this manual was written. They are documented from the code as it stood and **may change**.
 
@@ -759,16 +829,16 @@ Keys: `;`/`.` move, `enter` or `space` runs the item, `1`-`6` jump to an item an
 
 **Mono output.** The codec has a single output channel, so everything you hear is mono. PAN (MIX), WID (lead) and DWID (delay) have no effect on the device; they're kept for desktop renders. Stereo tricks such as wide detuned stabs are rendered as their mono sum, which is how they were voiced. Whether the jack feeds both earpieces depends on the hardware wiring (unverified).
 
-**Serial port.** Over USB at 115200 baud the firmware prints a status line every 5 s; type `r` for a full report, `h` for help, `m` during boot for the boot menu.
+**Serial port.** Over USB at 115200 baud the firmware prints a status line every 5 s; type `r` for a full report, `h` for help, `m` during boot for the boot menu. Lines starting with `~PGX` are the project transfer of `tools/pg` (chapter 15); close the monitor before using it.
 
 ---
 
-## 16. Known limitations of v1
+## 17. Known limitations of v1
 
 - Sound settings are per project, not per pattern. Use parameter locks for per-step changes.
 - One parameter lock per step. A track's locks can only be added from SOUND, MIX, FX (DUCK amounts) or STEP EDIT's LOCK field; there is no motion recording.
 - No MIDI, no sync to other gear, no audio input, no samples. Every sound is synthesised.
-- Mono output only (see chapter 15).
+- Mono output only (see chapter 16).
 - Saving to internal flash while playing causes an audible dropout; saves aren't deferred until stop.
 - The session is saved only while stopped, and switching off doesn't save (chapter 14).
 - One level of undo, for pattern data only.
@@ -778,13 +848,13 @@ Keys: `;`/`.` move, `enter` or `space` runs the item, `1`-`6` jump to an item an
 - The lead plays at most four notes at once.
 - The DJ filter, swing, ducker, delay and reverb are global and can't be locked.
 - The PROJECT list reads at most 24 files per storage (INT, SD); more files are on the card but not listed.
-- No WAV export or recording on the device (the desktop renderer can render projects: see the README).
+- No WAV export or recording on the device. Projects can be bounced to stems on a computer (chapter 15), as programmed: live moves are not recorded.
 - In the factory demos most bass steps carry a cutoff lock, so the bass CUT value and the `shift`+`[` `]` sweep have no audible effect on them.
 - The swing display moves in 1 % steps, so every other `tab`+`;` press changes the sound without changing the number.
 
 ---
 
-## 17. Troubleshooting
+## 18. Troubleshooting
 
 **No sound**
 
@@ -821,7 +891,7 @@ Keys: `;`/`.` move, `enter` or `space` runs the item, `1`-`6` jump to an item an
 
 ---
 
-## 18. Parameter reference
+## 19. Parameter reference
 
 Generated from the code by `host/tools/param_reference.cpp` (regenerate after a default changes: `build/docs/param_reference --splice docs/MANUAL.md`, run from the repository root). The descriptions come from `docs/manual/param_notes.txt`.
 

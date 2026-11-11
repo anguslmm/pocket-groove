@@ -294,18 +294,24 @@ int main(int argc, char** argv) {
                   plan.plays, plan.steps, plan.steps / 16.0);
   info += line;
   std::snprintf(line, sizeof(line),
-                "tempo     %d BPM (one bar = %.4f s), swing %d\nformat    %s stereo, %d Hz, %ld frames (%.3f s)\n"
+                "tempo     %d BPM (one bar = %.4f s), swing %d %%\nformat    %s stereo, %d Hz, %ld frames (%.3f s)\n"
                 "song end  frame %ld (%.3f s); the rest is release and FX tail\n",
-                plan.bpm, barSec, g_project.globals[pg::kGSwing], bitsName, int(sr), len, len / sr, endFrame,
+                plan.bpm, barSec, 50 + g_project.globals[pg::kGSwing] / 2, bitsName, int(sr), len, len / sr, endFrame,
                 endFrame / sr);
   info += line;
   std::snprintf(line, sizeof(line), "stems     %s, %s\nstem gain %+d dB (every stem and return; the mix is untouched)\n",
                 rq.wet ? "wet (each track with its own delay and reverb)" : "dry, plus delay and reverb returns",
                 rq.noDuck ? "sidechain ducking OFF" : "with sidechain ducking", gainDb);
   info += line;
+  std::snprintf(line, sizeof(line),
+                "master    volume %d (100 = unity), drive %d, DJ filter %d (64 = off), reso %d: in the mix only\n",
+                g_project.globals[pg::kGMasterVolume], g_project.globals[pg::kGMasterDrive],
+                g_project.globals[pg::kGMasterFilter], g_project.globals[pg::kGMasterReso]);
+  info += line;
   info += "\nAll files start at the first downbeat (bar 1) and have the same length.\n"
           "Stems are post track level/pan/mute/duck, pre master bus. At unity gain they sum\n"
-          "to the mix before the master section (DJ filter, drive, master volume, limiter).\n\n";
+          "to the mix before the master section (20 Hz rumble filter, DJ filter, drive,\n"
+          "master volume, limiter), which is only in the mix file.\n\n";
   for (size_t k = 0; k < nOut; ++k) {
     const double pk = outs[k].mix ? peak[k] : peak[k] * double(gain);
     const std::string base = paths[k].substr(outDir.size() + 1);

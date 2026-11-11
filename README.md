@@ -25,7 +25,7 @@ Build and flash it over USB-C:
 pio run -e cardputer-adv -t upload
 ```
 
-Serial monitor (115200 baud; `r` prints a full report, `h` help, `m` during boot opens the boot menu):
+Serial monitor (115200 baud; `r` prints a full report, `h` help, `m` during boot opens the boot menu; close it before using `tools/pg`):
 
 ```bash
 pio device monitor -e cardputer-adv
@@ -91,13 +91,29 @@ build/host/render_demo --demo 1 --pattern 0 --loops 2 --mono --duck-off
 python3 tools/ears.py --compare build/renders/demo/demo1_p1_mono.wav build/renders/demo/demo1_p1_mono_duckoff.wav
 ```
 
-`render_project --project FILE.pgv --mono` renders a saved project (copy it off the SD card), and `ui_shot` drives the real UI from a key script and writes screenshots:
+`render_project --project FILE.pgv --mono` renders a saved project, and `ui_shot` drives the real UI from a key script and writes screenshots:
 
 ```bash
 build/host/ui_shot host/ui_scripts/groove.txt build/ui/shots
 ```
 
 The manual's screenshots come from `docs/manual/shots.txt`, its parameter reference from `build/host/param_reference --splice docs/MANUAL.md` (run from the repository root).
+
+## Bouncing stems and moving projects over USB
+
+`tools/pg` copies projects to and from the device over the USB cable and renders a song to stems for a DAW: one stereo WAV per track, the delay and reverb returns, and the full mix, all the same length from bar 1. It needs Python 3 with pyserial (the launcher uses PlatformIO's Python, `~/.platformio/penv/bin/python`, which has it) and CMake for the renderer. Run it from the repository root with the device plugged in:
+
+```bash
+tools/pg ls                       # projects on the device (flash and SD, plus the autosaved session)
+tools/pg pull MYSONG              # copy MYSONG to ./projects/MYSONG.pgv
+tools/pg bounce MYSONG            # pull, then render stems to ./bounces/MYSONG/
+tools/pg bounce path/to/file.pgv  # render a file already on disk
+tools/pg push path/to/file.pgv    # copy a project to the device (refused while playing unless --force)
+```
+
+Stems are taken after each track's level, pan, mute and sidechain duck, before the master bus; at unity gain the eight stems plus the two returns sum exactly to the pre-master mix (`itest_bounce` checks it). They are not normalised or limited; the default format is 32-bit float at 44.1 kHz (`--bits 16|24|32f`, `--sr`, `--wet-stems`, `--no-duck`, `--pattern P --loops N`, `--tail S`). The bounce renders the song as programmed and saved: live moves (filter sweeps, mutes played by hand) are not captured. Player-facing details are in the manual, chapter 15.
+
+How it fits together: `build/host/bounce` (`host/tools/bounce.cpp`, render core in `host/common/bounce.h`) renders in one pass through a host-only stem tap in the engine (`lib/pg/src/pg/engine/stem_tap.h`, compiled only when `PG_STEM_TAP` is defined, which the host CMake does and the firmware does not, so the device build is unchanged; `itest_golden` pins the int16 output). The transfer protocol is `lib/pg/src/pg/io/xfer.h` (lines `~PGX <id> <body> <crc32>` on the same serial port as the log, chunked, acknowledged, with timeouts); `test_io_xfer` tests it on an in-memory filesystem and `test_pg_client` runs the real client `tools/pg.py` against the same code in `host/tools/xfer_sim` on a pseudo-terminal, with faults injected.
 
 ## Source tree
 
@@ -119,7 +135,8 @@ src/app/                the instrument firmware: tasks, boot menu, volume, diagn
 src/smoke/              hardware smoke test (env:smoke)
 host/                   desktop build: tests/ (unit), itests/ (system), tools/ (renderers, ui_shot,
                         param_reference, bench), common/ (UI harness, in-memory FS, WAV), ui_scripts/
-tools/                  ears.py (WAV analysis), gen/ (lookup-table generator), ux_mock/ (UX mockups)
+tools/                  pg + pg.py (USB transfer and stem bounce), ears.py (WAV analysis), gen/ (lookup-table
+                        generator), ux_mock/ (UX mockups)
 docs/                   MANUAL, UX spec, ARCHITECTURE, BRINGUP, hardware-notes; ux/ mockups; manual/ images
 ```
 

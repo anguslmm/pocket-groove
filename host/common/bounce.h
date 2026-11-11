@@ -177,6 +177,7 @@ inline bool renderPass(pg::Instrument& inst, const pg::Project& project, const O
     if (end >= 0 && f >= end + tailFrames) break;
     if (f >= hardCap) {
       engine_detail::setStemTap(nullptr);
+      engine_detail::setEndAfterPatternPlays(-1);
       if (err) *err = "the sequencer did not reach the end of the song";
       return false;
     }
