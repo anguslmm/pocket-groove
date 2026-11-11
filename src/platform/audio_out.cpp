@@ -21,12 +21,20 @@
 
 #include <driver/i2s_std.h>
 #include <esp_cpu.h>
+#include <esp_memory_utils.h>
 #include <esp_rom_sys.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 #include <cstdio>
 #include <cstring>
+
+// Weak references to two hot-path functions of lib/pg by their mangled names
+// (pg::Engine::process, pg::lead::LeadVoice::render): only their addresses
+// are taken, for the placement line. Weak, because env:smoke links no pg.
+extern "C" void _ZN2pg6Engine7processEPsi() __attribute__((weak));
+extern "C" void _ZN2pg4lead9LeadVoice6renderEPfS2_i() __attribute__((weak));
+extern "C" int _iram_text_start, _iram_text_end;   // ESP-IDF sections.ld
 
 namespace plat {
 namespace audio {
@@ -371,6 +379,32 @@ void stopM5() {
   M5.Speaker.end();
 }
 
+// Which build variant is running and where the hot path really lives, read
+// from the running image (not from the build flag): the address of
+// pg::Engine::process and pg::lead::LeadVoice::render, the IRAM text size and
+// the heap. Printed once per begin(), so the boot log answers "which image is
+// this" without the app's help.
+void printPlacement() {
+  const uintptr_t proc = reinterpret_cast<uintptr_t>(&_ZN2pg6Engine7processEPsi);
+  const uintptr_t lead = reinterpret_cast<uintptr_t>(&_ZN2pg4lead9LeadVoice6renderEPfS2_i);
+  const bool inRam = esp_ptr_in_iram(reinterpret_cast<void*>(proc)) && esp_ptr_in_iram(reinterpret_cast<void*>(lead));
+#ifdef PG_AUDIO_RAM
+  const int tier = PG_AUDIO_RAM;
+#else
+  const int tier = 0;
+#endif
+  char buf[220];
+  snprintf(buf, sizeof(buf),
+           "[audio] hot path: %s (build PG_AUDIO_RAM=%d; Engine::process @0x%08lx, LeadVoice::render @0x%08lx), "
+           "IRAM text %lu B, heap free %lu min-ever %lu\n",
+           inRam ? "IRAM" : "FLASH (cached)", tier, static_cast<unsigned long>(proc), static_cast<unsigned long>(lead),
+           static_cast<unsigned long>(reinterpret_cast<uintptr_t>(&_iram_text_end) -
+                                      reinterpret_cast<uintptr_t>(&_iram_text_start)),
+           static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned long>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+  Serial.print(buf);
+}
+
 }  // namespace
 
 // ---- public API ------------------------------------------------------------------
@@ -400,6 +434,7 @@ bool begin(const Config& cfgIn, RenderFn render, void* user) {
   // Fade in only now that real samples flow (a signal may already be playing
   // across a rate/backend switch).
   if (s.codecOk) rampVolume(0x00, s.cfg.volumeReg);
+  printPlacement();
   return true;
 }
 
