@@ -70,23 +70,25 @@ its own number as a pre-release and then refuses the platform, with:
     PlatformIO Core v6.2.0-post.1 and depends on PlatformIO Core >=6.2.0.
 
 Fix: pin the Core in that environment to 6.2.0. Do not run `pio upgrade`
-afterwards; it brings the problem back. In VS Code open the PlatformIO sidebar,
-then Quick Access, Miscellaneous, "PlatformIO Core CLI", and run:
+afterwards; it brings the problem back. Call that environment's Python by its
+full path (a plain `python` or `pip` may be the system one; on a Mac with
+Homebrew it refuses with `externally-managed-environment`). On Windows the path
+is `%USERPROFILE%\.platformio\penv\Scripts\python.exe`.
 
 ```bash
-python -m pip install "pioarduino==6.2.0"
+~/.platformio/penv/bin/python -m pip install "pioarduino==6.2.0"
 ```
 
 If that reports `No module named pip`, use the bundled `uv` instead:
 
 ```bash
-uv pip install --python ~/.platformio/penv "pioarduino==6.2.0"
+~/.platformio/penv/bin/uv pip install --python ~/.platformio/penv/bin/python "pioarduino==6.2.0"
 ```
 
 Check it took:
 
 ```bash
-pio --version
+~/.platformio/penv/bin/pio --version
 ```
 
 It should print `6.2.0`. Then build again; the platform is re-downloaded if the
@@ -163,7 +165,13 @@ If uploads start but drop out half-way, add `upload_speed = 115200` under `[env:
 With esptool (any OS, Python 3):
 
 ```bash
-pip install esptool
+brew install esptool
+```
+
+That is for macOS with Homebrew. Elsewhere:
+
+```bash
+pipx install esptool
 ```
 
 ```bash
