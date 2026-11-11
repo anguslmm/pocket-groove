@@ -10,6 +10,10 @@ Stem bounce + USB project transfer (tools/pg, docs/MANUAL.md chapter 15): host-v
 device protocol code on a pty); the firmware side (src/app glue, real USB-Serial/JTAG timing,
 DTR/RTS not resetting the board, LittleFS/FAT behaviour) has not run on hardware.
 
+USB audio (stereo input over USB, UAC1 + CDC): feasible with the prebuilt TinyUSB; spike
+env:usb-audio-spike (src/usbspike, build/firmware/pocket-groove-usbspike.bin) built and
+checked offline only, waiting for the hardware test in docs/usb-audio.md section 8.
+
 Known follow-ups:
 - pg::io: FAT (SD) save-replace has a power-cut window inside FatFs rename; make it safe.
 - Per-pattern sound settings and a second p-lock per step (data-model change, v0.2).
