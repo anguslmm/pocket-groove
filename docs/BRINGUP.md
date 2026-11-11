@@ -134,10 +134,13 @@ pio device monitor -e smoke
 
 (`monitor_speed = 115200` comes from `platformio.ini`. Quit with `Ctrl+C`. The native USB port disappears for a moment on every reset, and the monitor reconnects by itself.)
 
-To capture everything to a file as well (macOS/Linux):
+To capture everything to a file as well, use the monitor's logging filter (piping
+the monitor into `tee` is refused: it needs an interactive terminal). The log is
+written as `platformio-device-monitor-<date>.log` in the project folder or its
+`logs/` subfolder:
 
 ```bash
-pio device monitor -e smoke | tee smoke-log.txt
+pio device monitor -e smoke -f log2file
 ```
 
 ### If the upload cannot connect: download mode
