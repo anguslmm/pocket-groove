@@ -1,0 +1,52 @@
+# PROJECT view, name entry, confirm (docs/ux/project-load.png, project-save.png, confirm.png)
+demo
+fsave int ACIDJAM 126
+fsave int WAREHOUS 130
+fsave sd BASSHAUS 124
+fsave sd LIVESET1 122
+fsave sd SKETCH07 118
+# open INT ACIDJAM through the UI, then change the tempo back to 124 (unsaved)
+tap \
+tap .
+tap ent
+wait 1600
+down tab
+tap -
+tap -
+up tab
+tap \
+tap .
+wait 100
+shot project-load
+
+tap \
+tap ent
+tap del
+tap del
+tap del
+tap del
+tap del
+tap del
+tap del
+tap del
+tap n
+tap i
+tap g
+tap h
+tap t
+tap b
+tap u
+tap s
+tap tab
+wait 100
+shot project-save
+tap `
+
+tap \
+tap .
+tap .
+tap .
+wait 50
+tap ent
+wait 100
+shot confirm

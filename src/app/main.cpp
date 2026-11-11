@@ -1,18 +1,15 @@
-// Pocket Groove -- the instrument (env:cardputer-adv). Not built yet: the
-// portable engine/UI in lib/pg is still being written. Until then this only
-// proves the platform layer boots and says so on screen and over serial.
-// Hardware bring-up and measurements: env:smoke (src/smoke, docs/BRINGUP.md).
 #include "../platform/display.h"
 #include "../platform/system.h"
-
+#include "../platform/storage.h"
+#include "pg/instrument/instrument.h"
+#include "pg/ui/ui.h"
+static pg::Instrument g_inst;
+static pg::ui::Ui g_ui;
+static pg::Framebuffer g_fb;
 void setup() {
-  const plat::sys::BootInfo boot = plat::sys::begin(115200);
-  plat::display::begin();
-  plat::display::directText(8, 50, "Pocket Groove: app not built yet", 0xFFFF);
-  plat::display::directText(8, 70, "flash env:smoke for the hardware test", 0x07E0);
-  plat::sys::serialWrite("Pocket Groove: app not built yet (board: ");
-  plat::sys::serialWrite(boot.boardName);
-  plat::sys::serialWrite(")\n");
+  plat::sys::begin(115200);
+  g_inst.init(44100.0f, true);
+  g_ui.init(g_inst.engine(), g_inst.project(), &plat::storage::fs());
+  g_ui.boot(0);
 }
-
-void loop() { plat::sys::delayMs(100); }
+void loop() { int16_t b[256]; g_inst.process(b, 128); pg::ui::UiEnv e{0,0,false,0}; g_ui.update(e, g_fb); }

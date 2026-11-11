@@ -1,0 +1,69 @@
+# SONG view (docs/ux/song.png): chain P01x4 P02x4 P03x2 P05x2 P03x4 P09x8
+demo
+# patterns 2, 3, 5 and 9 in use: copy P01 there while playing, then cancel the queue
+tap spc
+until 0 1
+down opt
+down shift
+tap 2
+up shift
+tap 1
+down shift
+tap 3
+up shift
+tap 1
+down shift
+tap 5
+up shift
+tap 1
+down shift
+tap q
+up shift
+tap 1
+up opt
+tap spc
+wait 200
+tap p
+tap 1
+tap ;
+tap =
+tap =
+tap =
+tap .
+tap 2
+tap ;
+tap =
+tap =
+tap =
+tap .
+tap 3
+tap ;
+tap =
+tap .
+tap 5
+tap ;
+tap =
+tap .
+tap 3
+tap ;
+tap =
+tap =
+tap =
+tap .
+tap q
+tap ;
+down shift
+tap =
+up shift
+tap -
+# chain on from slot 2, play, cursor on slot 4
+tap ;
+tap ;
+tap ;
+tap ;
+tap ent
+tap spc
+tap .
+tap .
+until 0 6
+shot song

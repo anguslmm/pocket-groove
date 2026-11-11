@@ -5,19 +5,21 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <initializer_list>
 #include <vector>
 
-#include "pg/bass/bass.h"
-#include "pg/drums/drums.h"
+#include "common/memfs.h"
+#include "pg/demo/demo.h"
 #include "pg/engine.h"
-#include "pg/lead/lead.h"
+#include "pg/instrument/instrument.h"
 #include "pg/ui/gfx.h"
 #include "pg/ui/keys.h"
 #include "pg/ui/ui.h"
 
 namespace uih {
 
-// ---- the factory demo pattern P01 as the mockups draw it (screens.demo_pattern) ----
+// ---- the mockups' project (screens.demo_pattern + DEMO_SOUND/GLOBALS), used by the
+// screenshot scripts and the tests; independent of the ROM demos, which a composer owns ----
 inline void stepOn(pg::Step& s, int vel, int note = 60, bool acc = false, bool slide = false, int prob = 100,
                    int ratch = 1, int chord = 0, int gate = 2) {
   s = pg::kDefaultStep;
@@ -30,10 +32,10 @@ inline void stepOn(pg::Step& s, int vel, int note = 60, bool acc = false, bool s
   s.gate = uint8_t(gate);
 }
 
-inline void buildDemo(pg::Project& p, pg::Engine& eng) {
+inline void buildMockup(pg::Project& p, const pg::Engine& eng) {
   using namespace pg;
   eng.initProject(p);
-  std::memcpy(p.name, "DEMO", 5);
+  std::memcpy(p.name, "ACIDJAM", 8);
   Pattern& P = p.patterns[0];
   auto st = [&](int t, int i) -> Step& { return P.tracks[t].steps[i]; };
   for (int i : {0, 4, 8, 12}) stepOn(st(0, i), 110, 60, i == 0);
@@ -64,12 +66,10 @@ inline void buildDemo(pg::Project& p, pg::Engine& eng) {
   stepOn(st(7, 2), 100, 57, false, false, 100, 1, kChordMin7, 3);
   stepOn(st(7, 7), 100, 57, false, false, 100, 1, kChordMin7, 2);
   stepOn(st(7, 10), 100, 53, false, false, 100, 1, kChordMaj7, 6);
-  // Sound (UX 14 / screens.DEMO_SOUND)
   uint8_t* b = p.tracks[kTrackBass].params;
   b[0] = 58; b[1] = 96; b[2] = 84; b[3] = 40; b[4] = 100; b[5] = 52; b[8] = 0; b[9] = 70; b[13] = 24;
   uint8_t* l = p.tracks[kTrackLead].params;
   l[0] = 70; l[1] = 24; l[4] = 3; l[6] = 64; l[11] = 60;
-  // Globals (screens.DEMO_GLOBALS, except the DJ filter which the demo leaves off)
   p.globals[kGTempo] = 124;
   p.globals[kGSwing] = 8;
   p.globals[kGDuckDepth] = 100;
@@ -154,21 +154,15 @@ inline bool writeFramebufferPng(const char* path, const pg::Framebuffer& fb, int
   return writePng(path, rgb.data(), W, H);
 }
 
-// ---- the rig ----
+// ---- the rig: pg::Instrument + Ui + in-memory file system + simulated clock ----
 struct Rig {
   static constexpr float kSr = 44100.0f;
   static constexpr int kBlock = 64;
 
-  pg::drums::KickVoice kick;
-  pg::drums::SnareVoice snare;
-  pg::drums::ClapVoice clap;
-  pg::drums::HatVoice chh{false};
-  pg::drums::HatVoice ohh{true};
-  pg::drums::PercVoice perc;
-  pg::bass::BassVoice bass;
-  pg::lead::LeadVoice lead;
-  pg::Engine eng;
+  pg::Instrument& inst;
+  pg::Engine& eng;
   pg::ui::Ui ui;
+  pgtest::MemFs fs;
   pg::Framebuffer fb;
   pg::Framebuffer* target = &fb;   // where frame() draws (the fuzz test points it at a guarded buffer)
   pg::Project* proj;
@@ -178,27 +172,38 @@ struct Rig {
   bool engineRuns = true;
   int16_t audio[kBlock * 2];
 
-  Rig() {
-    static pg::Project project;   // 72 KB: keep it off the stack
-    proj = &project;
-    pg::Voice* v[8] = {&kick, &snare, &clap, &chh, &ohh, &perc, &bass, &lead};
-    for (pg::Voice* x : v) x->init(kSr);
+  static pg::Instrument& instrument() {
+    static pg::Instrument i;   // ~70 KB: static, never on the stack
+    return i;
   }
+  Rig() : inst(instrument()), eng(instrument().engine()), proj(&instrument().project()) {}
 
-  void start(bool demo) {
-    for (int t = 0; t < 8; ++t) eng.setVoice(t, nullptr);
-    eng.init(kSr, proj);
-    pg::Voice* v[8] = {&kick, &snare, &clap, &chh, &ohh, &perc, &bass, &lead};
-    for (int t = 0; t < 8; ++t) eng.setVoice(t, v[t]);
-    if (demo) buildDemo(*proj, eng);
-    else eng.initProject(*proj);
-    eng.init(kSr, proj);
-    for (int t = 0; t < 8; ++t) eng.setVoice(t, v[t]);
+  void resetClock() { samples = 0; frames = 0; }
+
+  // Fresh instrument; demo = the mockups' project (buildMockup), else an empty project.
+  // The file system is wiped unless keepFs. No boot sequence (see boot()).
+  void start(bool demo, bool keepFs = false) {
+    if (!keepFs) { fs = pgtest::MemFs(); }
+    inst.init(kSr, false);
+    if (demo) {
+      eng.suspend();
+      buildMockup(*proj, eng);
+      eng.sanitizeProject(*proj);
+      eng.resume();
+    }
     pg::ui::initPalette(fb);
     std::memset(fb.px, 0, sizeof(fb.px));
-    ui.init(eng, *proj, nullptr);
-    samples = 0;
-    frames = 0;
+    ui.init(eng, *proj, &fs);
+    resetClock();
+    frame();
+  }
+  // Power-on with the current file system contents: what the firmware does.
+  void boot() {
+    inst.init(kSr, false);
+    pg::ui::initPalette(fb);
+    ui.init(eng, *proj, &fs);
+    resetClock();
+    ui.boot(now());
     frame();
   }
 
@@ -213,7 +218,7 @@ struct Rig {
   void run(uint32_t ms) {
     const uint64_t end = samples + uint64_t(ms) * uint64_t(kSr) / 1000;
     while (samples < end) {
-      if (engineRuns) eng.process(audio, kBlock);
+      if (engineRuns) inst.process(audio, kBlock);
       samples += kBlock;
       if (uint64_t(now()) * 30 >= uint64_t(frames + 1) * 1000) {
         ++frames;

@@ -56,6 +56,16 @@ foreach(src ${tool_srcs})
   target_compile_options(${name} PRIVATE ${PG_FLAGS})
 endforeach()
 
+# Lookup-table generator (tools/gen/gen_tables.cpp): rewrites the generated
+# *_tables_data.cpp files under lib/pg/src/pg from their reference formulas.
+# Built, never run by the build:  build/host/gen_tables lib/pg/src
+# It compiles the formulas itself (not the component libs, which contain the
+# generated data), so it builds even when that data is missing or stale.
+add_executable(gen_tables ${PG_ROOT}/tools/gen/gen_tables.cpp
+               ${PG_SRC}/pg/lead/lead_tables_ref.cpp ${PG_SRC}/pg/bass/bass_tables_ref.cpp)
+target_include_directories(gen_tables PRIVATE ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(gen_tables PRIVATE ${PG_FLAGS})
+
 file(GLOB itest_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/itests/itest_*.cpp)
 foreach(src ${itest_srcs})
   get_filename_component(name ${src} NAME_WE)

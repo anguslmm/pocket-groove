@@ -4,6 +4,7 @@ down fn
 tap h
 up fn
 tap 0
+tap z
 tap spc
 until 6 6
 shot mix
@@ -14,6 +15,7 @@ param 3 25 76
 param 4 25 50
 param 5 25 84
 tap 0
+tap z
 tap b
 tap spc
 until 6 6
@@ -21,6 +23,7 @@ shot mix-pan
 
 demo
 tap 0
+tap z
 tap x
 tap spc
 until 6 6

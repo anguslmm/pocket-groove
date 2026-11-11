@@ -188,6 +188,7 @@ uint32_t Ui::statusSignature() const {
   h = fnv(h, uint32_t(focus_.global) | uint32_t(focus_.track) << 8 | uint32_t(focus_.index) << 16);
   h = fnv(h, uint32_t(focus_.global ? globalValue(focus_.index) : paramValue(focus_.track, focus_.index)));
   h = fnv(h, serial_);
+  h = fnv(h, uint32_t(dirty_) | uint32_t(songCursor_) << 1);
   const int n = rnd((meter_ > 1.0f ? 1.0f : meter_) * 34.0f);
   h = fnv(h, uint32_t(n) | uint32_t(clipUntil_ != 0) << 8);
   h = fnv(h, uint32_t(rnd((1.0f - st_.duckGain) * 9.0f)));
@@ -219,8 +220,27 @@ void Ui::drawStatus(Framebuffer& fb) {
   cat3(buf, globalValue(kGTempo));
   g.text(64, 2, buf, TEXT);
   g.rect(84, 4, 3, 3, before(now_, beatUntil_) ? WHITE : LINE);
-  // Focus chip x 92..165
-  {
+  // Focus chip x 92..165 (SONG: the cursor slot; PROJECT: the project name)
+  if (view_ == View::Song && !helpVisible()) {
+    const int len = songLength();
+    char t[12];
+    catInt(cat(t, "SLOT "), songCursor_ + 1);
+    const int xx = g.chip(92, 1, t, WHITE);
+    if (songCursor_ < len) {
+      const SongSlot s = songSlot(songCursor_);
+      catP2(cat(t, "P"), s.pattern + 1);
+      g.text(xx + 3, 2, t, TEXT);
+      catInt(cat(t, "x"), s.repeats);
+      g.textR(165, 2, t, AMBER);
+    } else {
+      g.text(xx + 3, 2, "END", DIM);
+    }
+  } else if (view_ == View::Project) {
+    char t[12];
+    char* o = cat(t, curName_[0] ? curName_ : "NEW");
+    if (dirty_) cat(o, "*");
+    g.text(92, 2, t, TEXT);
+  } else {
     const ParamInfo* info = infoFor(focus_);
     const char* tag = focus_.global ? "FX" : kTrackNames[focus_.track & 7];
     const uint8_t col = focus_.global ? uint8_t(CYAN) : tc(focus_.track & 7);
@@ -862,15 +882,6 @@ void Ui::drawFxDuck(Framebuffer& fb) {
   g.text(x, 127, " EDIT THAT TRACK'S DUCK AMOUNT", DIM);
 }
 
-void Ui::drawPlaceholder(Framebuffer& fb) {
-  Gfx g(fb);
-  const char* name = view_ == View::Song ? "SONG" : "PROJECT";
-  const int x = g.chip(4, 14, name, TEXT);
-  g.text(x + 6, 15, "NOT IN THIS BUILD YET", DIM);
-  g.textC(120, 60, "COMING IN PHASE 2", LINE);
-  const int xx = g.text(4, 127, "`", TEXT);
-  g.text(xx, 127, " HOME", DIM);
-}
 
 // ============================================================== overlays ====
 
@@ -893,13 +904,7 @@ void Ui::drawOverlay(Framebuffer& fb) {
       g.textR(235, 77, "+SHIFT = COPY TO", DIM);
       for (int i = 0; i < 16; ++i) {
         const int px = padX(i), py = padY(i);
-        bool used = false;
-        const Pattern& P = proj_->patterns[i];
-        for (int t = 0; t < kNumTracks && !used; ++t) {
-          const int len = P.tracks[t].length > kMaxSteps ? kMaxSteps : P.tracks[t].length;
-          for (int s = 0; s < len; ++s)
-            if (P.tracks[t].steps[s].flags & kStepOn) { used = true; break; }
-        }
+        const bool used = patternUsed(i);
         uint8_t ink;
         if (i == pat_) { g.rrect(px, py, PAD_W, PAD_H, GREEN); ink = BG; }
         else if (used) { g.rrect(px, py, PAD_W, PAD_H, RAISED); ink = TEXT; }
@@ -1054,7 +1059,9 @@ uint32_t Ui::bodySignature() const {
     h = fnv(h, (now_ - lastTrigMs_[0]) / 8);
   }
   for (int t = 0; t < kNumTracks; ++t) h = fnv(h, uint32_t(muted(t)) | uint32_t(trackLen(t)) << 1);
-  h = fnv(h, uint32_t(erasing_));
+  h = fnv(h, uint32_t(erasing_) | uint32_t(helpVisible()) << 1 | uint32_t(dirty_) << 2 | uint32_t(writeBusy_) << 3);
+  if (view_ == View::Song) h = fnv(h, uint32_t(st_.songSlot) | uint32_t(st_.songRepeat) << 8 | uint32_t(st_.masterStep) << 16 | uint32_t(proj_->songMode) << 24);
+  if (view_ == View::Project) h = fnv(h, uint32_t(env_.sdPresent));
   return h;
 }
 
@@ -1070,11 +1077,15 @@ void Ui::drawAll(Framebuffer& fb) {
     case View::Sound: drawSound(fb); break;
     case View::Mix: drawMix(fb); break;
     case View::Fx: drawFx(fb); break;
-    default: drawPlaceholder(fb); break;
+    case View::Song: drawSong(fb); break;
+    case View::Project: drawProject(fb); break;
   }
+  if (banner_ && view_ == View::Groove) drawBanner(fb);
   if (overlay_ != Overlay::None) drawOverlay(fb);
+  if (dialog_ != Dialog::None) drawDialog(fb);
   if (popUntil_) drawPopup(fb);
   if (toastUntil_) drawToast(fb);
+  if (helpVisible()) drawHelp(fb);   // full screen, over everything
 }
 
 }  // namespace ui

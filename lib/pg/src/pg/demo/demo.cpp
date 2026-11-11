@@ -1,6 +1,7 @@
 #include "demo.h"
 
 #include <cstring>
+#include <initializer_list>
 
 namespace pg::demo {
 
@@ -56,6 +57,8 @@ void groove(Pattern& P) {
 int count() { return 1; }
 
 const char* name(int i) { return i == 0 ? "ACIDJAM" : nullptr; }
+
+int tempo(int i) { return i == 0 ? 124 : 0; }
 
 void build(const Engine& engine, Project& p, int i) {
   engine.initProject(p);

@@ -57,6 +57,8 @@ enum Wave : uint8_t { kWaveSaw = 0, kWavePulse, kWaveTri, kWaveSuper, kWaveFm1, 
 enum Osc2Wave : uint8_t { kOsc2Saw = 0, kOsc2Pulse, kOsc2Tri, kOsc2Sine, kNumOsc2Waves };
 enum FilterType : uint8_t { kFilterLP = 0, kFilterBP, kFilterHP, kNumFilterTypes };
 
+struct Tables;   // lead_tables.h
+
 constexpr int kIntervalCentre = 24;  // kPInterval value for 0 semitones (range +-24)
 constexpr int kMaxChordNotes  = 4;
 
@@ -152,6 +154,7 @@ class LeadVoice final : public Voice {
   void setPan(V& v, uint8_t chordIdx, uint8_t chordSize, uint8_t slot);
 
   bool ready_ = false;
+  const Tables* tab_ = nullptr;   // constant wavetable set for fs_ (flash), set by init()
   float fs_ = kDefaultSampleRate;
   float smooth_ = 0.07f, gainK_ = 0.0f;
   float quantumRate_ = kDefaultSampleRate / float(kQuantum);

@@ -7,7 +7,13 @@
 // harmonic count). That halves the oscillator cost, which is what pays for a
 // 5-saw "super" stack and two stereo filters per voice.
 //
-// Storage: one static int16 pool, ~24 KB of .bss, filled by buildTables().
+// Storage: constant data in flash (.rodata), generated ahead of time by
+// tools/gen/gen_tables.cpp into lead_tables_data.cpp: one table set per
+// supported engine rate (44.1 and 32 kHz; the saw/triangle harmonic counts
+// depend on Nyquist, the organ and sine tables are shared). No RAM at all.
+// Regenerate after changing the formula in lead_tables_ref.cpp:
+//   cmake --build build/host --target gen_tables && build/host/gen_tables lib/pg/src
+// host/tests/test_lead_tables.cpp fails while the data and formula disagree.
 #pragma once
 #include <cstdint>
 
@@ -37,8 +43,20 @@ struct Tables {
   float sampleRate;
 };
 
-const Tables& tables();
-void buildTables(float sampleRate);  // not real-time (about 1M multiply-adds)
+// The constant table set for an engine sample rate: the 44.1 kHz set at
+// fs >= 44100, otherwise the 32 kHz set (band-limited for 32 kHz, so it never
+// aliases at 32..44.1 kHz; below 32 kHz the top mips would). Cheap, no state.
+const Tables& tablesFor(float sampleRate);
+
+// Generated data (lead_tables_data.cpp).
+extern const Tables kTables44k;
+extern const Tables kTables32k;
+
+// ---- generator / test only ----
+// The formula: fills `pool` (kRefPoolSize int16) and `out` for sampleRate.
+// Not real-time (about 1M multiply-adds); the voice never calls it.
+constexpr int kRefPoolSize = 12014;
+void buildTablesReference(float sampleRate, int16_t* pool, Tables& out);
 
 inline int bandForPitch(float pitch) {
   int b = int((pitch - kBandBasePitch) * (1.0f / 6.0f));

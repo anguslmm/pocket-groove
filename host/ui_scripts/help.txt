@@ -1,0 +1,11 @@
+# HELP (docs/ux/help.png, help-explain.png)
+demo
+down /
+wait 500
+shot help
+up /
+tap /
+tap m
+wait 50
+shot help-explain
+tap /

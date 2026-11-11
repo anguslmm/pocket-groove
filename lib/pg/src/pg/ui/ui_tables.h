@@ -24,6 +24,9 @@ inline constexpr char kPadKeys[] = "ASDFGHJK";
 inline constexpr char kNoteKeys[] = "ZXCVBNM,";
 inline constexpr char kStepKeys[] = "12345678QWERTYUI";
 
+// Confirm dialog actions
+enum : uint8_t { kConfirmLoad = 1, kConfirmOverwrite, kConfirmDelete, kConfirmNew, kConfirmOverwriteName };
+
 inline int fxTabOfGlobal(int g) {
   for (int t = 0; t < kNumFxTabs; ++t)
     for (int c = 0; c < 8; ++c)

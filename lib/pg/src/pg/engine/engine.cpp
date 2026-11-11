@@ -69,6 +69,7 @@ struct TrackRt {
   // ---- live recording: the last recorded note, while its key is held ----
   uint8_t recHeld, recNote, recPattern, recStep;
   uint32_t recStartQ;                 // quantum counter at its note-on
+  uint32_t liveHeld[4];               // live keys down (NoteOn without NoteOff yet), bit per MIDI note
   // ---- params ----
   uint8_t eff[kParamsPerTrack];       // effective params this quantum (p-lock applied)
   uint8_t mute;                       // cached Project mute
@@ -110,7 +111,9 @@ struct State {
   // ---- suspend / resume ----
   std::atomic<bool> suspendReq, inProcess;
   std::atomic<uint32_t> resumeEpoch;
+  std::atomic<uint32_t> resumeTail;   // queue tail when resume() was called: older commands are dropped
   uint32_t seenEpoch;
+  bool suspendAck;                    // the audio thread has seen the current suspend request
   int suspendFade;                    // quanta of fade-out left
   std::atomic<uint32_t> seedReq;
 
@@ -173,6 +176,8 @@ struct State {
   void render(int16_t* out);
   void publishStatus();
   void drainCommands();
+  void discardCommands(uint32_t upTo);
+  void quiesceForSuspend();
   void apply(const Command& c);
   void refreshGlobals();
   void bump() { ++revision; }
@@ -224,6 +229,8 @@ void State::init(float sampleRate, Project* p) {
   suspendReq.store(false);
   seenEpoch = resumeEpoch.load();
   suspendFade = 0;
+  suspendAck = false;
+  resumeTail.store(qTail.load());
   seedReq.store(0);
   rng = kDefaultSeed;
   revision = 0;
@@ -276,6 +283,7 @@ void State::resetRuntime() {
     r.rollC = 0;
     r.rollCd = r.rollInt = 0;
     r.recHeld = 0;
+    std::memset(r.liveHeld, 0, sizeof(r.liveHeld));
     r.paramsSent = 0;
     r.mute = 0;
     r.cLevel = r.cPan = -1;
@@ -495,6 +503,41 @@ void State::drainCommands() {
     apply(c);
   }
   qHead.store(h, std::memory_order_release);
+}
+
+// Suspend/resume: drop queued commands without applying them (they were
+// meant for the project that is being replaced). A dropped WriteTrack /
+// WritePattern still counts in writesDone: the engine will never read its
+// buffer, which is all the UI waits for. Audio thread only.
+void State::discardCommands(uint32_t upTo) {
+  uint32_t h = qHead.load(std::memory_order_relaxed);
+  if (int32_t(upTo - h) <= 0) return;
+  bool wrote = false;
+  for (; h != upTo; ++h) {
+    const CmdType ty = queue[h & (kQueueSize - 1)].type;
+    if (ty == CmdType::WriteTrack || ty == CmdType::WritePattern) { ++writesDone; wrote = true; }
+  }
+  qHead.store(h, std::memory_order_release);
+  if (wrote) aWritesDone.store(writesDone, std::memory_order_relaxed);
+}
+
+// First quantum that sees a suspend request: stop rolls and release held
+// live / sequenced notes, so the fade-out and the resumed engine start clean.
+// Touches no Project memory.
+void State::quiesceForSuspend() {
+  for (int t = 0; t < kNumTracks; ++t) {
+    TrackRt& r = tr[t];
+    r.rollC = 0;
+    r.ratLeft = 0;
+    r.recHeld = 0;
+    for (int i = 0; i < kMaxPend; ++i)
+      if (r.pend[i].active) { vOff(t, r.pend[i].note); r.pend[i].active = 0; }
+    // Live keys still down: their NoteOff may be among the dropped commands.
+    for (int w = 0; w < 4; ++w) {
+      for (uint32_t m = r.liveHeld[w]; m; m &= m - 1) vOff(t, uint8_t(32 * w + __builtin_ctz(m)));
+      r.liveHeld[w] = 0;
+    }
+  }
 }
 
 void State::apply(const Command& c) {
@@ -1096,6 +1139,7 @@ void State::liveNoteOn(const Command& c) {
   ev.chord = (t == kTrackLead && c.step.chord < kChordNum) ? c.step.chord : 0;
   ensureParams(t);
   vOn(t, ev);
+  tr[t].liveHeld[ev.note >> 5] |= 1u << (ev.note & 31);
   afterNoteOn(t);
   if (playing && recording) recordNote(t, ev);
 }
@@ -1110,6 +1154,7 @@ void State::liveNoteOff(const Command& c) {
   const uint8_t note = uint8_t(c.b & 127);
   vOff(t, note);
   TrackRt& r = tr[t];
+  r.liveHeld[note >> 5] &= ~(1u << (note & 31));
   if (!r.recHeld || r.recNote != note) return;
   r.recHeld = 0;
   if (!playing || !recording) return;
@@ -1577,7 +1622,17 @@ void Engine::process(int16_t* out, int frames) {
     if (s.suspendReq.load()) {
       // Suspended: the Project is off limits. Fade the last sound out over a
       // few ms from cached state only (no commands, no sequencer, no project
-      // reads), then output silence.
+      // reads), then output silence. Everything queued so far is dropped:
+      // the tail is read BEFORE re-checking the request, so a command posted
+      // after resume() (which clears the request first) is never dropped here.
+      if (!s.suspendAck) {
+        s.suspendAck = true;
+        s.quiesceForSuspend();
+      }
+      {
+        const uint32_t tail = s.qTail.load();
+        if (s.suspendReq.load()) s.discardCommands(tail);
+      }
       if (s.suspendFade > 0) {
         s.render(out);
         const int n = engine_detail::kSuspendFadeQuanta * kQuantum;
@@ -1600,6 +1655,10 @@ void Engine::process(int16_t* out, int frames) {
       // project now. Start clean: transport stopped at the top, voices choked,
       // FX cleared, everything re-derived and re-sanitised.
       s.seenEpoch = epoch;
+      s.suspendAck = false;
+      // Commands posted before resume() (left over when no process() call
+      // ran during the suspend) belong to the old project: drop them.
+      s.discardCommands(s.resumeTail.load());
       for (int t = 0; t < kNumTracks; ++t) s.vChoke(t);
       s.resetRuntime();
       s.resetFx();
@@ -1661,6 +1720,7 @@ void Engine::suspend() {
 
 void Engine::resume() {
   engine_detail::State& s = *impl_;
+  s.resumeTail.store(s.qTail.load(std::memory_order_relaxed));   // before the epoch bump
   s.resumeEpoch.fetch_add(1);
   s.suspendReq.store(false);
 }

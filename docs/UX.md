@@ -33,7 +33,7 @@ Status: complete for v1 implementation. Mockups are in `docs/ux/` (contact sheet
 
 ## 2. Core state (what the UI remembers)
 
-All of this is UI-thread state except where it says Project. Nothing here is saved, except that `octave` and `chordMode` go into a small UI settings file (section 13.4).
+All of this is UI-thread state except where it says Project. Nothing here is saved, except that `octave`, `chordMode` and `rollRate` (plus the open project's name, mount and dirty flag) go into a small UI settings file (section 13.2).
 
 | State | Values | Default | Notes |
 |---|---|---|---|
@@ -536,8 +536,8 @@ The full 48-row table with RGB565 values is printed by `--palette`. These are th
 * Song slots, mutes and sound/mixer/global params aren't covered by undo. They aren't destructive in the same way, because they're always visibly reversible.
 
 ### 13.2 Files
-* Paths: `/int/pg/<NAME>.pgv` and `/sd/pg/<NAME>.pgv`, plus `/int/pg/_last.pgv` (the autosave) and `/int/pg/_ui.cfg` (8 bytes: octaves, chord mode, roll rate).
-* The file format is the raw `Project` bytes (`sizeof(Project)`). The loader checks `magic` and `version` and refuses otherwise with the RED toast "NOT A POCKET GROOVE FILE". The `name` field mirrors the file name.
+* Paths: `/int/pg/<NAME>.pgv` and `/sd/pg/<NAME>.pgv`, plus `/int/pg/_last.pgv` (the session autosave) and `/int/pg/_ui.cfg` (the UI settings blob written by `io::saveUiSettings`: bass and lead octave, chord mode, roll rate, mount and name of the open project, its dirty flag).
+* The file format is owned by `lib/pg/src/pg/io/project_io.h`: a 64-byte CRC-checked header (file magic, format versions, tempo, swing, scale, the file stem) followed by the compressed `Project`. The UI never parses files itself; it calls `io::saveProject` / `io::loadProject` / `io::listProjects` / `io::deleteProject` and turns every `io::Status` into a RED toast ("NOT A POCKET GROOVE FILE", "FILE IS DAMAGED", "NEEDS NEWER FIRMWARE", "NOT ENOUGH SPACE", ...). A failed load leaves the project untouched, except `DestClobbered`, after which the UI starts a new project ("LOAD FAILED - NEW PROJECT"). Every load is followed by `Engine::sanitizeProject`. The `name` field mirrors the file name.
 * The DEMO is compiled into the firmware (ROM) and listed first. It can be loaded but not overwritten or deleted. CTRL+S on DEMO opens SAVE AS.
 * Names are 1..8 characters from A-Z, 0-9, `-` and `_`. Typed letters are upper-cased. The default suggestion is `GROOVE01`, using the next free number. An existing name asks "OVERWRITE ACIDJAM?".
 * **Save** (CTRL+S, or ENTER on SAVE AS): if the project has a name and mount, it saves straight away with the toast "SAVED ACIDJAM". Otherwise it opens the name dialog. Saving reads the Project memory directly. The 1-byte race with engine edits is acceptable.
@@ -545,11 +545,11 @@ The full 48-row table with RGB565 values is printed by `--palette`. These are th
 * **Load**: if `dirty`, confirm first ("LOAD BASSHAUS? / ACIDJAM HAS UNSAVED CHANGES / ENTER DISCARD AND LOAD / ESC CANCEL"). Then `Stop`, `suspend()`, read into the Project, `resume()`, reset the UI state (selTrack BASS, page 0, undo/clip cleared), and go to GROOVE stopped.
 * **New** (CTRL+N): confirm if dirty. Then `suspend()`, `Engine::initProject(project)`, name `""`, `resume()`.
 * **Delete**: DEL on a row asks "DELETE WAREHOUS?" (ENTER / ESC). It can't be undone.
-* **Autosave**: when the transport is stopped, `dirty` is set, and no key has been pressed for 10 s, write `_last.pgv`. Also on a battery warning below 5 %. Autosave doesn't clear `dirty`, because that tracks the named file.
+* **Autosave** (session, `io::saveSession`): never while playing (a flash write stalls the audio task). Written 2 s after the transport stops, or when stopped with no key pressed for 10 s, and only if the project differs from the last session written (CRC). The firmware also calls `Ui::saveSessionNow()` before power-off. Also on a battery warning below 5 %. Autosave doesn't clear `dirty`, because that tracks the named file.
 * SD missing: the SD rows are absent, the header shows `NO SD`, and SAVE TO SD gives the RED toast "NO SD CARD". If the card is pulled mid-write, the toast "SAVE FAILED" appears and `dirty` stays.
 
 ### 13.3 Read-only BPM column
-For each listed file, the BPM column comes from reading the first 64 bytes: magic, version and `globals[0]`. With the current `FileSystem::read`, that means reading into a 64-byte buffer with `cap = 64`. Implementers must confirm that `read` returns a partial file when cap < size. If it doesn't, drop the column.
+The BPM column is the tempo field of each file's header, read by `io::listProjects` (headers only, streamed through `FileSystem::open/readSome`). A file whose header can't be read is listed with `BAD` instead of a BPM; ENTER on it shows the reason. ROM demos show the tempo from `demo::tempo()`.
 
 ---
 

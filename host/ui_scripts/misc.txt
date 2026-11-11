@@ -1,0 +1,15 @@
+# Destructive action + undo hint, boot banner (docs/ux/toast-undo.png, boot.png)
+demo
+tap spc
+until 6 4
+down ctl
+tap x
+up ctl
+until 6 6
+shot toast-undo
+
+demo
+session
+boot
+wait 100
+shot boot

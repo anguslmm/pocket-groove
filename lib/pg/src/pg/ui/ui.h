@@ -112,6 +112,8 @@ class Ui {
   bool muted(int track) const;
   int editPattern() const { return pat_; }
   SongSlot songSlot(int i) const;
+  const ParamInfo* paramInfo(int track, int index) const { return eng_->trackParamInfo(track, index); }
+  int noteForKey(int n) const { return noteFor(sel_, n); }   // what note key n plays on the selected track
 
  private:
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
@@ -192,6 +194,8 @@ class Ui {
   void ctrlSave();
   void loadInto(int mount, int romIndex, const char* name);
   void afterProjectChange(int mount, const char* name, bool keepDirty);
+  void resetForProject(int sel);
+  bool patternUsed(int pat) const;
   void ioError(const char* what, uint8_t status);
   uint32_t projectCrc() const;
   void trackDirty();
@@ -258,7 +262,6 @@ class Ui {
   void drawMix(Framebuffer& fb);
   void drawFx(Framebuffer& fb);
   void drawFxDuck(Framebuffer& fb);
-  void drawPlaceholder(Framebuffer& fb);
   void drawOverlay(Framebuffer& fb);
   void drawPopup(Framebuffer& fb);
   void drawToast(Framebuffer& fb);
@@ -373,8 +376,9 @@ class Ui {
   bool revSeen_ = false;
   uint32_t lastKeyMs_ = 0, stopMs_ = 0;
   bool wasPlaying_ = false, battSaved_ = false, settingsDirty_ = false;
+  uint32_t sessRev_ = 0, autosaveRetryMs_ = 0;
   // PROJECT list
-  struct FileRow { uint8_t mount, tempo, valid; char name[9]; };
+  struct FileRow { uint8_t mount, tempo, valid, status; char name[9]; };
   FileRow rows_[kMaxFileRows] = {};
   uint8_t rowCount_ = 0, projTab_ = 0, projCursor_ = 0, projTop_ = 0;
   bool listedSd_ = false, listValid_ = false;
@@ -391,6 +395,7 @@ class Ui {
   bool undoValid_ = false, undoIsRedo_ = false;
   char undoLabel_[20] = {};
   bool writeBusy_ = false;
+  uint32_t writeSinceMs_ = 0;
   uint8_t writeBuf_ = 0, writePat_ = 0, writeExpect_ = 0;
   int8_t writeTrack_ = -1;
   bool eraseSnapped_ = false, eraseDid_ = false;

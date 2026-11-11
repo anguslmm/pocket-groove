@@ -15,6 +15,10 @@
 //   global <id> <value>     post SetGlobal directly (data setup only)
 //   param <t> <i> <value>   post SetTrackParam directly
 //   steppost <t> <i> <on> [note vel]  post SetStep directly on the playing pattern
+//   boot                    power-on with the current (in-memory) file system: session or demo
+//   sd <0|1>                SD card present (file system and UiEnv)
+//   fsave <int|sd> <NAME> [bpm]   write the current project to a file (setup only)
+//   session                 write the current project as the session file _last.pgv (setup only)
 //   shot <name>             write <out>/<name>.png (240x135) and <out>/<name>_4x.png
 //   bench                   print the host time of a full redraw of the current screen
 #include <chrono>
@@ -25,6 +29,7 @@
 #include <sys/stat.h>
 
 #include "common/ui_harness.h"
+#include "pg/io/project_io.h"
 
 int main(int argc, char** argv) {
   if (argc < 2) {
@@ -83,6 +88,24 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s:%d: step never reached\n", argv[1], lineNo);
         ++errors;
       }
+    } else if (op == "boot") {
+      rig.boot();
+    } else if (op == "sd") {
+      rig.fs.sdPresent = std::atoi(a) != 0;
+      rig.env.sdPresent = rig.fs.sdPresent;
+      rig.run(40);
+    } else if (op == "fsave") {
+      static pg::Project tmp;
+      tmp = *rig.proj;
+      if (n > 3) tmp.globals[pg::kGTempo] = uint8_t(std::atoi(c));
+      const pg::io::Status st =
+          pg::io::saveProject(rig.fs, std::string(a) == "sd" ? "/sd" : "/int", b, tmp);
+      if (st != pg::io::Status::Ok) {
+        std::fprintf(stderr, "%s:%d: fsave failed: %s\n", argv[1], lineNo, pg::io::statusName(st));
+        ++errors;
+      }
+    } else if (op == "session") {
+      if (pg::io::saveSession(rig.fs, *rig.proj) != pg::io::Status::Ok) ++errors;
     } else if (op == "freeze") {
       rig.engineRuns = false;
     } else if (op == "unfreeze") {

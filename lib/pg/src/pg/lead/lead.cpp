@@ -333,7 +333,7 @@ LeadVoice::LeadVoice() {
 
 void LeadVoice::init(float sampleRate) {
   fs_ = sampleRate > 8000.0f ? sampleRate : 8000.0f;
-  buildTables(fs_);
+  tab_ = &tablesFor(fs_);
   quantumRate_ = fs_ / float(kQuantum);
   incK_ = 4294967296.0f * 8.17579892f / fs_;   // phase increment of MIDI pitch 0
   cutK_ = kPi * 8.17579892f / fs_;             // pi * f / fs of MIDI pitch 0
@@ -830,7 +830,7 @@ int LeadVoice::soundingVoices() const {
 // ---------------------------------------------------------------------------
 template <bool ST>
 void LeadVoice::renderVoiceT(V& v, float* outL, float* outR) {
-  const Tables& T = tables();
+  const Tables& T = *tab_;
 
   // ---- pitch (glide only ever has work to do after a legato retarget)
   v.pitch += (v.target - v.pitch) * glideCoef_;

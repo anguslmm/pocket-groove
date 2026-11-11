@@ -74,6 +74,8 @@ void Ui::init(Engine& engine, Project& project, FileSystem* fs) {
   rollRate_ = 1;                           // 1/16
   std::memset(&st_, 0, sizeof(st_));
   st_.queuedPattern = 0xFF;
+  baseCrc_ = projectCrc();            // the attached project counts as clean
+  sessCrc_ = baseCrc_;
 }
 
 // ============================================================ effective reads ====
@@ -124,6 +126,16 @@ bool Ui::muted(int t) const {
   t &= 7;
   if (pendMute_[t]) return pendMute_[t] == 2;
   return proj_->tracks[t].mute != 0;
+}
+
+bool Ui::patternUsed(int pat) const {
+  const Pattern& P = proj_->patterns[pat & 15];
+  for (int t = 0; t < kNumTracks; ++t) {
+    const int len = P.tracks[t].length > kMaxSteps ? kMaxSteps : P.tracks[t].length;
+    for (int s = 0; s < len; ++s)
+      if (P.tracks[t].steps[s].flags & kStepOn) return true;
+  }
+  return false;
 }
 
 bool Ui::stepEditOpen() const {
@@ -193,6 +205,11 @@ void Ui::prunePending() {
     if (proj_->globals[i] == pendG_[i] || stale(pendGFrame_[i])) pendGMask_ &= ~(1u << i);
   }
   if (pendPatLen_ && (proj_->patterns[pendLenPat_].length == pendPatLen_ || stale(pendPatLenFrame_))) pendPatLen_ = 0;
+  for (int i = 0; i < kSongSlots; ++i) {
+    PendSlot& p = pendSong_[i];
+    if (p.used && ((proj_->song[i].pattern == p.pattern && proj_->song[i].repeats == p.repeats) || stale(p.frame)))
+      p.used = 0;
+  }
   for (PendStep& p : pendSteps_) {
     if (!p.used) continue;
     const Step& cur = proj_->patterns[p.pat].tracks[p.track].steps[p.idx];
@@ -784,6 +801,7 @@ void Ui::semicolonDot(int dir, bool shift) {
       if (!isSynth(sel_)) return;
       const int lo = sel_ == kTrackBass ? 0 : 1, hi = sel_ == kTrackBass ? 4 : 6;
       octave_[sel_] = uint8_t(clampi(octave_[sel_] + dir, lo, hi));
+      settingsDirty_ = true;
       char buf[12];
       catInt(cat(buf, "OCT "), octave_[sel_]);
       toast(buf, 0);
@@ -833,6 +851,7 @@ void Ui::chordKey(bool shift) {
   }
   if (view_ != View::Groove || sel_ != kTrackLead) return;
   chordMode_ = uint8_t((chordMode_ + (shift ? kNumChordModes - 1 : 1)) % kNumChordModes);
+  settingsDirty_ = true;
   char buf[16];
   cat(cat(buf, "CHORD "), chordModeName(chordMode_));
   toast(buf, 0);
@@ -944,6 +963,7 @@ void Ui::altCombo(int k) {
     const int nr = clampi(rollRate_ + (k == kKSemicolon ? 1 : -1), 0, kNumRollRates - 1);
     if (nr == rollRate_) return;
     rollRate_ = uint8_t(nr);
+    settingsDirty_ = true;
     for (int t = 0; t < kNumTracks; ++t)
       if ((rollMask_ >> t) & 1) sendRoll(t, true);   // a running roll follows the new rate
   }
@@ -1323,8 +1343,15 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   ++frame_;
   flushOutbox();
   pollStatus();
+  if (writeBusy_ && (st_.writesDone == writeExpect_ || after(now_, writeSinceMs_ + 2000))) {
+    writeBusy_ = false;   // the engine has consumed the buffer (or was re-initialised)
+    ++serial_;
+  }
   prunePending();
   runTimers();
+  trackDirty();
+  if (env.sdPresent != listedSd_ && view_ == View::Project) refreshFiles();   // SD inserted / pulled
+  autosave();
   if (clipUntil_ && after(now_, clipUntil_)) clipUntil_ = 0;
   const uint32_t bs = bodySignature();
   const uint32_t ss = statusSignature();
@@ -1337,7 +1364,7 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
     ++fullDraws_;
     return true;
   }
-  if (ss != lastStatusSig_) {
+  if (ss != lastStatusSig_ && !helpVisible()) {   // the help screen covers the status bar
     drawStatus(fb);
     lastStatusSig_ = ss;
     dirtyStatusOnly_ = true;

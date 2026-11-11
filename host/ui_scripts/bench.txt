@@ -20,3 +20,12 @@ down tab
 wait 300
 bench tempo-overlay
 up tab
+tap p
+bench song
+tap \
+bench project
+tap `
+down /
+wait 500
+bench help
+up /

@@ -279,7 +279,9 @@ static void testSuspend() {
   rig.run(50);
   EngineStatus st = rig.eng.status();
   CHECK(!st.playing && st.pattern == 0 && st.queuedPattern == 0xFF && st.revision != revBefore);
-  CHECK(rig.step(0, kTrackSnare, 3).flags & kStepOn);        // the queued edit is applied after resume
+  // An edit queued while suspended was meant for the old project: discarded
+  // (see Engine::suspend(); test_engine_suspend covers the details).
+  CHECK(!(rig.step(0, kTrackSnare, 3).flags & kStepOn));
   CHECK(rig.v[kTrackKick].chokes().size() >= 1);
   rig.post(CmdType::Play);
   rig.runSeconds(1.0);

@@ -49,14 +49,16 @@ inline float softClipInt(float x) {
   return c2 * (0.5f - 0.037037037f * c2) + (a - c);
 }
 
-// ---- shared tables (built once in BassVoice::init) --------------------------
+// ---- shared constant tables (flash; generated into bass_tables_data.cpp by
+// tools/gen/gen_tables.cpp from the formula in bass_tables_ref.cpp) -----------
 constexpr int kSineBits = 9;
 constexpr int kSineSize = 1 << kSineBits;        // 512 + 1 guard
 constexpr int kBlepTaps = 16;                    // 8 before + 8 after the edge
 constexpr int kBlepPhases = 32;                  // sub-sample positions (linear interp between)
-extern float gSine[kSineSize + 1];
-extern float gBlep[(kBlepPhases + 2) * kBlepTaps];
-void buildTables();
+extern const float gSine[kSineSize + 1];
+extern const float gBlep[(kBlepPhases + 2) * kBlepTaps];
+// Generator / test only: the formula behind the two tables above.
+void buildTablesReference(float* sine, float* blep);
 
 // sin(2*pi*phase / 2^32), linear interpolation. Error < -90 dB.
 inline float sineLerp(uint32_t ph) {

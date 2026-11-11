@@ -108,6 +108,13 @@ class Engine {
   // Stop touching the Project (output silence) so the UI thread can load a
   // new one into the same memory. suspend() returns once the audio thread has
   // acknowledged (or immediately if process() has never been called).
+  // Commands still queued when the audio thread acknowledges, and any posted
+  // while suspended, are DISCARDED, never applied (they were meant for the old
+  // project); a discarded WriteTrack/WritePattern still increments
+  // status().writesDone, so a buffer the UI is waiting to release is freed.
+  // Active rolls stop and held notes are released. Commands posted after
+  // resume() returns are kept. After resume() the engine starts clean:
+  // stopped at the top, voices choked, FX cleared, the new project sanitised.
   void suspend();
   void resume();
 
