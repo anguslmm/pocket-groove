@@ -14,11 +14,23 @@ constexpr float kSilence = 1.0e-4f;  // -80 dBFS: below this a tail is dropped
 
 inline float clampf(float x, float lo, float hi) { return x < lo ? lo : (x > hi ? hi : x); }
 
-// Cubic soft clipper: linear-ish for small x, flat (zero slope) at |x| >= 1,
-// output in [-1, 1]. Small-signal gain is 1.5.
-inline float softClip(float x) {
-  x = clampf(x, -1.0f, 1.0f);
-  return x * (1.5f - 0.5f * x * x);
+// Saturator used by every drum's drive stage. Small-signal gain 1.5, output
+// strictly inside (-1, 1), never flat:
+//   |x| <= 0.8   the cubic 1.5x - 0.5x^3 (bit-identical to the old clipper)
+//   |x| >  0.8   f0 + h * y / (1 + y), y = s0 * (|x| - 0.8) / h, which meets
+//                the cubic with the same value (f0 = 0.944) and slope
+//                (s0 = 0.54) and approaches 1 asymptotically.
+// The old version clamped x to +-1 first, so everything driven past 1 came out
+// as an exactly flat plateau (the "flat tops" the analysis tool reported in
+// kicks and snares). Here the top keeps rounding off instead. The divide is
+// only paid while the signal is past the knee (the loud part of a driven hit).
+inline float saturate(float x) {
+  const float ax = x < 0.0f ? -x : x;
+  if (!(ax > 0.8f)) return x * (1.5f - 0.5f * x * x);
+  constexpr float kF0 = 0.944f, kH = 0.056f, kK = 0.54f / 0.056f;
+  const float y = (ax - 0.8f) * kK;
+  const float v = y < 1.0e30f ? kF0 + kH * y / (1.0f + y) : 1.0f;
+  return x < 0.0f ? -v : v;
 }
 
 inline float unit(uint8_t v) { return float(v) * (1.0f / 127.0f); }    // 0..127 -> 0..1
@@ -63,11 +75,24 @@ inline float velocityGain(uint8_t vel) {
   return v * (0.25f + 0.75f * v);
 }
 
-// Make-up gain for softClip(x * g) so a signal of nominal peak `peak` comes
+// Smooth ceiling: the identity up to 85 % of `c`, then a C1 asymptotic
+// approach to c (never reached, never flat). invC = 1/c, precomputed. Used
+// where the voices used to hard-clamp (retrigger overlap, hat edge pile-ups);
+// costs one compare per sample unless the signal is actually near c.
+inline float softLimit(float x, float c, float invC) {
+  const float ax = x < 0.0f ? -x : x;
+  constexpr float kKnee = 0.85f, kRange = 1.0f - kKnee, kInvRange = 1.0f / kRange;
+  if (!(ax > kKnee * c)) return x;
+  const float y = (ax * invC - kKnee) * kInvRange;
+  const float v = y < 1.0e30f ? c * (kKnee + kRange * y / (1.0f + y)) : c;
+  return x < 0.0f ? -v : v;
+}
+
+// Make-up gain for saturate(x * g) so a signal of nominal peak `peak` comes
 // out at about 1.0 for every drive setting.
 inline float driveNorm(float g, float peak) {
   const float in = g * peak;
-  return 1.0f / softClip(in > 1.0f ? 1.0f : in);
+  return 1.0f / saturate(in > 1.0e-6f ? in : 1.0e-6f);
 }
 
 // White noise, uniform in [-1, 1).

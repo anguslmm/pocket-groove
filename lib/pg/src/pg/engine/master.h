@@ -1,4 +1,9 @@
-// Master bus: DJ filter -> drive -> volume -> soft limiter -> int16.
+// Master bus: DC/rumble high-pass -> DJ filter -> drive -> volume -> soft limiter -> int16.
+//
+//   * Rumble filter: always on, 2nd-order Butterworth high-pass at 20 Hz
+//     (TPT state-variable form). Removes DC (from asymmetric voices, or an
+//     offset left by a drive stage) and sub-sonic rumble that would only eat
+//     limiter headroom: -0.2 dB at 45 Hz (kick fundamental), -12 dB/oct below.
 //
 // GAIN STAGING (the reasoning the defaults are built on)
 //   * Voices are specified to peak around -9..-6 dBFS (0.35..0.5) each.
@@ -39,15 +44,26 @@ class MasterBus {
   void setParams(int filter, int reso, int drive, int volume);
   // In-place on the float bus (frames = quantum), then writes interleaved int16.
   // Returns nothing; peaks (post-limiter, 0..1) are accumulated into peakL/peakR.
-  void process(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR);
+  void process(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR) {
+    run<false>(l, r, out, frames, peakL, peakR);
+  }
+  // Mono device mode: one channel through the whole chain; the same int16
+  // goes to both output slots, and *peakR is set to *peakL.
+  void processMono(float* m, int16_t* out, int frames, float* peakL, float* peakR) {
+    run<true>(m, m, out, frames, peakL, peakR);
+    *peakR = *peakL;
+  }
 
   bool filterActive() const { return mode_ != kBypass || mix_ > 0.0f; }
   static constexpr float kKnee = 0.70710678f;
   uint32_t faults() const { return faults_; }
+  void setRumbleBypass(bool b) { rumbleOff_ = b; }
 
  private:
   enum Mode : uint8_t { kBypass = 0, kLowPass, kHighPass };
   void updateFilterCoefs();
+  template <bool kMono> void run(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR);
+  void rumble(float* x, int c, int frames);
 
   float sr_, invSr_, smoothK_, mixStep_, gainK_;
   float top_, lpLog2_, hpLog2_;
@@ -61,6 +77,10 @@ class MasterBus {
   float resoK_;                 // 1/Q
   float a1_, a2_, a3_;
   float ic1_[2], ic2_[2];
+  // rumble high-pass
+  float hpG_, hpGk_, hpD_;
+  float hp1_[2], hp2_[2];
+  bool rumbleOff_;              // test hook only (zero-initialised .bss: filter on)
   int lastFilter_, lastReso_;
   // drive / volume
   float pre_, preTarget_, c3_, c3Target_, post_, postTarget_;

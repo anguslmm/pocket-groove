@@ -132,7 +132,7 @@ void SnareVoice::render(float* outL, float* outR, int frames) {
     const float nz = (bp * nn + 0.2f * hp) * (an + af);
     an *= cn;
     af *= cf;
-    outL[i] = softClip((body + nz) * g) * post;
+    outL[i] = saturate((body + nz) * g) * post;
   }
   noise_.s = ns;
   x1_ = x1; y1_ = y1; x2_ = x2; y2_ = y2;

@@ -34,7 +34,10 @@ class Delay {
   void setParams(float fb, float lpCoef, float hpCoef, float width);
 
   // n <= kMaxBlock half-rate samples. ADDS the wet signal to outL/outR.
-  void process(const float* in, float* outL, float* outR, int n);
+  void process(const float* in, float* outL, float* outR, int n) { run<false>(in, outL, outR, n); }
+  // Mono device mode: ADDS only the mono sum (L+R)/2 = e1 + e2 to `out`
+  // (no width law). Bit-for-bit the same line state as process().
+  void processMono(const float* in, float* out, int n) { run<true>(in, out, nullptr, n); }
 
   // True once the whole buffer is silent and the loop filter has drained.
   bool idle() const { return zeroRun_ >= kBufLen; }
@@ -43,6 +46,7 @@ class Delay {
 
  private:
   void readTap(float* dst, int delay, int n) const;
+  template <bool kMono> void run(const float* in, float* outL, float* outR, int n);
 
   int16_t buf_[kBufLen];
   int w_;

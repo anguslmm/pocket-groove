@@ -1,0 +1,22 @@
+# Redraw cost (no screenshots): full redraw of the busiest screens
+demo
+tap spc
+until 6 6
+bench groove
+down y
+wait 300
+bench step-edit
+up y
+tap 9
+bench sound
+tap 0
+bench mix
+tap o
+bench fx-duck
+tap o
+bench fx-space
+tap `
+down tab
+wait 300
+bench tempo-overlay
+up tab

@@ -29,5 +29,10 @@ bool fxIdle();
 // absurd signal (voice choked, FX state cleared). Stays 0 in a healthy system.
 uint32_t faultCount();
 
+// TEST ONLY: bypass the master bus's always-on 20 Hz rumble/DC high-pass so
+// unit tests can probe gains with DC signals. Persists across init(); never
+// call it in the firmware.
+void setRumbleFilterBypass(bool bypass);
+
 }  // namespace engine_detail
 }  // namespace pg

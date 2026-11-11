@@ -49,12 +49,19 @@ enum Signal : uint8_t {
 };
 const char* signalName(uint8_t s) {
   static const char* const n[kNumSignals] = {
-    "silence", "440Hz sine L+R", "440Hz LEFT slot only", "440Hz RIGHT slot only",
-    "log sweep 20Hz-20kHz/10s", "55Hz sine L+R", "1kHz square -12dBFS", "click 120BPM", "blip on SPACE"};
+    "silence", "440Hz sine L+R -18dBFS", "440Hz LEFT slot only", "440Hz RIGHT slot only",
+    "log sweep 20Hz-20kHz/10s -24dBFS", "55Hz sine L+R -18dBFS", "1kHz square -24dBFS", "click 120BPM", "blip on SPACE"};
   return s < kNumSignals ? n[s] : "?";
 }
 
-constexpr float kLevel = 0.25118864f;   // -12 dBFS
+// Digital test levels, deliberately modest (someone may be wearing earbuds):
+// sines and the blip -18 dBFS peak, the sweep (all the way up to 20 kHz) and
+// the square (odd harmonics, +3 dB crest vs a sine) -24 dBFS, clicks -12 dBFS
+// peak for a few ms. With the boot volume (-31.5 dB) a sine reaches the DAC at
+// -49.5 dB below full scale.
+constexpr float kLevel = 0.12589254f;   // -18 dBFS
+constexpr float kHarshLevel = 0.06309573f;   // -24 dBFS
+constexpr const char* kLevelsText = "sines/blip -18 dBFS, sweep/square -24 dBFS, clicks -12 dBFS peak";
 constexpr int kLutBits = 10, kLutSize = 1 << kLutBits;
 float g_sinLut[kLutSize + 1];
 
@@ -90,32 +97,45 @@ struct Gen {
   float    env = 0, envMul = 1, clickInc = 0, clickPh = 0;
   uint32_t blipSeq = 0, blipLeft = 0, blipLen = 1;
   float    blipPh = 0, blipInc = 0;
+  bool     fadeIn = false;
 };
 Gen g_gen;   // audio task only
+
+// (Re)starts the signal from phase 0 (new signal or new rate). Audio task.
+void restartGen(Gen& g, uint8_t mode, float fs) {
+  g.mode = mode;
+  g.fs = fs;
+  g.ph = 0;
+  g.inc = (mode == kSine55 ? 55.0f : mode == kSquare1k ? 1000.0f : 440.0f) / fs;
+  g.sweepStart = 20.0f / fs;
+  g.sweepTop = 20000.0f / fs;
+  g.sweepMul = expf(logf(1000.0f) / (10.0f * fs));
+  if (mode == kSweep) g.inc = g.sweepStart;
+  g.clickPeriod = static_cast<uint32_t>(fs * 0.5f);
+  g.clickPos = 0;
+  g.beat = 0;
+  g.env = 0;
+  g.envMul = expf(-1.0f / (0.004f * fs));
+  g.blipLeft = 0;
+  g.blipLen = static_cast<uint32_t>(0.05f * fs);
+  g.blipInc = 1000.0f / fs;
+  g.blipSeq = g_blipReqSeq.load(std::memory_order_acquire);
+  g.fadeIn = true;
+}
 
 void render(int16_t* out, int frames, void*) {
   Gen& g = g_gen;
   const float fs = g_fs;
-  const uint8_t mode = g_signal.load(std::memory_order_relaxed);
-  if (mode != g.mode || fs != g.fs) {    // (re)start the signal cleanly (new signal or new rate)
-    g.mode = mode;
-    g.fs = fs;
-    g.ph = 0;
-    g.inc = (mode == kSine55 ? 55.0f : mode == kSquare1k ? 1000.0f : 440.0f) / fs;
-    g.sweepStart = 20.0f / fs;
-    g.sweepTop = 20000.0f / fs;
-    g.sweepMul = expf(logf(1000.0f) / (10.0f * fs));
-    if (mode == kSweep) g.inc = g.sweepStart;
-    g.clickPeriod = static_cast<uint32_t>(fs * 0.5f);
-    g.clickPos = 0;
-    g.beat = 0;
-    g.env = 0;
-    g.envMul = expf(-1.0f / (0.004f * fs));
-    g.blipLeft = 0;
-    g.blipLen = static_cast<uint32_t>(0.05f * fs);
-    g.blipInc = 1000.0f / fs;
-    g.blipSeq = g_blipReqSeq.load(std::memory_order_acquire);
+  const uint8_t req = g_signal.load(std::memory_order_relaxed);
+  // A signal change fades the old signal out over this block and the new one
+  // in over the next (2.9 ms each): no click from cutting a waveform mid-cycle.
+  bool fadeOut = false;
+  if (fs != g.fs || g.mode >= kNumSignals || g.mode == kSilence) {
+    if (req != g.mode || fs != g.fs) restartGen(g, req, fs);   // new stream / from silence: just fade in
+  } else if (req != g.mode) {
+    fadeOut = true;
   }
+  const uint8_t mode = g.mode;
 
   bench::process(frames);                // synthetic CPU load (no output)
 
@@ -133,7 +153,7 @@ void render(int16_t* out, int frames, void*) {
     }
     case kSweep:
       for (int i = 0; i < frames; ++i) {
-        const int16_t v = toS16(kLevel * lutSin(g.ph));
+        const int16_t v = toS16(kHarshLevel * lutSin(g.ph));
         g.ph += g.inc;
         if (g.ph >= 1.0f) g.ph -= 1.0f;
         g.inc *= g.sweepMul;
@@ -144,7 +164,7 @@ void render(int16_t* out, int frames, void*) {
       break;
     case kSquare1k:
       for (int i = 0; i < frames; ++i) {
-        const int16_t v = toS16(g.ph < 0.5f ? kLevel : -kLevel);
+        const int16_t v = toS16(g.ph < 0.5f ? kHarshLevel : -kHarshLevel);
         g.ph += g.inc;
         if (g.ph >= 1.0f) g.ph -= 1.0f;
         out[2 * i] = out[2 * i + 1] = v;
@@ -154,7 +174,7 @@ void render(int16_t* out, int frames, void*) {
       for (int i = 0; i < frames; ++i) {
         if (g.clickPos == 0) {
           const bool accent = (g.beat % 4) == 0;
-          g.env = accent ? 0.5f : 0.3f;
+          g.env = accent ? 0.25f : 0.15f;      // -12 / -16.5 dBFS peak
           g.clickInc = (accent ? 3000.0f : 2000.0f) / fs;
           g.clickPh = 0;
           ++g.beat;
@@ -202,6 +222,18 @@ void render(int16_t* out, int frames, void*) {
     default:
       memset(out, 0, static_cast<size_t>(frames) * 2 * sizeof(int16_t));
       break;
+  }
+
+  if (fadeOut || g.fadeIn) {
+    const float step = 1.0f / static_cast<float>(frames);
+    for (int i = 0; i < frames; ++i) {
+      const float t = static_cast<float>(i) * step;
+      const float gain = fadeOut ? 1.0f - t : t;
+      out[2 * i] = static_cast<int16_t>(static_cast<float>(out[2 * i]) * gain);
+      out[2 * i + 1] = static_cast<int16_t>(static_cast<float>(out[2 * i + 1]) * gain);
+    }
+    if (fadeOut) restartGen(g, req, fs);   // the new signal starts (fading in) next block
+    else g.fadeIn = false;
   }
 }
 
@@ -765,6 +797,11 @@ void printReport() {
      g_maxHeld, static_cast<unsigned long>(ks.fifoOverflows), static_cast<unsigned long>(ks.queueDrops),
      static_cast<unsigned long>(ks.unknownCodes), static_cast<unsigned long>(ks.i2cErrors),
      static_cast<unsigned long>(ks.maxIntToReadUs));
+  rp("[keys] INT line (GPIO11): %s (drains on INT low %lu, events found by polling with INT high %lu)\n",
+     !ks.controllerPresent ? "n/a" : ks.polledEvents == 0 && ks.intLowDrains > 0 ? "WORKS"
+     : ks.polledEvents > 0 && ks.intLowDrains == 0 ? "NOT WORKING (keys served by 20 ms polling)"
+     : ks.polledEvents > 0 ? "UNRELIABLE (some events only found by polling)" : "no key pressed yet",
+     static_cast<unsigned long>(ks.intLowDrains), static_cast<unsigned long>(ks.polledEvents));
   rp("[keys] never seen (down+up): %s\n", unseen[0] ? unseen : "(none - all keys work)");
   rp("[keys] matrix rectangles held %lu, ghost suspects (4th key in same batch) %lu", static_cast<unsigned long>(g_rectCount),
      static_cast<unsigned long>(g_ghostSuspects));
@@ -780,6 +817,11 @@ void printReport() {
      g_audioOk ? "RUNNING" : "FAILED", g_audioErr[0] ? " / " : "", g_audioErr, audio::codecPresent() ? "ACK" : "NO-ACK",
      audio::volumeReg(), audio::volumeDb(), static_cast<unsigned long>(audio::latencyFrames()),
      1000.0f * audio::latencyFrames() / g_fs, static_cast<unsigned long>(st.stackFreeMin));
+  {
+    uint8_t r09 = 0;
+    const bool r09ok = audio::codecRead(0x09, &r09);
+    rp("[audio] test levels: %s; ES8311 reg 0x09 now %s%02X\n", kLevelsText, r09ok ? "0x" : "?? ", r09ok ? r09 : 0);
+  }
   rp("[audio] current run %lus: blocks %lu underruns %lu%s late %lu write-errors %lu overload-yields %lu | render avg "
      "%.1f max %.1f us, max gap %.0f us (period %.0f), cpu %.2f %% of core %d\n",
      static_cast<unsigned long>((sys::millis() - g_runStartMs) / 1000), static_cast<unsigned long>(st.blocks),
@@ -903,6 +945,9 @@ void drawKeys() {
     g_cv.line(ln++, g_lastRectSuspect ? kRed : kOrange, "rect %s %s %s %s%s n=%lu", keys::legend(g_lastRect[0]),
               keys::legend(g_lastRect[1]), keys::legend(g_lastRect[2]), keys::legend(g_lastRect[3]),
               g_lastRectSuspect ? " GHOST?" : "", static_cast<unsigned long>(g_rectCount));
+  else if (ks.polledEvents)
+    g_cv.line(ln++, kOrange, "INT line %s: %lu ev by polling", ks.intLowDrains ? "flaky" : "DEAD",
+              static_cast<unsigned long>(ks.polledEvents));
   else
     g_cv.line(ln++, kGrey, "ovf %lu  i2cerr %lu  INT->read max %luus", static_cast<unsigned long>(ks.fifoOverflows),
               static_cast<unsigned long>(ks.i2cErrors), static_cast<unsigned long>(ks.maxIntToReadUs));
@@ -1088,6 +1133,8 @@ void setPage(int p) {
   sp("[ui] page %s\n", kPageName[g_page]);
 }
 
+constexpr int kMaxVolReg = 0xBF;
+
 void audioKey(char c) {
   audio::Config cfg = g_acfg;
   switch (c) {
@@ -1101,7 +1148,10 @@ void audioKey(char c) {
       int v = audio::volumeReg();
       v += (c == '=') ? 4 : (c == '-') ? -4 : (c == ']') ? 1 : -1;
       if (v < 0) v = 0;
-      if (v > 0xFF) v = 0xFF;
+      // Capped at 0 dB: above 0xBF the codec adds up to +32 dB of digital
+      // gain, which only clips and is the one way to really hurt someone
+      // wearing earbuds. Full scale at 0 dB is the loudest clean level anyway.
+      if (v > kMaxVolReg) { v = kMaxVolReg; flash("volume max: 0xBF = 0 dB"); }
       const bool ok = audio::setVolumeReg(static_cast<uint8_t>(v));
       g_acfg.volumeReg = static_cast<uint8_t>(v);
       sp("[audio] volume reg 0x32 = 0x%02X (%+.1f dB) %s\n", v, audio::volumeDb(), ok ? "" : "(write FAILED)");
@@ -1231,11 +1281,16 @@ bool g_sdTestPending = false;
 
 void systemKey(char c) {
   switch (c) {
-    case 'a': allocTest(); break;
+    case 'a':
+      if (g_jobBusy.load()) { flash("busy: %s", g_jobName); break; }   // a job's 64 KB buffer would fail it
+      allocTest();
+      break;
     case 'l':
       if (startJob(kJobFsInt, "/int test")) flash("/int test running");
       break;
     case 's':
+      // Remounting calls SD.end(): never while a job is reading/writing a file.
+      if (g_jobBusy.load()) { flash("busy: %s", g_jobName); break; }
       storage::sdMountAsync();
       g_sdTestPending = true;
       flash("mounting SD...");
@@ -1383,7 +1438,7 @@ void setup() {
   bootScreen(line, okColor(intOk));
 
   // Audio before any big allocation (I2S DMA buffers need internal RAM).
-  g_acfg = audio::Config();            // 44100, direct I2S, core 0, 4 DMA buffers, vol 0x90 (-23.5 dB)
+  g_acfg = audio::Config();            // 44100, direct I2S, core 0, 4 DMA buffers, vol 0x80 (-31.5 dB)
   startAudio(g_acfg);
   snprintf(line, sizeof(line), "audio: %s", g_audioOk ? "OK (silent until you pick a signal)" : g_audioErr);
   bootScreen(line, okColor(g_audioOk));

@@ -116,7 +116,8 @@ void HatVoice::noteOn(const NoteEvent& e) {
                       (e.accent ? 1.35f : 1.0f);
   es_ = level;
   ef_ = level * snapAmt_ * (e.accent ? 1.4f : 1.0f);
-  limit_ = 3.0f * level;  // safety ceiling for freak coincidences of edges
+  limit_ = 3.0f * level;  // soft ceiling for freak coincidences of edges at extreme settings
+  invLimit_ = 1.0f / limit_;
 }
 
 void HatVoice::render(float* outL, float* outR, int frames) {
@@ -129,7 +130,7 @@ void HatVoice::render(float* outL, float* outR, int frames) {
   // Source gains, with the tilt filter's input gain and the noise's int -> +-1 scale folded in.
   const float ma = metalAmt_ * metalNorm_ * gainComp_ * (1.0f - tk);
   const float na = noiseAmt_ * gainComp_ * (1.0f - tk) * (1.0f / 2147483648.0f);
-  const float bm = bpMix_, lim = limit_;
+  const float bm = bpMix_, lim = limit_, ilim = invLimit_;
   uint32_t ns = noise_.s;
   for (int i = 0; i < frames; ++i) {
     p0 += i0; p1 += i1; p2 += i2; p3 += i3; p4 += i4; p5 += i5;
@@ -143,7 +144,7 @@ void HatVoice::render(float* outL, float* outR, int frames) {
     float hp, bp, lp;
     svfTick(tilt, fg, fgk, fd, s1, s2, hp, bp, lp);
     (void)lp;
-    outL[i] = clampf((hp + bm * bp) * (es + ef), -lim, lim);
+    outL[i] = softLimit((hp + bm * bp) * (es + ef), lim, ilim);
     es *= cs;
     ef *= cf;
   }

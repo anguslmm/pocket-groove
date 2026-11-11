@@ -1,0 +1,20 @@
+# Step-write and live record (docs/ux/groove-stepwrite.png, groove-live.png)
+demo
+tap ent
+tap 5
+wait 500
+shot groove-stepwrite
+
+demo
+down fn
+tap s
+tap h
+up fn
+tap spc
+tap ent
+until 6 8
+down opt
+tap 5
+up opt
+until 6 14
+shot groove-live

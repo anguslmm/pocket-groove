@@ -17,6 +17,10 @@ void MasterBus::init(float sampleRate, int quantum) {
   lpLog2_ = log2f(90.0f / top_);
   const float hpTop = top_ < 8000.0f ? top_ : 8000.0f;
   hpLog2_ = log2f(hpTop / 25.0f);
+  // Rumble high-pass: 20 Hz, Q = 0.7071 (Butterworth).
+  hpG_ = tanf(3.14159265f * 20.0f / sampleRate);
+  hpGk_ = hpG_ + 1.41421356f;
+  hpD_ = 1.0f / (1.0f + hpG_ * hpGk_);
   reset();
 }
 
@@ -27,6 +31,7 @@ void MasterBus::reset() {
   resoK_ = 1.4142f;
   a1_ = a2_ = a3_ = 0.0f;
   ic1_[0] = ic1_[1] = ic2_[0] = ic2_[1] = 0.0f;
+  hp1_[0] = hp1_[1] = hp2_[0] = hp2_[1] = 0.0f;
   pre_ = preTarget_ = 1.0f;
   c3_ = c3Target_ = 0.0f;
   post_ = postTarget_ = 1.0f;
@@ -116,8 +121,33 @@ void MasterBus::setParams(int filter, int reso, int drive, int volume) {
   }
 }
 
-void MasterBus::process(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR) {
-  // ---- DJ filter (skipped entirely in bypass: bit-transparent) ----
+void MasterBus::rumble(float* x, int c, int frames) {
+  if (rumbleOff_) return;
+  float s1 = hp1_[c], s2 = hp2_[c];
+  const float g = hpG_, gk = hpGk_, d = hpD_;
+  for (int i = 0; i < frames; ++i) {
+    const float hp = (x[i] - gk * s1 - s2) * d;
+    const float v1 = g * hp;
+    const float bp = v1 + s1;
+    s1 = bp + v1;
+    const float v2 = g * bp;
+    s2 += 2.0f * v2;              // lp = v2 + s2; s2 = lp + v2
+    x[i] = hp;
+  }
+  // Flush tiny states (silence must not decay into denormals) and garbage.
+  if (!(absf(s1) > 1.0e-20f) || !(absf(s1) < 1.0e6f)) s1 = 0.0f;
+  if (!(absf(s2) > 1.0e-20f) || !(absf(s2) < 1.0e6f)) s2 = 0.0f;
+  hp1_[c] = s1;
+  hp2_[c] = s2;
+}
+
+template <bool kMono>
+void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR) {
+  // ---- rumble / DC high-pass (always on) ----
+  rumble(l, 0, frames);
+  if (!kMono) rumble(r, 1, frames);
+
+  // ---- DJ filter (skipped entirely in bypass) ----
   if (mode_ != kBypass || mix_ > 0.0f) {
     float mixEnd = mix_;
     if (mixEnd < mixTarget_) { mixEnd += mixStep_; if (mixEnd > mixTarget_) mixEnd = mixTarget_; }
@@ -125,7 +155,7 @@ void MasterBus::process(float* l, float* r, int16_t* out, int frames, float* pea
     const float mixInc = (mixEnd - mix_) / float(frames);
     const bool hp = mode_ == kHighPass;
     float* ch[2] = {l, r};
-    for (int c = 0; c < 2; ++c) {
+    for (int c = 0; c < (kMono ? 1 : 2); ++c) {
       float ic1 = ic1_[c], ic2 = ic2_[c];
       float m = mix_;
       float* x = ch[c];
@@ -171,6 +201,21 @@ void MasterBus::process(float* l, float* r, int16_t* out, int frames, float* pea
     // as the general path below with pre = 1, c3 = 0, bit for bit.
     const float post = post_;
     float pkL = *peakL, pkR = *peakR;
+    if (kMono) {
+      for (int i = 0; i < frames; ++i) {
+        float ul = l[i];
+        if (!(ul > -1.5f)) ul = -1.5f;
+        if (!(ul < 1.5f)) ul = 1.5f;
+        const float yl = ul * post;
+        float al = absf(yl);
+        if (al > knee) { float t = (al - knee) * invRange; t = t > 2.0f ? 2.0f : t; al = knee + range * (t - 0.25f * t * t); }
+        if (al > pkL) pkL = al;
+        const int32_t il = int32_t(al * 32767.0f + 0.5f);
+        out[2 * i] = out[2 * i + 1] = int16_t(yl < 0.0f ? -il : il);
+      }
+      *peakL = pkL;
+      return;
+    }
     for (int i = 0; i < frames; ++i) {
       float ul = l[i], ur = r[i];
       if (!(ul > -1.5f)) ul = -1.5f;
@@ -202,28 +247,45 @@ void MasterBus::process(float* l, float* r, int16_t* out, int frames, float* pea
   const float postInc = (postEnd - post_) * invN;
   float pre = pre_, c3 = c3_, post = post_;
   float pkL = *peakL, pkR = *peakR;
-  for (int i = 0; i < frames; ++i) {
-    pre += preInc; c3 += c3Inc; post += postInc;
-    float ul = l[i] * pre, ur = r[i] * pre;
-    if (!(ul > -1.5f)) ul = -1.5f;
-    if (!(ul < 1.5f)) ul = 1.5f;
-    if (!(ur > -1.5f)) ur = -1.5f;
-    if (!(ur < 1.5f)) ur = 1.5f;
-    const float yl = post * (ul - c3 * ul * ul * ul);
-    const float yr = post * (ur - c3 * ur * ur * ur);
-    // soft limiter: identity below the knee, quadratic knee, ceiling 1.0
-    float al = absf(yl), ar = absf(yr);
-    float tl = (al - knee) * invRange, tr = (ar - knee) * invRange;
-    tl = tl < 0.0f ? 0.0f : (tl > 2.0f ? 2.0f : tl);
-    tr = tr < 0.0f ? 0.0f : (tr > 2.0f ? 2.0f : tr);
-    al = (al < knee ? al : knee) + range * (tl - 0.25f * tl * tl);
-    ar = (ar < knee ? ar : knee) + range * (tr - 0.25f * tr * tr);
-    if (al > pkL) pkL = al;
-    if (ar > pkR) pkR = ar;
-    const int32_t il = int32_t(al * 32767.0f + 0.5f);
-    const int32_t ir = int32_t(ar * 32767.0f + 0.5f);
-    out[2 * i] = int16_t(yl < 0.0f ? -il : il);
-    out[2 * i + 1] = int16_t(yr < 0.0f ? -ir : ir);
+  if (kMono) {
+    for (int i = 0; i < frames; ++i) {
+      pre += preInc; c3 += c3Inc; post += postInc;
+      float ul = l[i] * pre;
+      if (!(ul > -1.5f)) ul = -1.5f;
+      if (!(ul < 1.5f)) ul = 1.5f;
+      const float yl = post * (ul - c3 * ul * ul * ul);
+      float al = absf(yl);
+      float tl = (al - knee) * invRange;
+      tl = tl < 0.0f ? 0.0f : (tl > 2.0f ? 2.0f : tl);
+      al = (al < knee ? al : knee) + range * (tl - 0.25f * tl * tl);
+      if (al > pkL) pkL = al;
+      const int32_t il = int32_t(al * 32767.0f + 0.5f);
+      out[2 * i] = out[2 * i + 1] = int16_t(yl < 0.0f ? -il : il);
+    }
+  } else {
+    for (int i = 0; i < frames; ++i) {
+      pre += preInc; c3 += c3Inc; post += postInc;
+      float ul = l[i] * pre, ur = r[i] * pre;
+      if (!(ul > -1.5f)) ul = -1.5f;
+      if (!(ul < 1.5f)) ul = 1.5f;
+      if (!(ur > -1.5f)) ur = -1.5f;
+      if (!(ur < 1.5f)) ur = 1.5f;
+      const float yl = post * (ul - c3 * ul * ul * ul);
+      const float yr = post * (ur - c3 * ur * ur * ur);
+      // soft limiter: identity below the knee, quadratic knee, ceiling 1.0
+      float al = absf(yl), ar = absf(yr);
+      float tl = (al - knee) * invRange, tr = (ar - knee) * invRange;
+      tl = tl < 0.0f ? 0.0f : (tl > 2.0f ? 2.0f : tl);
+      tr = tr < 0.0f ? 0.0f : (tr > 2.0f ? 2.0f : tr);
+      al = (al < knee ? al : knee) + range * (tl - 0.25f * tl * tl);
+      ar = (ar < knee ? ar : knee) + range * (tr - 0.25f * tr * tr);
+      if (al > pkL) pkL = al;
+      if (ar > pkR) pkR = ar;
+      const int32_t il = int32_t(al * 32767.0f + 0.5f);
+      const int32_t ir = int32_t(ar * 32767.0f + 0.5f);
+      out[2 * i] = int16_t(yl < 0.0f ? -il : il);
+      out[2 * i + 1] = int16_t(yr < 0.0f ? -ir : ir);
+    }
   }
   pre_ = absf(preTarget_ - preEnd) < 1.0e-5f ? preTarget_ : preEnd;
   c3_ = absf(c3Target_ - c3End) < 1.0e-6f ? c3Target_ : c3End;
@@ -231,6 +293,9 @@ void MasterBus::process(float* l, float* r, int16_t* out, int frames, float* pea
   *peakL = pkL;
   *peakR = pkR;
 }
+
+template void MasterBus::run<false>(float*, float*, int16_t*, int, float*, float*);
+template void MasterBus::run<true>(float*, float*, int16_t*, int, float*, float*);
 
 }  // namespace engine_detail
 }  // namespace pg

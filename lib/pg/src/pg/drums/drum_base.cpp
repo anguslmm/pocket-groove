@@ -48,7 +48,7 @@ void DrumVoice::choke() {
 }
 
 void DrumVoice::beginHit(bool declick, float ceiling) {
-  ceiling_ = ceiling;
+  ceiling_ = ceiling > 1.0e-6f ? ceiling : 1.0e-6f;
   if (active_ && declick) {
     resid_ = lastOut_;
     residRamp_ = 1.0f;
@@ -63,12 +63,14 @@ void DrumVoice::beginHit(bool declick, float ceiling) {
 void DrumVoice::endBlock(float* outL, float* outR, int frames, bool stillSounding) {
   if (resid_ != 0.0f) {
     float r = residRamp_;
-    const float a = resid_, step = residStep_, c = ceiling_;
+    const float a = resid_, step = residStep_, c = ceiling_, ic = 1.0f / ceiling_;
     for (int i = 0; i < frames; ++i) {
       r -= step;
       if (r < 0.0f) r = 0.0f;
-      // The old tail plus the new attack must not stack above the voice's ceiling.
-      outL[i] = clampf(outL[i] + a * r * r, -c, c);
+      // The old tail plus the new attack should not stack above the voice's
+      // ceiling. Soft-limited (this used to be a hard clamp that flat-topped
+      // fast retriggers).
+      outL[i] = softLimit(outL[i] + a * r * r, c, ic);
     }
     residRamp_ = r;
     if (r <= 0.0f) resid_ = 0.0f;

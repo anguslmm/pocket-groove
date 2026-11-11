@@ -120,7 +120,7 @@ void ClapVoice::render(float* outL, float* outR, int frames) {
     const float s = (bp * bg + hp * ag) * (be + te);
     be *= bc;
     te *= tc;
-    outL[i] = softClip(s * g) * post;
+    outL[i] = saturate(s * g) * post;
   }
   noise_.s = ns;
   be_ = be < 1.0e-9f ? 0.0f : be;

@@ -244,7 +244,7 @@ bool PercVoice::renderTonal(float* out, int frames) {
     nl += ng * (n - nl);
     const float nz = (n * nh + nl * nlm) * an;
     an *= cn;
-    out[i] = softClip((body + nz) * g) * post;
+    out[i] = saturate((body + nz) * g) * post;
   }
   noise_.s = ns;
   x1_ = x1; y1_ = y1; x2_ = x2; y2_ = y2; nl_ = nl;
@@ -279,7 +279,7 @@ bool PercVoice::renderCowbell(float* out, int frames) {
     float hp, bp, lp;
     svfTick(src, fg, fgk, fd, s1, s2, hp, bp, lp);
     (void)hp; (void)lp;
-    out[i] = softClip(bp * (a1 + a2) * g) * post;
+    out[i] = saturate(bp * (a1 + a2) * g) * post;
     a1 *= c1;
     a2 *= c2;
   }
@@ -311,7 +311,7 @@ bool PercVoice::renderShaker(float* out, int frames) {
     const float env = (a1 - a2) * norm;
     a1 *= c1;
     a2 *= c2;
-    out[i] = softClip((bp + bm * hp + dry * src) * env * g) * post;
+    out[i] = saturate((bp + bm * hp + dry * src) * env * g) * post;
   }
   noise_.s = ns;
   a1_ = a1;

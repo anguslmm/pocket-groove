@@ -61,11 +61,20 @@ struct TrackRt {
   NoteEvent ratEv;
   PendNote pend[kMaxPend];
   uint8_t trig;
+  // ---- roll (CmdType::Roll) ----
+  uint8_t rollC;                      // 0 = off, else hits per step x2 (1..4)
+  int64_t rollCd;                     // Q32 samples until the next roll hit
+  int64_t rollInt;                    // Q32 samples between hits
+  NoteEvent rollEv;
+  // ---- live recording: the last recorded note, while its key is held ----
+  uint8_t recHeld, recNote, recPattern, recStep;
+  uint32_t recStartQ;                 // quantum counter at its note-on
   // ---- params ----
   uint8_t eff[kParamsPerTrack];       // effective params this quantum (p-lock applied)
   uint8_t mute;                       // cached Project mute
   uint8_t paramsSent;
   uint8_t pMin[kSoundParams], pMax[kSoundParams];   // voice param ranges (for sanitising)
+  uint32_t pHas;                      // bit i: the voice has sound param i (all set when no voice)
   // ---- mixer ----
   int cLevel, cPan;                   // raw values the targets were computed from (-1 = none)
   float tgtL, tgtR;                   // level * pan
@@ -93,7 +102,7 @@ struct State {
 
   // ---- audio -> UI status ----
   std::atomic<bool> aPlaying, aRecording;
-  std::atomic<uint8_t> aPattern, aQueued, aSongSlot;
+  std::atomic<uint8_t> aPattern, aQueued, aSongSlot, aSongRep, aMasterStep, aWritesDone;
   std::atomic<uint8_t> aStep[kNumTracks], aTrig[kNumTracks];
   std::atomic<float> aPeakL, aPeakR, aDuck;
   std::atomic<uint32_t> aRevision;
@@ -109,7 +118,11 @@ struct State {
   bool playing, recording;
   uint8_t curPattern, queued;
   uint8_t songSlot, songRep;
-  bool songFresh;                     // song mode was just switched on: enter slot 0 at the next boundary
+  bool songFresh;                     // song mode was just switched on: enter songStart at the next boundary
+  uint8_t songStart;                  // slot the song starts from (SetSongMode a)
+  uint8_t writesDone;                 // WriteTrack / WritePattern commands consumed
+  uint32_t qCount;                    // quanta processed (record timing)
+  uint32_t absStep;                   // master steps fired since Play (roll phase lock)
   int masterPos, masterNext;
   int64_t gridCd;                     // Q32 samples until the next STRAIGHT 16th grid line
   uint64_t stepLenFP;                 // Q32 samples per 16th
@@ -129,6 +142,7 @@ struct State {
   int delayHalfSamples;
 
   // ---- mixer / FX / master ----
+  bool monoOut;                       // device mode: one bus, mono FX, L == R
   float gainK;                        // per-quantum smoothing coefficient for track gains
   float fxDuckPrev;
   float duckPrev;                     // ducker gain at the end of the previous quantum
@@ -150,6 +164,8 @@ struct State {
   void sanitizeProject();
   void sanitizeTrackSound(int t);
   bool sanitizeStep(int track, Step& s) const;
+  bool sanitizeAll(Project& p) const;
+  bool sanitizeTrack(Project& p, int t) const;
   void paramRange(int track, int idx, int& lo, int& hi) const;
   void cacheVoiceRanges(int t);
 
@@ -174,7 +190,11 @@ struct State {
   void stop();
   void releaseNotes(int t);
   void liveNoteOn(const Command& c);
+  void liveNoteOff(const Command& c);
   void recordNote(int t, const NoteEvent& ev);
+  void startRoll(int t, const Command& c);
+  void rollTick();
+  void writeTrack(int pattern, int track, const TrackPattern* src);
   void afterNoteOn(int t);
   void buildEff(int t);
   void ensureParams(int t);
@@ -208,6 +228,9 @@ void State::init(float sampleRate, Project* p) {
   rng = kDefaultSeed;
   revision = 0;
   faults = 0;
+  monoOut = false;
+  writesDone = 0;
+  qCount = 0;
 
   const float quantaPerSec = sr / float(kQuantum);
   gainK = 1.0f - expf(-1.0f / (0.004f * quantaPerSec));     // 4 ms; init is not real-time
@@ -236,6 +259,8 @@ void State::resetRuntime() {
   songSlot = 0;
   songRep = 0;
   songFresh = false;
+  songStart = 0;
+  absStep = 0;
   masterPos = 0;
   masterNext = 0;
   gridCd = 0;
@@ -248,6 +273,9 @@ void State::resetRuntime() {
     r.ratLeft = 0;
     for (int i = 0; i < kMaxPend; ++i) r.pend[i].active = 0;
     r.trig = 0;
+    r.rollC = 0;
+    r.rollCd = r.rollInt = 0;
+    r.recHeld = 0;
     r.paramsSent = 0;
     r.mute = 0;
     r.cLevel = r.cPan = -1;
@@ -277,10 +305,12 @@ void State::resetFx() {
 
 void State::cacheVoiceRanges(int t) {
   TrackRt& r = tr[t];
+  r.pHas = voice[t] ? 0u : 0xFFFFFFFFu;
   for (int i = 0; i < kSoundParams; ++i) {
     const ParamInfo* info = voice[t] ? voice[t]->paramInfo(i) : nullptr;
     r.pMin[i] = info ? info->min : 0;
     r.pMax[i] = info ? info->max : 255;
+    if (info) r.pHas |= 1u << i;
   }
 }
 
@@ -293,61 +323,98 @@ void State::paramRange(int track, int idx, int& lo, int& hi) const {
 }
 
 // Clamp one step to the documented field ranges. Returns true if it changed.
+// DECISION: unknown flag bits are cleared, gate 0 becomes 1, a chord on a
+// track other than the lead is dropped, and a p-lock naming a param that does
+// not exist (unused voice slot, reserved mixer slot) is removed.
 bool State::sanitizeStep(int track, Step& s) const {
   Step o = s;
   if (s.note > 127) s.note = 127;
+  s.flags &= uint8_t(kStepOn | kStepAccent | kStepSlide | kStepRatchetMask);
   if (s.vel < 1) s.vel = 1;
   if (s.vel > 127) s.vel = 127;
+  if (s.gate < 1) s.gate = 1;
   if (s.prob > 100) s.prob = 100;
-  if (s.chord >= kChordNum) s.chord = 0;
+  if (s.chord >= kChordNum || track != kTrackLead) s.chord = 0;
   if (s.lockParam > kParamsPerTrack) s.lockParam = 0;
   if (s.lockParam) {
-    int lo, hi;
-    paramRange(track, s.lockParam - 1, lo, hi);
-    s.lockValue = uint8_t(clampi(s.lockValue, lo, hi));
+    const int idx = s.lockParam - 1;
+    const bool exists = idx < kSoundParams ? (tr[track].pHas >> idx) & 1u : mixParamInfo(track, idx) != nullptr;
+    if (!exists) {
+      s.lockParam = 0;
+    } else {
+      int lo, hi;
+      paramRange(track, idx, lo, hi);
+      s.lockValue = uint8_t(clampi(s.lockValue, lo, hi));
+    }
   }
   return std::memcmp(&o, &s, sizeof(Step)) != 0;
 }
 
-void State::sanitizeTrackSound(int t) {
+// One track's settings and its steps in every pattern.
+bool State::sanitizeTrack(Project& p, int t) const {
   bool changed = false;
-  TrackSettings& ts = proj->tracks[t];
+  TrackSettings& ts = p.tracks[t];
   for (int i = 0; i < kParamsPerTrack; ++i) {
+    const bool exists = i < kSoundParams ? (tr[t].pHas >> i) & 1u : mixParamInfo(t, i) != nullptr;
     int lo, hi;
     paramRange(t, i, lo, hi);
-    const uint8_t v = uint8_t(clampi(ts.params[i], lo, hi));
+    const uint8_t v = exists ? uint8_t(clampi(ts.params[i], lo, hi)) : 0;
     if (v != ts.params[i]) { ts.params[i] = v; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
-  for (int p = 0; p < kNumPatterns; ++p) {
-    TrackPattern& tp = proj->patterns[p].tracks[t];
+  for (int pt = 0; pt < kNumPatterns; ++pt) {
+    TrackPattern& tp = p.patterns[pt].tracks[t];
     const uint8_t len = uint8_t(sanitizeLength(tp.length));
     if (len != tp.length) { tp.length = len; changed = true; }
-    for (int s = 0; s < kMaxSteps; ++s) changed |= sanitizeStep(t, tp.steps[s]);
+    for (int i = 0; i < kMaxSteps; ++i) changed |= sanitizeStep(t, tp.steps[i]);
   }
-  if (changed) bump();
+  return changed;
+}
+
+// Everything. Shared by the public Engine::sanitizeProject and the engine's
+// own checks at init()/resume().
+bool State::sanitizeAll(Project& p) const {
+  bool changed = false;
+  const uint8_t magic[4] = {'P', 'G', 'R', 'V'};
+  if (std::memcmp(p.magic, magic, 4) != 0) { std::memcpy(p.magic, magic, 4); changed = true; }
+  if (p.version != kProjectVersion) { p.version = kProjectVersion; changed = true; }
+  // Name: printable ASCII up to the first NUL, NUL padded after it, and
+  // always NUL terminated.
+  {
+    bool end = false;
+    for (int i = 0; i < int(sizeof(p.name)); ++i) {
+      char c = p.name[i];
+      if (i == int(sizeof(p.name)) - 1 || c == 0) end = true;
+      const char want = end ? char(0) : ((c < 0x20 || c > 0x7E) ? '?' : c);
+      if (want != c) { p.name[i] = want; changed = true; }
+    }
+  }
+  if (p.songMode > 1) { p.songMode = 1; changed = true; }
+  for (int i = 0; i < kNumGlobals; ++i) {
+    const ParamInfo* info = Engine::globalParamInfo(i);
+    const uint8_t v = info ? uint8_t(clampi(p.globals[i], info->min, info->max)) : 0;
+    if (v != p.globals[i]) { p.globals[i] = v; changed = true; }
+  }
+  for (int i = 0; i < kSongSlots; ++i) {
+    if (p.song[i].pattern >= kNumPatterns) { p.song[i].pattern = kNumPatterns - 1; changed = true; }
+  }
+  for (int pt = 0; pt < kNumPatterns; ++pt) {
+    const uint8_t len = uint8_t(sanitizeLength(p.patterns[pt].length));
+    if (len != p.patterns[pt].length) { p.patterns[pt].length = len; changed = true; }
+  }
+  for (int t = 0; t < kNumTracks; ++t) changed |= sanitizeTrack(p, t);
+  return changed;
+}
+
+void State::sanitizeTrackSound(int t) {
+  if (sanitizeTrack(*proj, t)) bump();
 }
 
 // The engine trusts the Project after this: every field it indexes with or
 // maps to a coefficient is inside its documented range. Runs at init(), after
 // resume() (a new project may have been loaded) and per command afterwards.
 void State::sanitizeProject() {
-  bool changed = false;
-  for (int i = 0; i < kGNumUsed; ++i) {
-    const ParamInfo* info = Engine::globalParamInfo(i);
-    const uint8_t v = uint8_t(clampi(proj->globals[i], info->min, info->max));
-    if (v != proj->globals[i]) { proj->globals[i] = v; changed = true; }
-  }
-  if (proj->songMode > 1) { proj->songMode = 1; changed = true; }
-  for (int i = 0; i < kSongSlots; ++i) {
-    if (proj->song[i].pattern >= kNumPatterns) { proj->song[i].pattern = kNumPatterns - 1; changed = true; }
-  }
-  for (int p = 0; p < kNumPatterns; ++p) {
-    const uint8_t len = uint8_t(sanitizeLength(proj->patterns[p].length));
-    if (len != proj->patterns[p].length) { proj->patterns[p].length = len; changed = true; }
-  }
-  if (changed) bump();
-  for (int t = 0; t < kNumTracks; ++t) sanitizeTrackSound(t);
+  if (sanitizeAll(*proj)) bump();
 }
 
 // ------------------------------------------------------------- globals ----
@@ -371,8 +438,10 @@ void State::refreshGlobals() {
     const uint64_t srQ8 = uint64_t(sr * 256.0f + 0.5f);
     stepLenFP = ((srQ8 * 15u) << 24) / uint64_t(bpm);
     stepTicks = int32_t(stepLenFP >> 24);
-    for (int t = 0; t < kNumTracks; ++t)
+    for (int t = 0; t < kNumTracks; ++t) {
       if (voice[t]) voice[t]->setTempo(float(bpm));
+      if (tr[t].rollC) tr[t].rollInt = int64_t((stepLenFP * 2u) / tr[t].rollC);
+    }
   }
   swing = v[kGSwing];
 
@@ -419,8 +488,8 @@ void State::drainCommands() {
     const Command c = queue[h & (kQueueSize - 1)];
     ++h;
     switch (c.type) {
-      case CmdType::ClearPattern: case CmdType::CopyPattern: budget -= 64; break;
-      case CmdType::ClearTrack: case CmdType::CopyTrack: budget -= 8; break;
+      case CmdType::ClearPattern: case CmdType::CopyPattern: case CmdType::WritePattern: budget -= 64; break;
+      case CmdType::ClearTrack: case CmdType::CopyTrack: case CmdType::WriteTrack: budget -= 8; break;
       default: budget -= 1; break;
     }
     apply(c);
@@ -476,7 +545,7 @@ void State::apply(const Command& c) {
       if (c.a < kNumTracks) liveNoteOn(c);
       break;
     case CmdType::NoteOff:
-      if (c.a < kNumTracks) vOff(c.a, uint8_t(c.b & 127));
+      if (c.a < kNumTracks) liveNoteOff(c);
       break;
     case CmdType::QueuePattern:
       if (c.a >= kNumPatterns) break;
@@ -491,14 +560,17 @@ void State::apply(const Command& c) {
       }
       break;
     case CmdType::SetSongMode:
+      // DECISION: an out-of-range start slot means slot 0. The start slot is
+      // remembered: Play (from the top) in song mode restarts from it too.
       proj->songMode = c.c ? 1 : 0;
       if (proj->songMode) {
+        songStart = c.a < kSongSlots ? c.a : 0;
         if (playing) {
-          songFresh = true;         // enter slot 0 at the next pattern boundary
+          songFresh = true;         // enter songStart at the next pattern boundary
         } else {
-          songSlot = 0; songRep = 0; songFresh = false;
-          if (proj->song[0].repeats) {
-            curPattern = proj->song[0].pattern;
+          songSlot = songStart; songRep = 0; songFresh = false;
+          if (proj->song[songStart].repeats) {
+            curPattern = proj->song[songStart].pattern;
             masterPos = masterNext = 0;
             for (int t = 0; t < kNumTracks; ++t) tr[t].pos = tr[t].next = 0;
           }
@@ -514,6 +586,8 @@ void State::apply(const Command& c) {
       break;
     case CmdType::SetRecord:
       recording = c.c != 0;
+      if (!recording)
+        for (int t = 0; t < kNumTracks; ++t) tr[t].recHeld = 0;
       break;
     case CmdType::ClearTrack: {
       // DECISION: clears the steps, keeps the track's length.
@@ -557,6 +631,112 @@ void State::apply(const Command& c) {
       bump();
       break;
     }
+    case CmdType::Roll:
+      if (c.a < kNumTracks && c.c <= 4) startRoll(c.a, c);
+      break;
+    case CmdType::WriteTrack:
+      // DECISION: writesDone counts every Write command the engine has
+      // CONSUMED (applied, or rejected for a bad address): either way the
+      // engine will never read the buffer again, which is what the UI waits for.
+      if (c.ptr && c.a < kNumPatterns && c.b < kNumTracks) {
+        writeTrack(c.a, c.b, static_cast<const TrackPattern*>(c.ptr));
+        bump();
+      }
+      ++writesDone;
+      break;
+    case CmdType::WritePattern:
+      if (c.ptr && c.a < kNumPatterns) {
+        const Pattern* src = static_cast<const Pattern*>(c.ptr);
+        Pattern& dst = proj->patterns[c.a];
+        dst.length = uint8_t(sanitizeLength(src->length));
+        std::memcpy(dst.reserved, src->reserved, sizeof(dst.reserved));
+        for (int t = 0; t < kNumTracks; ++t) writeTrack(c.a, t, &src->tracks[t]);
+        bump();
+      }
+      ++writesDone;
+      break;
+  }
+}
+
+void State::writeTrack(int pattern, int track, const TrackPattern* src) {
+  TrackPattern& dst = proj->patterns[pattern].tracks[track];
+  std::memcpy(&dst, src, sizeof(TrackPattern));
+  dst.length = uint8_t(sanitizeLength(dst.length));
+  for (int s = 0; s < kMaxSteps; ++s) sanitizeStep(track, dst.steps[s]);
+}
+
+// ---------------------------------------------------------------- roll ----
+
+// DECISION (Roll): the rolling track's own sequenced steps are silenced while
+// the roll is held (note repeat replaces the pattern; the positions and the
+// song keep running), a muted track rolls silently, and the roll survives
+// Play/Stop: it re-locks to the grid when the transport starts and runs free
+// when it stops. c > 4 is out of range and ignored. Hits use the straight
+// (unswung) grid. Synth notes are gated for half the hit interval.
+void State::startRoll(int t, const Command& c) {
+  TrackRt& r = tr[t];
+  if (c.c == 0) {
+    if (r.rollC) {
+      r.rollC = 0;
+      if (!playing) releaseNotes(t);
+    }
+    return;
+  }
+  const bool wasRolling = r.rollC != 0;
+  r.rollC = c.c;
+  r.rollInt = int64_t((stepLenFP * 2u) / c.c);
+  NoteEvent ev;
+  ev.note = c.step.note > 127 ? 127 : c.step.note;
+  ev.vel = uint8_t(clampi(c.step.vel, 1, 127));
+  ev.accent = (c.step.flags & kStepAccent) != 0;
+  ev.slide = false;
+  ev.chord = (t == kTrackLead && c.step.chord < kChordNum) ? c.step.chord : 0;
+  r.rollEv = ev;
+  if (wasRolling && !playing) return;     // rate change while free-running: keep the phase
+  if (!playing) {
+    r.rollCd = 0;                         // free-running: first hit now
+    return;
+  }
+  // Locked to the transport: the next point of the roll grid. The grid
+  // repeats every step (even c) or every two steps (odd c, starting on an
+  // even step since Play).
+  int64_t ref = gridCd;                   // time of the next straight grid line (may be just past)
+  if ((c.c & 1) && (absStep & 1)) ref += int64_t(stepLenFP);
+  int64_t ph = ref % r.rollInt;
+  if (ph < -kHalfQuantumFP) ph += r.rollInt;
+  r.rollCd = ph;
+}
+
+// Once per quantum: fires due roll hits and advances the roll clocks. While
+// playing it runs inside sequencerTick (before pending note-offs are advanced);
+// while stopped it is called on its own and also runs the rolling tracks'
+// note-offs, which the sequencer normally does.
+void State::rollTick() {
+  for (int t = 0; t < kNumTracks; ++t) {
+    TrackRt& r = tr[t];
+    if (!playing) {
+      for (int i = 0; i < kMaxPend; ++i) {
+        PendNote& p = r.pend[i];
+        if (p.active && p.cd < kDueTicks) { vOff(t, p.note); p.active = 0; }
+      }
+    }
+    if (r.rollC) {
+      int guard = 0;
+      while (r.rollCd < kHalfQuantumFP && guard++ < 8) {
+        if (!proj->tracks[t].mute) {
+          const int32_t frac = int32_t(r.rollCd >> 24);
+          int32_t gate = int32_t(r.rollInt >> 25);
+          if (gate < kQuantumTicks) gate = kQuantumTicks;
+          hit(t, r.rollEv, frac + gate, false);
+        }
+        r.rollCd += r.rollInt;
+      }
+      r.rollCd -= kQuantumFP;
+    }
+    if (!playing) {
+      for (int i = 0; i < kMaxPend; ++i)
+        if (r.pend[i].active && r.pend[i].cd > -(1 << 30)) r.pend[i].cd -= kQuantumTicks;
+    }
   }
 }
 
@@ -576,7 +756,12 @@ void State::releaseNotes(int t) {
 void State::play(bool cont) {
   if (cont) {
     // Continue: the next step fires in this quantum, position is kept.
-    if (!playing) { playing = true; gridCd = 0; }
+    if (!playing) {
+      playing = true;
+      gridCd = 0;
+      for (int t = 0; t < kNumTracks; ++t)
+        if (tr[t].rollC) tr[t].rollCd = (tr[t].rollC & 1) && (absStep & 1) ? int64_t(stepLenFP) : 0;
+    }
     return;
   }
   for (int t = 0; t < kNumTracks; ++t) {
@@ -588,13 +773,16 @@ void State::play(bool cont) {
     r.paramsSent = 0;
   }
   if (proj->songMode) {
-    songSlot = 0; songRep = 0; songFresh = false;
-    if (proj->song[0].repeats) curPattern = proj->song[0].pattern;
+    songSlot = songStart; songRep = 0; songFresh = false;
+    if (proj->song[songStart].repeats) curPattern = proj->song[songStart].pattern;
   }
   masterPos = masterNext = 0;
   gridCd = 0;
   sinceFire = 0;
+  absStep = 0;
   playing = true;
+  for (int t = 0; t < kNumTracks; ++t)
+    if (tr[t].rollC) tr[t].rollCd = 0;   // a held roll locks to the downbeat
 }
 
 // DECISION: Stop sends noteOff for every sequenced note that is still gated and
@@ -604,6 +792,7 @@ void State::play(bool cont) {
 void State::stop() {
   playing = false;
   for (int t = 0; t < kNumTracks; ++t) {
+    tr[t].recHeld = 0;
     releaseNotes(t);
     vChoke(t);
     tr[t].lockParam = 0;
@@ -711,7 +900,7 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
   r.supValid = 0;
   r.ratLeft = 0;                                   // ratchets never spill into the next step
 
-  bool fires = (st.flags & kStepOn) && !proj->tracks[t].mute && !suppressed;
+  bool fires = (st.flags & kStepOn) && !proj->tracks[t].mute && !suppressed && !r.rollC;
   if (fires && st.prob < 100) fires = (rand32() % 100u) < st.prob;
 
   if (!fires) {
@@ -770,7 +959,7 @@ uint8_t State::decideNext(bool commit) {
   if (proj->songMode) {
     int slot = songSlot, rep = songRep;
     if (songFresh) {
-      slot = 0; rep = 0;
+      slot = songStart; rep = 0;
     } else {
       ++rep;
       if (rep >= proj->song[slot].repeats) {
@@ -815,6 +1004,22 @@ void State::fireMasterStep() {
 
   if (duckSrc == kDuckBeat && (idx & 3) == 0) duck.trigger();
 
+  // Rolls stay phase-locked: on every even step since Play (a point of every
+  // roll grid) snap the roll clock to the step's exact time, keeping which
+  // hit is next (only the accumulated rounding is removed).
+  if ((absStep & 1) == 0) {
+    const int64_t at = gridCd;            // straight grid line of this (even, unswung) step
+    for (int t = 0; t < kNumTracks; ++t) {
+      TrackRt& r = tr[t];
+      if (!r.rollC || r.rollInt <= 0) continue;
+      int64_t d = (r.rollCd - at) % r.rollInt;
+      if (d > r.rollInt / 2) d -= r.rollInt;
+      if (d < -r.rollInt / 2) d += r.rollInt;
+      r.rollCd -= d;
+    }
+  }
+  ++absStep;
+
   for (int t = 0; t < kNumTracks; ++t) {
     const TrackPattern& tp = pat.tracks[t];
     const int tlen = sanitizeLength(tp.length);
@@ -858,6 +1063,8 @@ void State::sequencerTick() {
       }
     }
   }
+  // 3b. Roll hits.
+  rollTick();
   // 4. Slide-armed notes whose (long) gate ran out without anything to slide into.
   for (int t = 0; t < kNumTracks; ++t) {
     TrackRt& r = tr[t];
@@ -893,6 +1100,32 @@ void State::liveNoteOn(const Command& c) {
   if (playing && recording) recordNote(t, ev);
 }
 
+// DECISION (record gate): only synth tracks track the held key (drums are
+// one-shots). The gate is the held time in quarter-steps of the current tempo,
+// rounded, 1..255. A NoteOff for any other note (e.g. the earlier key of a
+// legato pair released late) changes nothing. Recording stopping or the
+// transport stopping forgets the held note.
+void State::liveNoteOff(const Command& c) {
+  const int t = c.a;
+  const uint8_t note = uint8_t(c.b & 127);
+  vOff(t, note);
+  TrackRt& r = tr[t];
+  if (!r.recHeld || r.recNote != note) return;
+  r.recHeld = 0;
+  if (!playing || !recording) return;
+  int64_t held = int64_t(uint32_t(qCount - r.recStartQ)) * kQuantumTicks;   // ticks
+  if (held > (int64_t(1) << 40)) held = int64_t(1) << 40;
+  const int64_t unit = stepTicks > 0 ? stepTicks : 1;                       // ticks per step
+  int64_t g = (held * kGateUnitsPerStep + unit / 2) / unit;
+  if (g < 1) g = 1;
+  if (g > 255) g = 255;
+  Step& s = proj->patterns[r.recPattern].tracks[t].steps[r.recStep];
+  if (s.gate != uint8_t(g)) {
+    s.gate = uint8_t(g);
+    bump();
+  }
+}
+
 // DECISION (record quantise): the note goes to whichever step's fire time
 // (swing included) is nearer: the step this track last played, or the one it
 // is about to play. Ties go to the step already played. If it lands on the
@@ -901,7 +1134,10 @@ void State::liveNoteOn(const Command& c) {
 // the upcoming step is step 0 of whatever pattern plays next (queued pattern /
 // song slot), because that is the downbeat the player was aiming at.
 // Drums: step on + velocity (tuning, p-lock, prob, ratchet untouched).
-// Synths: note, velocity, accent/slide as played, default gate, chord (lead).
+// Synths: note, velocity, accent/slide as played, default gate (replaced by
+// the held time at NoteOff), chord (lead). Legato: if the previously recorded
+// note on this synth track is still held and the new note lands on a
+// different step, that previous step gets kStepSlide.
 void State::recordNote(int t, const NoteEvent& ev) {
   TrackRt& r = tr[t];
   const int len = curPatternLen();
@@ -920,6 +1156,10 @@ void State::recordNote(int t, const NoteEvent& ev) {
     r.supPattern = uint8_t(pattern);
     r.supStep = uint8_t(step);
   }
+  if (isSynthTrack(t) && r.recHeld && (r.recPattern != pattern || r.recStep != step)) {
+    Step& prev = proj->patterns[r.recPattern].tracks[t].steps[r.recStep];
+    if (prev.flags & kStepOn) prev.flags |= kStepSlide;
+  }
   Step& s = proj->patterns[pattern].tracks[t].steps[step];
   s.vel = ev.vel;
   if (isSynthTrack(t)) {
@@ -928,6 +1168,11 @@ void State::recordNote(int t, const NoteEvent& ev) {
                       (ev.slide ? kStepSlide : 0));
     s.gate = kDefaultStep.gate;
     s.chord = ev.chord;
+    r.recHeld = 1;
+    r.recNote = ev.note;
+    r.recPattern = uint8_t(pattern);
+    r.recStep = uint8_t(step);
+    r.recStartQ = qCount;
   } else {
     s.flags |= kStepOn;
   }
@@ -936,18 +1181,21 @@ void State::recordNote(int t, const NoteEvent& ev) {
 
 // --------------------------------------------------------------- render ----
 
-// MONO OUTPUT (not built): the device's codec plays (L+R)/2. A "mono output"
-// switch would live here as a flag on State and cut three things:
-//   1. the track loop below accumulates one bus with gain (gl+gr)/2 (pan is
-//      moot) instead of busL/busR;
-//   2. the FX return needs only the mono sum: Delay emits e1+e2 (its two
-//      taps, no width law), Reverb skips its side tap set (oR) and upR goes;
-//   3. MasterBus::process runs filter/drive/limiter on one channel and writes
-//      the sample to both int16 slots.
-// The mono sum of the stereo engine is already exact for the delay and the
-// reverb (see delay.h / reverb.h), so the switch changes cost, not sound.
+// MONO OUTPUT (device mode, Engine::setMonoOutput): the codec plays one
+// channel, so the whole chain runs once:
+//   1. every track accumulates into one bus at its centred gain (pan is
+//      ignored), reading only outL of mono voices and (L+R)/2 of the others;
+//   2. the FX return is only the mono sum: Delay emits e1+e2 (its two taps,
+//      no width law), Reverb skips its side tap set, one upsampler;
+//   3. MasterBus runs filter/drive/limiter on one channel and writes the
+//      sample to both int16 slots.
+// For centred sources the result equals (L+R)/2 of the stereo engine (the
+// delay and reverb mono sums are exact by construction) except where the
+// master's nonlinear stages (drive, limiter knee) act differently on L/R
+// than on their sum.
 void State::render(int16_t* out) {
   float busL[kQuantum], busR[kQuantum], sD[kQuantum], sR[kQuantum];
+  const bool mono = monoOut;
   for (int i = 0; i < kQuantum; ++i) { busL[i] = 0.0f; busR[i] = 0.0f; sD[i] = 0.0f; sR[i] = 0.0f; }
   const float duckEnd = duck.tick();
   const float invN = 1.0f / float(kQuantum);
@@ -973,7 +1221,7 @@ void State::render(int16_t* out) {
       sends = r.hasSends != 0;
     } else {
       r.mixKey = key;
-      const int level = r.eff[kMixLevel], pan = r.eff[kMixPan];
+      const int level = r.eff[kMixLevel], pan = mono ? 64 : r.eff[kMixPan];
       if (level != r.cLevel || pan != r.cPan) {
         r.cLevel = level;
         r.cPan = pan;
@@ -1010,23 +1258,71 @@ void State::render(int16_t* out) {
     if (v && v->active()) {
       float L[kQuantum], R[kQuantum];
       v->render(L, R, kQuantum);
+      // Mono voices write L == R: read only L.
+      const bool vMono = v->mono();
+      const float* Rp = vMono ? L : R;
       // A voice that went non-finite (or absurdly large) is silenced and
       // choked instead of poisoning the buses and FX states.
-      if (!(absf(L[kQuantum - 1]) < 64.0f) || !(absf(R[kQuantum - 1]) < 64.0f) ||
-          !(absf(L[0]) < 64.0f) || !(absf(R[0]) < 64.0f)) {
+      if (!(absf(L[kQuantum - 1]) < 64.0f) || !(absf(Rp[kQuantum - 1]) < 64.0f) ||
+          !(absf(L[0]) < 64.0f) || !(absf(Rp[0]) < 64.0f)) {
         v->choke();
         ++faults;
+      } else if (mono) {
+        // One bus. Centred gain (endL == endR here); a stereo voice
+        // contributes (L+R)/2. Send = x * send gain, the same as the stereo
+        // path's (a + b) * send / 2 for a centred source.
+        float M[kQuantum];
+        const float* x = L;
+        if (!vMono) {
+          for (int i = 0; i < kQuantum; ++i) M[i] = 0.5f * (L[i] + R[i]);
+          x = M;
+        }
+        if (steady) {
+          const float g = endL;
+          if (!sends) {
+            for (int i = 0; i < kQuantum; ++i) busL[i] += x[i] * g;
+          } else {
+            const float gd = endD, gv = endR2;
+            for (int i = 0; i < kQuantum; ++i) {
+              const float a = x[i] * g;
+              busL[i] += a;
+              sD[i] += a * gd;
+              sR[i] += a * gv;
+            }
+          }
+        } else {
+          float g = r.outL, gd = r.sendD, gv = r.sendR;
+          const float dg = (endL - g) * invN, dd = (endD - gd) * invN, dvv = (endR2 - gv) * invN;
+          if (sends) {
+            for (int i = 0; i < kQuantum; ++i) {
+              g += dg; gd += dd; gv += dvv;
+              const float a = x[i] * g;
+              busL[i] += a;
+              sD[i] += a * gd;
+              sR[i] += a * gv;
+            }
+          } else {
+            for (int i = 0; i < kQuantum; ++i) {
+              g += dg;
+              busL[i] += x[i] * g;
+            }
+          }
+        }
+        if (sends) {
+          if (endD > 0.0f || r.sendD > 0.0f) dSend = true;
+          if (endR2 > 0.0f || r.sendR > 0.0f) rSend = true;
+        }
       } else {
         if (steady && !sends) {
           const float gl = endL, gr = endR;
           for (int i = 0; i < kQuantum; ++i) {
             busL[i] += L[i] * gl;
-            busR[i] += R[i] * gr;
+            busR[i] += Rp[i] * gr;
           }
         } else if (steady) {
           const float gl = endL, gr = endR, gd = 0.5f * endD, gv = 0.5f * endR2;
           for (int i = 0; i < kQuantum; ++i) {
-            const float a = L[i] * gl, b = R[i] * gr;
+            const float a = L[i] * gl, b = Rp[i] * gr;
             busL[i] += a;
             busR[i] += b;
             const float m = a + b;
@@ -1041,7 +1337,7 @@ void State::render(int16_t* out) {
             const float gd = 0.5f * endD, gv = 0.5f * endR2;
             for (int i = 0; i < kQuantum; ++i) {
               gl += dl; gr += dr;
-              const float a = L[i] * gl, b = R[i] * gr;
+              const float a = L[i] * gl, b = Rp[i] * gr;
               busL[i] += a;
               busR[i] += b;
               const float m = a + b;
@@ -1052,7 +1348,7 @@ void State::render(int16_t* out) {
             for (int i = 0; i < kQuantum; ++i) {
               gl += dl; gr += dr;
               busL[i] += L[i] * gl;
-              busR[i] += R[i] * gr;
+              busR[i] += Rp[i] * gr;
             }
           }
         } else {
@@ -1062,7 +1358,7 @@ void State::render(int16_t* out) {
           const float dd = (0.5f * endD - gd) * invN, dvv = (0.5f * endR2 - gv) * invN;
           for (int i = 0; i < kQuantum; ++i) {
             gl += dl; gr += dr; gd += dd; gv += dvv;
-            const float a = L[i] * gl, b = R[i] * gr;
+            const float a = L[i] * gl, b = Rp[i] * gr;
             busL[i] += a;
             busR[i] += b;
             const float m = a + b;
@@ -1107,11 +1403,13 @@ void State::render(int16_t* out) {
     for (int i = 0; i < kHalf; ++i) { wL[i] = 0.0f; wR[i] = 0.0f; }
     if (runDelay) {
       decD.process(sD, in, kHalf);
-      delay.process(in, wL, wR, kHalf);
+      if (mono) delay.processMono(in, wL, kHalf);
+      else delay.process(in, wL, wR, kHalf);
     }
     if (runReverb) {
       decR.process(sR, in, kHalf);
-      reverb.process(in, wL, wR, kHalf);
+      if (mono) reverb.processMono(in, wL, kHalf);
+      else reverb.process(in, wL, wR, kHalf);
     }
     if (!(absf(wL[kHalf - 1]) < 64.0f) || !(absf(wR[kHalf - 1]) < 64.0f)) {
       delay.reset();
@@ -1120,13 +1418,20 @@ void State::render(int16_t* out) {
       ++faults;
     } else {
       upL.process(wL, fL, kHalf);
-      upR.process(wR, fR, kHalf);
       float g = fxDuckPrev;
       const float dg = (fxEnd - g) * invN;
-      for (int i = 0; i < kQuantum; ++i) {
-        g += dg;
-        busL[i] += fL[i] * g;
-        busR[i] += fR[i] * g;
+      if (mono) {
+        for (int i = 0; i < kQuantum; ++i) {
+          g += dg;
+          busL[i] += fL[i] * g;
+        }
+      } else {
+        upR.process(wR, fR, kHalf);
+        for (int i = 0; i < kQuantum; ++i) {
+          g += dg;
+          busL[i] += fL[i] * g;
+          busR[i] += fR[i] * g;
+        }
       }
     }
     fxRunning = true;
@@ -1137,7 +1442,8 @@ void State::render(int16_t* out) {
   fxDuckPrev = fxEnd;
 
   master.setParams(mFilter, mReso, mDrive, mVolume);
-  master.process(busL, busR, out, kQuantum, &peakL, &peakR);
+  if (mono) master.processMono(busL, out, kQuantum, &peakL, &peakR);
+  else master.process(busL, busR, out, kQuantum, &peakL, &peakR);
 }
 
 void State::publishStatus() {
@@ -1147,6 +1453,9 @@ void State::publishStatus() {
   aPattern.store(curPattern, rx);
   aQueued.store(queued, rx);
   aSongSlot.store(songSlot, rx);
+  aSongRep.store(songRep, rx);
+  aMasterStep.store(uint8_t(masterPos), rx);
+  aWritesDone.store(writesDone, rx);
   for (int t = 0; t < kNumTracks; ++t) {
     aStep[t].store(tr[t].pos, rx);
     aTrig[t].store(tr[t].trig, rx);
@@ -1169,9 +1478,11 @@ void State::quantum(int16_t* out) {
   drainCommands();
   refreshGlobals();
   if (playing) sequencerTick();
+  else rollTick();
   for (int t = 0; t < kNumTracks; ++t) ensureParams(t);
   render(out);
   publishStatus();
+  ++qCount;
 }
 
 }  // namespace engine_detail
@@ -1201,10 +1512,25 @@ void Engine::setVoice(int track, Voice* voice) {
   engine_detail::State& s = *impl_;
   s.voice[track] = voice;
   s.cacheVoiceRanges(track);
+  if (voice) voice->setMonoOutput(s.monoOut);
   if (voice && s.gValid) voice->setTempo(float(s.bpm));
   if (s.inited && s.proj) s.sanitizeTrackSound(track);
   s.tr[track].paramsSent = 0;
 }
+
+// DECISION: switching mode clears the FX tails and the master's filter
+// states (the mono path keeps only one channel's state), so call it before
+// audio starts, as engine.h says.
+void Engine::setMonoOutput(bool mono) {
+  engine_detail::State& s = *impl_;
+  s.monoOut = mono;
+  for (int t = 0; t < kNumTracks; ++t)
+    if (s.voice[t]) s.voice[t]->setMonoOutput(mono);
+  s.resetFx();
+  for (int t = 0; t < kNumTracks; ++t) { s.tr[t].cPan = -1; s.tr[t].settled = 0; }
+}
+
+void Engine::sanitizeProject(Project& p) const { impl_->sanitizeAll(p); }
 
 void Engine::initProject(Project& p) const {
   std::memset(&p, 0, sizeof(Project));
@@ -1308,6 +1634,9 @@ EngineStatus Engine::status() {
   st.pattern = s.aPattern.load(rx);
   st.queuedPattern = s.aQueued.load(rx);
   st.songSlot = s.aSongSlot.load(rx);
+  st.songRepeat = s.aSongRep.load(rx);
+  st.masterStep = s.aMasterStep.load(rx);
+  st.writesDone = s.aWritesDone.load(rx);
   for (int t = 0; t < kNumTracks; ++t) {
     st.step[t] = s.aStep[t].load(rx);
     st.trig[t] = s.aTrig[t].load(rx);
@@ -1348,6 +1677,9 @@ size_t delayRamBytes() { return sizeof(Delay); }
 size_t reverbRamBytes() { return sizeof(Reverb); }
 int delayTimeSamples() { return g_state ? 2 * g_state->delayHalfSamples : 0; }
 bool fxIdle() { return g_state ? !g_state->fxRunning : true; }
+void setRumbleFilterBypass(bool bypass) {
+  if (g_state) g_state->master.setRumbleBypass(bypass);
+}
 uint32_t faultCount() { return g_state ? g_state->faults + g_state->master.faults() : 0; }
 
 }  // namespace engine_detail

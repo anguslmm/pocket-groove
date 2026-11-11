@@ -1,0 +1,27 @@
+# MIX view (docs/ux/mix*.png)
+demo
+down fn
+tap h
+up fn
+tap 0
+tap spc
+until 6 6
+shot mix
+
+demo
+param 2 25 54
+param 3 25 76
+param 4 25 50
+param 5 25 84
+tap 0
+tap b
+tap spc
+until 6 6
+shot mix-pan
+
+demo
+tap 0
+tap x
+tap spc
+until 6 6
+shot mix-duck

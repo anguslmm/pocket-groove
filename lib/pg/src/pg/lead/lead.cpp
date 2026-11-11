@@ -26,10 +26,10 @@ const ParamInfo kInfo[kNumParams] = {
     {"WAVE", "Osc1 Wave", 0, kNumWaves - 1, kWaveSaw, ParamFormat::Enum, kWaveNames},
     {"SHP", "Shape", 0, 127, 0, ParamFormat::Number, nullptr},
     {"DET", "Detune", 0, 127, 56, ParamFormat::Number, nullptr},
-    {"WID", "Width", 0, 127, 96, ParamFormat::Percent, nullptr},
-    // ---- page 2: envelopes + filter
-    {"ATK", "Attack", 0, 127, 0, ParamFormat::Number, nullptr},
     {"DCY", "Decay", 0, 127, 70, ParamFormat::Number, nullptr},
+    // ---- page 2: envelopes + filter (stereo width here: the device is mono)
+    {"ATK", "Attack", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"WID", "Width", 0, 127, 96, ParamFormat::Percent, nullptr},
     {"SUS", "Sustain", 0, 127, 80, ParamFormat::Number, nullptr},
     {"REL", "Release", 0, 127, 44, ParamFormat::Number, nullptr},
     {"FATK", "Env Attack", 0, 127, 0, ParamFormat::Number, nullptr},

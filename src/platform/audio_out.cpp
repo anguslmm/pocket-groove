@@ -102,23 +102,48 @@ bool regRead(uint8_t reg, uint8_t* val) {
 }
 
 // The DAC bring-up M5Unified 0.2.29 uses for this board
-// (_speaker_enabled_cb_cardputer_adv), with our volume instead of 0 dB.
+// (_speaker_enabled_cb_cardputer_adv, M5Unified.inl), with two differences:
+//  * the DAC volume is written as 0x00 (muted) here and then ramped to the
+//    target by rampVolume(), so the output does not jump to full level;
+//  * reg 0x09 (DAC serial-port format) is written explicitly. M5Unified relies
+//    on its power-on value (0x00), but the codec is NOT reset by an ESP32
+//    reboot, so a value left by the smoke test's reg-0x09 experiment would
+//    otherwise survive a warm reset and silently change the slot tests.
 // The board has no MCLK line: reg 0x01 selects BCLK as the codec master clock
-// and reg 0x02 multiplies it by 8, so 32 BCLK per frame (16-bit stereo slots)
-// gives the codec its 256 fs clock at any sample rate.
-bool es8311DacInit(uint8_t volume) {
+// and reg 0x02 (PRE_MULT bits 4:3 = 3) multiplies it by 8, so 32 BCLK per frame
+// (16-bit stereo slots) gives the codec its 256 fs clock at any sample rate
+// (44.1 kHz: BCLK 1.4112 MHz -> 11.29 MHz; 32 kHz: 1.024 MHz -> 8.192 MHz).
+uint8_t s_sdpIn = 0x00;   // reg 0x09 value to (re)apply; power-on default
+
+bool es8311DacInit() {
   static const uint8_t seq[][2] = {
     {0x00, 0x80},   // reset released, chip state machine on
     {0x01, 0xB5},   // clock manager: MCLK source = BCLK, DAC clocks on
     {0x02, 0x18},   // clock manager: multiply x8
+    {0x32, 0x00},   // DAC volume muted until rampVolume()
     {0x0D, 0x01},   // power up analog circuitry
     {0x12, 0x00},   // power up DAC
     {0x13, 0x10},   // enable output to the headphone driver
+    {0x37, 0x08},   // bypass DAC equaliser
   };
   bool ok = true;
   for (auto& r : seq) ok = regWrite(r[0], r[1]) && ok;
-  ok = regWrite(0x32, volume) && ok;   // DAC volume
-  ok = regWrite(0x37, 0x08) && ok;     // bypass DAC equaliser
+  ok = regWrite(0x09, s_sdpIn) && ok;
+  return ok;
+}
+
+// Steps reg 0x32 from `from` to `to` in 4 dB steps, ~1 ms apart (UI thread).
+// Reg 0x37 = 0x08 leaves the codec's own volume ramp off, so without this a
+// start/stop or a rate/backend switch jumps straight to/from full level.
+bool rampVolume(uint8_t from, uint8_t to) {
+  int v = from;
+  bool ok = true;
+  while (v != to) {
+    const int d = static_cast<int>(to) - v;
+    v += (d > 8) ? 8 : (d < -8) ? -8 : d;
+    ok = regWrite(0x32, static_cast<uint8_t>(v)) && ok;
+    delay(1);
+  }
   return ok;
 }
 
@@ -282,14 +307,14 @@ bool startDirect() {
   // Codec after the clock is up (it is clocked from BCLK). A missing or mute
   // codec is reported but does not stop the I2S stream: timing tests still work.
   delay(10);
-  s.codecOk = es8311DacInit(s.cfg.volumeReg);
+  s.codecOk = es8311DacInit();            // muted; begin() ramps up once the task runs
   if (!s.codecOk) setError("ES8311 did not ACK on I2C 0x18");
   return true;
 }
 
 void stopDirect() {
   if (!s.tx) return;
-  if (s.codecOk) regWrite(0x32, 0x00);     // mute before the clock stops (the codec clicks otherwise)
+  if (s.codecOk) regWrite(0x32, 0x00);     // muted before the clock stops (end() already ramped down)
   i2s_channel_disable(s.tx);
   i2s_del_channel(s.tx);
   s.tx = nullptr;
@@ -332,8 +357,11 @@ bool startM5() {
     setError("M5.Speaker.begin failed");
     return false;
   }
-  uint8_t id = 0;
-  s.codecOk = regRead(0xFD, &id) && regWrite(0x32, s.cfg.volumeReg);
+  // Re-run our own init on top: identical registers, but it also covers a
+  // board that M5Unified did not identify as the Adv (no codec callback then),
+  // restores reg 0x09 and starts muted so the volume can be ramped. The mixer
+  // only sends zeros until the audio task starts.
+  s.codecOk = es8311DacInit();            // muted; begin() ramps up once the task runs
   if (!s.codecOk) setError("ES8311 did not ACK on I2C 0x18");
   return true;
 }
@@ -369,11 +397,17 @@ bool begin(const Config& cfgIn, RenderFn render, void* user) {
     return false;
   }
   s.running = true;
+  // Fade in only now that real samples flow (a signal may already be playing
+  // across a rate/backend switch).
+  if (s.codecOk) rampVolume(0x00, s.cfg.volumeReg);
   return true;
 }
 
 void end() {
   if (!s.running) return;
+  // Fade out while the signal is still playing: cutting the task mid-waveform
+  // (or stopping the clock) at full level is an audible click.
+  if (s.codecOk) rampVolume(s.cfg.volumeReg, 0x00);
   stopTask();                              // join first: nobody is inside the driver afterwards
   if (s.cfg.backend == Backend::DirectI2S) stopDirect(); else stopM5();
   s.running = false;
@@ -401,10 +435,17 @@ uint8_t volumeReg() { return s.cfg.volumeReg; }
 float volumeDb() { return (static_cast<int>(s.cfg.volumeReg) - 0xBF) * 0.5f; }
 
 bool codecInit() {
-  s.codecOk = es8311DacInit(s.cfg.volumeReg);
+  if (s.running && s.codecOk) rampVolume(s.cfg.volumeReg, 0x00);   // the init mutes: fade first
+  s.codecOk = es8311DacInit();
+  if (s.codecOk && s.running) rampVolume(0x00, s.cfg.volumeReg);
+  else if (s.codecOk) regWrite(0x32, s.cfg.volumeReg);
   return s.codecOk;
 }
-bool codecWrite(uint8_t reg, uint8_t value) { return regWrite(reg, value); }
+bool codecWrite(uint8_t reg, uint8_t value) {
+  const bool ok = regWrite(reg, value);
+  if (ok && reg == 0x09) s_sdpIn = value;   // keep it across re-inits / rate and backend switches
+  return ok;
+}
 bool codecRead(uint8_t reg, uint8_t* value) { return regRead(reg, value); }
 
 Stats stats() {

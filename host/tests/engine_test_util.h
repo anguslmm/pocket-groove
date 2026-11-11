@@ -240,6 +240,9 @@ struct Rig {
     eng.initProject(proj);
     proj.globals[pg::kGTempo] = uint8_t(bpm);
     eng.init(sr, &proj);
+    // These rigs measure gains with DC probes: bypass the master's 20 Hz
+    // rumble high-pass (tested on its own in test_engine_fx).
+    pg::engine_detail::setRumbleFilterBypass(true);
   }
   // Neutral mixer: unity level, centre, no sends, no duck; ducker off; FX-free master.
   void neutralMix() {

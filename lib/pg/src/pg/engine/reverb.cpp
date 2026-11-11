@@ -90,7 +90,8 @@ void Reverb::setParams(float rt60, float dampCoef) {
   outGain_ = 0.42f * clampf(q, 0.5f, 1.6f) / kScale;
 }
 
-void Reverb::process(const float* in, float* outL, float* outR, int n) {
+template <bool kMono>
+void Reverb::run(const float* in, float* outL, float* outR, int n) {
   float s[kMaxBlock];
   // Input: scale to int16 units, high-pass (keep kick/bass mud out of the tank).
   {
@@ -149,7 +150,15 @@ void Reverb::process(const float* in, float* outL, float* outR, int n) {
     float lp = lp_[j];
     const float g = g_[j], k = damp_;
     const float sl = kTapSignL[j], sr = kTapSignR[j];
-    if (p + n <= len && pl + n <= len && pr + n <= len) {
+    if (kMono && p + n <= len && pl + n <= len) {
+      // Mono: the side tap set is never needed.
+      const int16_t *bp = buf + p, *bl = buf + pl;
+      for (int i = 0; i < n; ++i) {
+        lp += k * (float(bp[i]) - lp);
+        f[j][i] = lp * g;
+        oL[i] += sl * float(bl[i]);
+      }
+    } else if (!kMono && p + n <= len && pl + n <= len && pr + n <= len) {
       // No wrap inside this block for any of the three read heads (~98 %).
       const int16_t *bp = buf + p, *bl = buf + pl, *br = buf + pr;
       for (int i = 0; i < n; ++i) {
@@ -176,7 +185,10 @@ void Reverb::process(const float* in, float* outL, float* outR, int n) {
   // calibrated level, whatever the side does (two decorrelated taps summed
   // directly would lose ~3 dB and comb at low frequencies). In stereo the
   // side adds width (L/R correlation (1-w^2)/(1+w^2) = 0.28) and +1.9 dB.
-  {
+  if (kMono) {
+    const float gm = outGain_;
+    for (int i = 0; i < n; ++i) outL[i] += oL[i] * gm;
+  } else {
     const float gm = outGain_, gs = kSideWidth * outGain_;
     for (int i = 0; i < n; ++i) {
       const float m = oL[i] * gm, sd = oR[i] * gs;
@@ -247,6 +259,9 @@ void Reverb::process(const float* in, float* outL, float* outR, int n) {
     }
   }
 }
+
+template void Reverb::run<false>(const float*, float*, float*, int);
+template void Reverb::run<true>(const float*, float*, float*, int);
 
 }  // namespace engine_detail
 }  // namespace pg

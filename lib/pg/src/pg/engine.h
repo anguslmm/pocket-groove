@@ -82,6 +82,17 @@ class Engine {
   // all patterns length 16 with kDefaultStep in every slot.
   void initProject(Project& p) const;
 
+  // Clamp every field of a loaded (untrusted) project into its legal range:
+  // magic/version, NUL-terminated name, songMode, song slots, globals and
+  // track params within their ParamInfo min/max (unused slots 0), mute 0/1,
+  // pattern/track lengths 1..64, and every step (note <= 127, vel 1..127,
+  // gate >= 1, prob <= 100, known flag bits only, chord < kChordNum on the
+  // lead and 0 elsewhere, lockParam <= 32 naming a param that exists, with
+  // lockValue in that param's range). Not real-time; call after setVoice()
+  // (param ranges come from the voices) and before handing the project to
+  // the engine. A valid project is left byte-identical.
+  void sanitizeProject(Project& p) const;
+
   // Metadata for the generic UI. index 0..23 -> voice, 24..31 -> mixer table.
   const ParamInfo* trackParamInfo(int track, int index) const;
   static const ParamInfo* globalParamInfo(int id);

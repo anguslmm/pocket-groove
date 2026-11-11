@@ -32,7 +32,11 @@ struct Config {
   Backend  backend     = Backend::DirectI2S;
   uint8_t  core        = 0;            // core the audio task is pinned to (UI/loop runs on 1)
   uint8_t  dmaBufCount = 4;            // DirectI2S: DMA buffers of kBlockFrames frames (3..16)
-  uint8_t  volumeReg   = 0x90;         // ES8311 DAC volume, reg 0x32: 0x00=-95.5 dB, 0xBF=0 dB, 0.5 dB/step
+  // ES8311 DAC volume, reg 0x32: 0x00=-95.5 dB, 0xBF=0 dB, 0xFF=+32 dB, 0.5 dB/step.
+  // Boot default 0x80 = -31.5 dB: safe for earbuds (the codec drives the jack
+  // directly, the firmware cannot tell whether headphones are in). Applied
+  // with a short ramp at begin(), ramped to 0 at end().
+  uint8_t  volumeReg   = 0x80;
 };
 
 struct Stats {
@@ -67,6 +71,8 @@ bool    setVolumeReg(uint8_t reg);       // writes ES8311 reg 0x32 now and remem
 uint8_t volumeReg();
 float   volumeDb();                      // (reg - 0xBF) * 0.5
 bool    codecInit();                     // re-run the DAC init sequence (clock keeps running)
+// Raw register write. A write to reg 0x09 (DAC serial format) is remembered
+// and re-applied by every later init (begin, reconfigure, codecInit).
 bool    codecWrite(uint8_t reg, uint8_t value);
 bool    codecRead(uint8_t reg, uint8_t* value);
 

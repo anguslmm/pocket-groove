@@ -71,6 +71,7 @@ class BassVoice final : public Voice {
   void choke() override;
   void render(float* outL, float* outR, int frames) override;
   bool active() const override { return stage_ != kIdle; }
+  bool mono() const override { return true; }    // one voice, L == R always
 
   // Read-only introspection for tests and UI meters (values as of the last rendered quantum).
   float debugCutoffHz() const { return dbgCutoffHz_; }

@@ -4,6 +4,7 @@
 # Sources:  lib/pg/src/pg/<component>/*.cpp   -> library pg_<component>
 # Tests:    host/tests/test_<component>_*.cpp -> executable, linked to pg_<component>, registered with ctest
 # Tools:    host/tools/<name>.cpp             -> executable linked to every component
+# System tests: host/itests/itest_*.cpp       -> executable linked to every component, registered with ctest
 cmake_minimum_required(VERSION 3.16)
 project(pocket_groove_host CXX)
 set(CMAKE_CXX_STANDARD 17)
@@ -53,4 +54,14 @@ foreach(src ${tool_srcs})
   target_link_libraries(${name} PRIVATE ${PG_LIBS} ${PG_LIBS})
   target_include_directories(${name} PRIVATE ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
   target_compile_options(${name} PRIVATE ${PG_FLAGS})
+endforeach()
+
+file(GLOB itest_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/itests/itest_*.cpp)
+foreach(src ${itest_srcs})
+  get_filename_component(name ${src} NAME_WE)
+  add_executable(${name} ${src})
+  target_link_libraries(${name} PRIVATE ${PG_LIBS} ${PG_LIBS})
+  target_include_directories(${name} PRIVATE ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+  target_compile_options(${name} PRIVATE ${PG_FLAGS})
+  add_test(NAME ${name} COMMAND ${name} WORKING_DIRECTORY ${PG_ROOT})
 endforeach()

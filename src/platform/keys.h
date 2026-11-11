@@ -44,6 +44,8 @@ struct Stats {
   uint32_t lastIntToReadUs;     // INT falling edge -> event read over I2C
   uint32_t maxIntToReadUs;
   uint8_t  lastRaw;
+  uint32_t intLowDrains;        // FIFO drains started because INT was seen low (INT works)
+  uint32_t polledEvents;        // events found by the 20 ms poll while INT was HIGH (INT not working)
 };
 
 // Starts the reader task. Returns false if the TCA8418 does not answer; the

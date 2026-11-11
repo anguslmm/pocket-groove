@@ -1,0 +1,37 @@
+# STEP EDIT panel (docs/ux/step-edit*.png)
+demo
+tap spc
+until 6 3
+down y
+until 6 6
+shot step-edit
+up y
+
+demo
+down shift
+tap f
+up shift
+tap 9
+tap x
+tap `
+tap spc
+until 3 3
+down i
+wait 20
+tap f
+until 3 6
+shot step-edit-drum
+up i
+
+demo
+down shift
+tap k
+up shift
+tap spc
+until 7 3
+down e
+wait 20
+tap j
+until 7 6
+shot step-edit-lead
+up e

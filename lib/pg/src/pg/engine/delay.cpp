@@ -58,7 +58,8 @@ void Delay::readTap(float* dst, int delay, int n) const {
   }
 }
 
-void Delay::process(const float* in, float* outL, float* outR, int n) {
+template <bool kMono>
+void Delay::run(const float* in, float* outL, float* outR, int n) {
   float t1[kMaxBlock], t2[kMaxBlock];
   readTap(t1, d_, n);
   readTap(t2, 2 * d_, n);
@@ -105,8 +106,12 @@ void Delay::process(const float* in, float* outL, float* outR, int n) {
     if (++w == kBufLen) w = 0;
     const float e1 = t1[i] * inv;
     const float e2 = t2[i] * (fb * inv);
-    outL[i] += near * e1 + far * e2;
-    outR[i] += far * e1 + near * e2;
+    if (kMono) {
+      outL[i] += e1 + e2;      // (L + R) / 2 of the stereo taps, since near + far = 2
+    } else {
+      outL[i] += near * e1 + far * e2;
+      outR[i] += far * e1 + near * e2;
+    }
   }
   w_ = w;
   if (nonZero) {
@@ -118,6 +123,9 @@ void Delay::process(const float* in, float* outL, float* outR, int n) {
   lp_ = lp;
   hp_ = hp;
 }
+
+template void Delay::run<false>(const float*, float*, float*, int);
+template void Delay::run<true>(const float*, float*, float*, int);
 
 }  // namespace engine_detail
 }  // namespace pg

@@ -42,6 +42,16 @@ class FileSystem {
   virtual bool exists(const char* path) = 0;
   // Calls cb(name, size, user) for each file in dir; returns count or -1.
   virtual int  list(const char* dir, void (*cb)(const char* name, size_t size, void* user), void* user) = 0;
+
+  // Streaming access, so a project never needs a whole-file RAM buffer. One
+  // file open at a time is enough. Defaults fail, so simple implementations
+  // and test fakes can ignore what they don't need.
+  virtual int  open(const char* /*path*/, bool /*forWrite*/) { return -1; }   // handle >= 0, or -1
+  virtual int  readSome(int /*h*/, uint8_t* /*buf*/, size_t /*cap*/) { return -1; }  // bytes, 0 = EOF, -1 = error
+  virtual bool writeSome(int /*h*/, const uint8_t* /*buf*/, size_t /*len*/) { return false; }
+  virtual bool close(int /*h*/) { return false; }                             // false if a write failed
+  virtual bool rename(const char* /*from*/, const char* /*to*/) { return false; }  // replaces `to` if it exists
+  virtual long freeBytes(const char* /*mount*/) { return -1; }                // -1 = unknown
 };
 
 }  // namespace pg

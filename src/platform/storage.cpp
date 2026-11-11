@@ -210,7 +210,10 @@ void sdMountAsync() {
   // Core 1 (with the UI), priority just above the UI loop so it finishes
   // promptly, far below keys (10) and audio (20). The SD driver's waits are
   // blocking delays, so the UI keeps running in between.
-  if (xTaskCreatePinnedToCore(sdMountTask, "pg_sdmount", 6144, nullptr, 2, &s_sdTask, 1) != pdPASS) {
+  // 8 KB: SD.begin + f_getfree through VFS/FATFS, and this build keeps FATFS
+  // long-file-name buffers on the stack (CONFIG_FATFS_LFN_STACK, 255 chars).
+  // Transient: the task deletes itself.
+  if (xTaskCreatePinnedToCore(sdMountTask, "pg_sdmount", 8192, nullptr, 2, &s_sdTask, 1) != pdPASS) {
     s_sdTask = nullptr;
     s_sd = SdState::Failed;
   }

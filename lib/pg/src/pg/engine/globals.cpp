@@ -18,7 +18,7 @@ const char* const kScaleNames[kNumScales] = {
 const ParamInfo kGlobalInfo[kGNumUsed] = {
     //  name    longName        min  max  def  format                 enum names
     {"BPM",  "Tempo",         60, 200, 124, ParamFormat::Bpm,     nullptr},           // kGTempo
-    {"SWNG", "Swing",          0,  50,   0, ParamFormat::Percent, nullptr},           // kGSwing: 0..50 -> 50..75 %
+    {"SWNG", "Swing",          0,  50,   0, ParamFormat::Swing,   nullptr},           // kGSwing: 0..50 -> 50..75 %
     {"VOL",  "Master Vol",     0, 127, 100, ParamFormat::Number,  nullptr},           // kGMasterVolume: 100 = unity
     {"DSRC", "Duck Source",    0,   2,   1, ParamFormat::Enum,    kDuckSourceNames},  // kGDuckSource
     {"DDEP", "Duck Depth",     0, 127, 100, ParamFormat::Percent, nullptr},           // kGDuckDepth: floor = 1 - v/127
@@ -32,7 +32,7 @@ const ParamInfo kGlobalInfo[kGNumUsed] = {
     {"DWID", "Delay Width",    0, 127, 100, ParamFormat::Percent, nullptr},           // kGDelayWidth: mono .. ping-pong
     {"RSIZ", "Reverb Size",    0, 127,  60, ParamFormat::Number,  nullptr},           // kGReverbSize: RT60 0.3 .. 5 s
     {"RDMP", "Reverb Damp",    0, 127,  48, ParamFormat::Number,  nullptr},           // kGReverbDamp: 9 kHz .. 900 Hz
-    {"FILT", "DJ Filter",      0, 127,  64, ParamFormat::Bipolar, nullptr},           // kGMasterFilter
+    {"FILT", "DJ Filter",      0, 127,  64, ParamFormat::DjFilter, nullptr},          // kGMasterFilter: 64 = OFF, < LP, > HP
     {"FRES", "Filter Reso",    0, 127,  36, ParamFormat::Number,  nullptr},           // kGMasterReso: Q 0.7 .. 6
     {"DRIV", "Drive",          0, 127,   0, ParamFormat::Number,  nullptr},           // kGMasterDrive
     {"ROOT", "Scale Root",     0,  11,   0, ParamFormat::Enum,    kRootNames},        // kGScaleRoot
@@ -41,7 +41,10 @@ const ParamInfo kGlobalInfo[kGNumUsed] = {
 
 // Per-track mixer defaults: level, pan, delay send, reverb send, duck amount.
 //                                  KICK  SNR  CLAP   CH   OH  PERC BASS LEAD
-constexpr uint8_t kDefLevel[kNumTracks] = {104,  96,  92,  84,  84,  86,  98,  88};
+// LEVEL: clap +3.6 dB, open hat +3 dB, lead +3.3 dB after the first full-instrument
+// renders (integration): with the voices' own levels they sat 4-6 dB under the
+// gain-staging plan in master.h (clap ~0.4, lead ~0.3 in a busy bar).
+constexpr uint8_t kDefLevel[kNumTracks] = {104,  96, 106,  84,  94,  86,  98, 100};
 constexpr uint8_t kDefPan[kNumTracks]   = { 64,  64,  64,  58,  70,  74,  64,  64};
 constexpr uint8_t kDefDelay[kNumTracks] = {  0,   0,  12,   0,  10,  28,   0,  48};
 constexpr uint8_t kDefRev[kNumTracks]   = {  0,  28,  44,  10,  24,  30,   0,  44};

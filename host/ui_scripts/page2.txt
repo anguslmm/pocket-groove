@@ -1,0 +1,55 @@
+# A 32-step pattern, page 2 shown (docs/ux/groove-page2.png)
+demo
+down shift
+tap '
+up shift
+# bass (selected): step 5 = A2 accent, step 16 = G1 x3 ratchet
+down 5
+wait 300
+down shift
+tap ;
+up shift
+tap g
+tap =
+up 5
+down i
+wait 300
+tap .
+tap .
+tap f
+tap =
+tap =
+up i
+# snare: step 14 vel 70, step 15 vel 90 x2
+down shift
+tap s
+up shift
+down y
+wait 300
+tap a
+down shift
+tap -
+tap -
+tap -
+tap -
+up shift
+tap =
+tap =
+up y
+down u
+wait 300
+tap a
+down shift
+tap -
+up shift
+tap -
+tap -
+tap f
+tap =
+up u
+down shift
+tap j
+up shift
+tap spc
+until 6 6
+shot groove-page2

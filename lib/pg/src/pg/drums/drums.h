@@ -31,6 +31,7 @@ class DrumVoice : public Voice {
   void noteOff(uint8_t) override {}
   void choke() override;
   bool active() const override { return active_; }
+  bool mono() const override { return true; }   // endBlock copies L to R
 
  protected:
   DrumVoice(const ParamInfo* table, int numParams);
@@ -42,7 +43,8 @@ class DrumVoice : public Voice {
   // Call first in noteOn. If the voice is still sounding and `declick` is
   // set, the last output value is turned into a short fading offset so the
   // restart from zero state is continuous. `ceiling` is the largest level
-  // this hit can reach; old tail + new attack are held below it.
+  // this hit should reach: while the fading offset is present, old tail +
+  // new attack are soft-limited towards it (softLimit, not a clamp).
   void beginHit(bool declick, float ceiling);
   // Call last in render: applies de-click and choke, copies L to R, updates
   // the active flag.
@@ -170,7 +172,7 @@ class HatVoice final : public DrumVoice {
   uint32_t inc_[6] = {0, 0, 0, 0, 0, 0};
   uint32_t ph_[6];
   int32_t  prev_ = 0;
-  float es_ = 0.0f, ef_ = 0.0f, tilt_ = 0.0f, limit_ = 1.0f;
+  float es_ = 0.0f, ef_ = 0.0f, tilt_ = 0.0f, limit_ = 1.0f, invLimit_ = 1.0f;
   Svf   svf_;
   Noise noise_;
 };

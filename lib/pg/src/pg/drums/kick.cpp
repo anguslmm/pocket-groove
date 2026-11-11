@@ -125,7 +125,7 @@ void KickVoice::render(float* outL, float* outR, int frames) {
       amp *= ac;
       ns = ns * 1664525u + 1013904223u;
       const float n = float(int32_t(ns));
-      const float b = softClip(s * g);
+      const float b = saturate(s * g);
       const float m = (b + ce * (cp + cn * n)) * bg;
       ce *= cc;
       lp1 += lg * (m - lp1);
@@ -142,7 +142,7 @@ void KickVoice::render(float* outL, float* outR, int frames) {
       y -= e * x;
       const float s = (x + h2 * x * y) * amp;
       amp *= ac;
-      const float m = softClip(s * g) * bg;
+      const float m = saturate(s * g) * bg;
       lp1 += lg * (m - lp1);
       lp2 += lg * (lp1 - lp2);
       outL[i] = lp2;
@@ -150,7 +150,7 @@ void KickVoice::render(float* outL, float* outR, int frames) {
   }
   x_ = x; y_ = y; amp_ = amp; lp1_ = lp1; lp2_ = lp2;
   pe_ = pe < 1.0e-9f ? 0.0f : pe;
-  // Output amplitude bound: |softClip(a)| <= min(1, 1.5 a).
+  // Output amplitude bound: |saturate(a)| <= min(1, 1.5 a).
   float est = 1.5f * (1.0f + 0.5f * h2) * amp * g;
   if (est > 1.0f) est = 1.0f;
   const bool alive = est * bg > kSilence || ce_ > 0.0f;

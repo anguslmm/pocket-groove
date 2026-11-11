@@ -1,0 +1,35 @@
+# FX view (docs/ux/fx-*.png). Entering a view never moves the focus (UX 5.1),
+# so each state picks its column with the column key, as a user would.
+demo
+tap o
+tap x
+tap spc
+until 0 6
+shot fx-duck
+
+demo
+tap o
+down shift
+tap j
+up shift
+tap spc
+until 0 6
+shot fx-duck-track
+
+demo
+tap o
+tap o
+tap x
+tap spc
+until 0 6
+shot fx-space
+
+demo
+global 15 38
+tap o
+tap o
+tap o
+tap v
+tap spc
+until 0 6
+shot fx-master

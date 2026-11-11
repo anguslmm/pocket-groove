@@ -31,11 +31,15 @@ class Reverb {
   // rt60 in seconds (mid-band), dampCoef = one-pole coefficient of the in-loop low-pass.
   void setParams(float rt60, float dampCoef);
   // n <= kMaxBlock half-rate samples of mono input; ADDS wet stereo to outL/outR.
-  void process(const float* in, float* outL, float* outR, int n);
+  void process(const float* in, float* outL, float* outR, int n) { run<false>(in, outL, outR, n); }
+  // Mono device mode: ADDS only the mid tap set (= (L+R)/2 of process()) to
+  // `out`; the side taps are never read. Same tank state as process().
+  void processMono(const float* in, float* out, int n) { run<true>(in, out, nullptr, n); }
   bool idle() const { return zeroRun_ >= idleAfter_; }
   int totalDelaySamples() const { return used_; }
 
  private:
+  template <bool kMono> void run(const float* in, float* outL, float* outR, int n);
   struct Line { int16_t* buf; int len; int pos; };
   int16_t pool_[kPoolLen];
   Line ap_[kNumAp];

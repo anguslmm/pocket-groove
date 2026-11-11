@@ -1,0 +1,63 @@
+# Held-modifier overlays (docs/ux/*-overlay.png)
+demo
+down shift
+tap a
+up shift
+tap spc
+until 0 1
+down opt
+down shift
+tap 2
+up shift
+tap 1
+down shift
+tap 3
+up shift
+tap 1
+down shift
+tap q
+up shift
+tap 1
+down shift
+tap 5
+up shift
+until 0 6
+shot pattern-overlay
+up opt
+
+demo
+down fn
+tap s
+tap h
+up fn
+tap 9
+tap spc
+until 6 3
+down fn
+until 6 6
+shot mute-overlay
+up fn
+
+demo
+down shift
+tap s
+up shift
+tap spc
+until 1 10
+down alt
+down s
+until 1 13
+shot roll-overlay
+up s
+up alt
+
+demo
+down shift
+tap a
+up shift
+tap spc
+until 0 3
+down tab
+until 0 6
+shot tempo-overlay
+up tab

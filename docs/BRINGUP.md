@@ -156,7 +156,9 @@ Any serial terminal at 115200 works as the monitor (the baud rate is actually ig
 
 At power-on you should see a boot log on screen (board name, keyboard, internal flash mount, audio start), then the **KEYS** page. **The first boot can sit on "mounting /int" for 5-20 s** while it formats the internal data partition. That happens only once.
 
-**Audio is silent until you choose a signal.** The codec starts at register value `0x90` (-23.5 dB), a safe, fairly quiet headphone level. **Put the headphones on the desk, not your head, the first time you start a signal or turn the volume up.** Each `=` press adds 2 dB. Values above `0xBF` are positive digital gain (shown in red): only use those on the speaker.
+**Audio is silent until you choose a signal.** The codec starts at register value `0x80` (**-31.5 dB**) and the test signals are modest digital levels (sines -18 dBFS, sweep and square -24 dBFS), so a sine reaches the DAC about 50 dB below full scale: quiet on headphones, possibly barely audible on the speaker. **Earbuds/headphones OUT of your ears (on the desk) whenever you start a signal or turn the volume up**, until you have heard that the level is comfortable. The firmware cannot tell whether headphones are plugged in, and the jack is driven straight from the codec. Each `=` press adds 2 dB; the volume stops at `0xBF` (0 dB), the loudest clean level. Start and stop are faded (a few ms), so a click at those moments is worth reporting.
+
+**If it reboots or freezes:** the crash backtrace (`Guru Meditation` / `Backtrace:`) is printed on the USB serial port, and the SYSTEM page shows the reset reason after the reboot (`PANIC`, `TASK_WDT`, `BROWNOUT`...). Please copy both.
 
 ### Navigation (all pages)
 
@@ -180,23 +182,24 @@ The screen shows the 4x14 keyboard in the same layout as the device. Held keys t
 4. **4-key chords:** `a+s+d+f` (a rectangle), then `q+w+e+r` and `z+x+c+v` (not rectangles). Do all four light? Does the `max` counter reach 4? Try 5 or 6 keys at once too.
 5. Fast typing / rolling over keys: no stuck yellow keys afterwards.
 6. `Fn` + `del` clears the key statistics if you want to start over.
+7. If keys only react sluggishly (about 20 ms late) or the page shows an orange `INT line DEAD` / `flaky` line, the keyboard's interrupt line is not reaching the ESP32 and the firmware is falling back to polling. The report's `[keys] INT line` row says `WORKS`, `NOT WORKING` or `UNRELIABLE`; we need that row.
 
 ### Page 2: AUDIO
 
-Keys: `0` silence, `1` 440 Hz sine on both slots, `2` **left slot only**, `3` **right slot only**, `4` log sweep 20 Hz-20 kHz over 10 s, `5` 55 Hz sine, `6` 1 kHz square (-12 dBFS), `7` click track 120 BPM (accent every 4th), `8` blip mode (press **space**, hear a blip). `-` / `=` volume -2/+2 dB, `[` / `]` -0.5/+0.5 dB (the register value is shown), `s` 44.1/32 kHz, `b` backend (direct I2S / M5.Speaker fallback), `c` move the audio task to the other core, `d` DMA ring depth (3/4/6/8/12 blocks), `w` cycle ES8311 register 0x09 (slot select / word length, see below), `i` re-send the codec init, `r` reset statistics. All test signals are -12 dBFS (peak) unless noted.
+Keys: `0` silence, `1` 440 Hz sine on both slots, `2` **left slot only**, `3` **right slot only**, `4` log sweep 20 Hz-20 kHz over 10 s, `5` 55 Hz sine, `6` 1 kHz square (-24 dBFS), `7` click track 120 BPM (accent every 4th), `8` blip mode (press **space**, hear a blip). `-` / `=` volume -2/+2 dB, `[` / `]` -0.5/+0.5 dB (the register value is shown; maximum 0xBF = 0 dB), `s` 44.1/32 kHz, `b` backend (direct I2S / M5.Speaker fallback), `c` move the audio task to the other core, `d` DMA ring depth (3/4/6/8/12 blocks), `w` cycle ES8311 register 0x09 (slot select / word length, see below), `i` re-send the codec init, `r` reset statistics. Levels (peak): sines and blip -18 dBFS, sweep and square -24 dBFS, clicks -12 dBFS. Switching signals fades over ~3 ms.
 
-Checklist (headphones first, then unplugged for the speaker):
+Checklist (headphones first, then unplugged for the speaker). Each time, start the signal with the headphones off your head, then put them on:
 
 1. `1`: clean 440 Hz tone? Any hiss, hum, buzz, crackle, or a second tone (aliasing / "image noise")?
 2. `2` then `3`: **which of the two is audible**, on which side(s) of the headphones, and on the speaker? The ES8311 has a single DAC channel, so we expect one of these two to be silent everywhere. We need to know which.
 3. With the **left/right-only** signal that *is* audible: is it on the left earcup, the right, or both? (Tells us how the jack is wired: tip, ring, or both.)
-4. Press `w` (cycles reg 0x09: `00` -> `0C` -> `8C` -> `80`) while signal `2` or `3` plays and note which value makes which slot audible. `8C`/`80` should select the right slot if our reading of the datasheet is correct (UNVERIFIED). Also whether `0C` (16-bit word length) sounds any different from `00` (no difference expected).
+4. Press `w` (cycles reg 0x09: `00` -> `0C` -> `8C` -> `80`) while signal `2` or `3` plays and note which value makes which slot audible. `8C`/`80` should select the right slot if our reading of the datasheet is correct (UNVERIFIED). Also whether `0C` (16-bit word length) sounds any different from `00` (no difference expected). The chosen value is kept across `s`/`b`/`i`, but every boot starts at `00` again (the firmware writes it, because the codec is not reset by a reboot). The report prints the current value.
 5. `4` sweep: does it sound smooth from bass to treble with no dropouts, crackles or "birdies"? Roughly where does it become inaudible at the top? Where does the **speaker** stop producing bass?
 6. `5` 55 Hz: audible on headphones? On the speaker (probably barely)?
 7. `6` square: harsh but steady? Distortion at higher volume?
 8. `7` click track: are the clicks perfectly regular (no stumbling)? Leave it running for a minute and watch `undr` (underruns) and `late`: both should stay 0.
 9. `8`, then tap **space** about 20 times. The screen shows key->blip render latency; the report adds the buffered audio. Does the blip *feel* immediate? (Under ~10-15 ms usually feels instant.)
-10. Volume: from the starting value press `=` up to 0xBF (0 dB). Is the jump between steps even? Is there a click or pop at any step? What is a comfortable headphone level? What is loud enough on the speaker? Note both register values.
+10. Volume (headphones off your head first, then on the speaker): from the starting value press `=` up to 0xBF (0 dB), where it stops. Is the jump between steps even? Is there a click or pop at any step? What is a comfortable headphone level? What is loud enough on the speaker? Note both register values.
 11. Plug and unplug the headphones while a tone plays: does the speaker mute with headphones in? Any pop?
 12. `s` (switch to 32 kHz): repeat 1, 4 and 7 briefly. Does 32 kHz work at all? Does the pitch stay correct (440 Hz should not move)? Then `s` again back to 44.1 kHz.
 13. `b` (M5.Speaker fallback backend): repeat 1, 2/3 and 9. Same sound? Higher latency (expected)? Then `b` again to return to direct I2S.
@@ -249,6 +252,7 @@ Board / setup
 KEYS
   all 57 seen (56 keys + G0), all in the right place?  yes / no (which wrong):
   key-up events reliable (no stuck keys)?  yes / no
+  report "[keys] INT line": WORKS / NOT WORKING / UNRELIABLE
   a+s+d -> does f light without touching it?  yes / no
   2+w+4 -> does r light?  yes / no
   4-key chords (a+s+d+f, q+w+e+r, z+x+c+v) all four lit?  yes / no
@@ -265,7 +269,7 @@ AUDIO (direct I2S, 44.1 kHz unless noted)
   square: ok?
   click track steady for 1 min, underruns stay 0?
   blip latency: feels instant / slightly late / clearly late
-  comfortable headphone volume reg:     loud speaker volume reg:
+  comfortable headphone volume reg:     loud speaker volume reg:     (was 0xBF loud enough on the speaker?)
   pops/clicks at volume steps, signal changes, power-on, idle hum:
   headphones in -> speaker muted?  pop on plug/unplug?
   32 kHz: works? pitch correct? underruns?

@@ -12,6 +12,10 @@
 //  * All I2C happens on this task or the UI thread, never in the ISR and never
 //    on the audio task. M5GFX's i2c layer locks each transaction per port, so
 //    the codec (UI thread) and this task can share the bus.
+//  * The INT line itself is unverified on hardware (pull-up, routing to
+//    GPIO11). Every 20 ms the task also reads the FIFO event count while INT
+//    is high; events found that way are counted (Stats::polledEvents), so the
+//    keyboard works either way and the smoke report says which case is true.
 //  * Rows/columns that are not part of the 7x8 matrix stay in "GPI event" mode
 //    like in the library; their codes (>= 97) are counted and dropped instead
 //    of indexing past the 4x14 map.
@@ -42,7 +46,7 @@ constexpr uint8_t REG_CFG = 0x01, REG_INT_STAT = 0x02, REG_KEY_LCK_EC = 0x03, RE
 constexpr uint8_t REG_GPIO_INT_STAT_1 = 0x11, REG_GPIO_INT_EN_1 = 0x1A, REG_KP_GPIO_1 = 0x1D;
 constexpr uint8_t REG_GPI_EM_1 = 0x20, REG_GPIO_DIR_1 = 0x23, REG_GPIO_INT_LVL_1 = 0x26;
 constexpr uint8_t CFG_KE_IEN = 0x01, CFG_GPI_IEN = 0x02, CFG_OVR_FLOW_IEN = 0x08;
-constexpr uint8_t STAT_OVR_FLOW = 0x08;
+constexpr uint8_t STAT_GPI_INT = 0x02, STAT_OVR_FLOW = 0x08;
 
 QueueHandle_t s_queue = nullptr;
 TaskHandle_t  s_task = nullptr;
@@ -54,6 +58,7 @@ volatile bool     s_intPending = false;
 volatile uint32_t s_heldLo = 0, s_heldHi = 0;   // bits 0..31 / 32..56
 volatile uint32_t s_events = 0, s_drops = 0, s_unknown = 0, s_ovf = 0, s_i2cErr = 0;
 volatile uint32_t s_lastLat = 0, s_maxLat = 0;
+volatile uint32_t s_intLowDrains = 0, s_polledEvents = 0;
 volatile uint8_t  s_lastRaw = 0;
 
 void (*volatile s_listener)(const Event&, void*) = nullptr;
@@ -102,6 +107,7 @@ void releaseAll(uint32_t now) {
 }
 
 // Reads every pending event. Returns false on an I2C error.
+// Ends after at most 4 passes x 16 FIFO reads, whatever the INT line does.
 bool drain() {
   for (int pass = 0; pass < 4; ++pass) {
     const uint32_t tInt = s_intPending ? s_intTimeUs : static_cast<uint32_t>(esp_timer_get_time());
@@ -122,6 +128,11 @@ bool drain() {
     }
     uint8_t stat = 0;
     if (!rd(REG_INT_STAT, &stat)) { s_i2cErr = s_i2cErr + 1; return false; }
+    if (stat & STAT_GPI_INT) {
+      // GPI_INT can only be cleared after the GPIO_INT_STAT registers are read.
+      uint8_t v = 0;
+      for (uint8_t i = 0; i < 3; ++i) rd(REG_GPIO_INT_STAT_1 + i, &v);
+    }
     if (stat & STAT_OVR_FLOW) {
       // Events were lost inside the chip: held-state can no longer be trusted.
       s_ovf = s_ovf + 1;
@@ -149,15 +160,28 @@ void pollG0() {
 
 void keyTask(void*) {
   uint32_t backoffUntil = 0;
+  uint32_t tick = 0;
   for (;;) {
     ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(5));
     pollG0();
     if (!s_present) continue;
-    if (digitalRead(kPinInt) != LOW) continue;
     const uint32_t now = millis();
     if (backoffUntil && static_cast<int32_t>(now - backoffUntil) < 0) continue;
     backoffUntil = 0;
-    if (!drain()) backoffUntil = (now + 100) | 1u;   // bus trouble: do not hammer it
+    if (digitalRead(kPinInt) == LOW) {
+      s_intLowDrains = s_intLowDrains + 1;
+      if (!drain()) backoffUntil = (now + 100) | 1u;   // bus trouble: do not hammer it
+    } else if ((++tick & 3) == 0) {
+      // INT high: normally nothing is pending. If the FIFO still holds events
+      // the INT line is not reaching us; serve them anyway (20 ms latency).
+      uint8_t ec = 0;
+      if (!rd(REG_KEY_LCK_EC, &ec)) { s_i2cErr = s_i2cErr + 1; backoffUntil = (now + 100) | 1u; continue; }
+      if ((ec & 0x0F) != 0 && digitalRead(kPinInt) != LOW) {
+        const uint32_t before = s_events;
+        if (!drain()) backoffUntil = (now + 100) | 1u;
+        s_polledEvents = s_polledEvents + (s_events - before);
+      }
+    }
   }
 }
 
@@ -228,6 +252,8 @@ Stats stats() {
   st.lastIntToReadUs = s_lastLat;
   st.maxIntToReadUs = s_maxLat;
   st.lastRaw = s_lastRaw;
+  st.intLowDrains = s_intLowDrains;
+  st.polledEvents = s_polledEvents;
   return st;
 }
 

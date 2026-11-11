@@ -44,9 +44,9 @@ namespace lead {
 
 enum Param : uint8_t {
   // page 1: live tweaks
-  kPCutoff = 0, kPReso, kPEnvAmt, kPFltDecay, kPWave, kPShape, kPDetune, kPWidth,
-  // page 2: envelopes + filter
-  kPAttack, kPDecay, kPSustain, kPRelease, kPFltAttack, kPFltType, kPKeyTrack, kPDrive,
+  kPCutoff = 0, kPReso, kPEnvAmt, kPFltDecay, kPWave, kPShape, kPDetune, kPDecay,
+  // page 2: envelopes + filter (WIDTH lives here: the device is mono)
+  kPAttack, kPWidth, kPSustain, kPRelease, kPFltAttack, kPFltType, kPKeyTrack, kPDrive,
   // page 3: osc 2 + modulation
   kPOsc2Wave, kPInterval, kPOscMix, kPLfoRate, kPVibrato, kPLfoShape, kPLfoCutoff, kPGlide,
   kNumParams
@@ -94,7 +94,10 @@ class LeadVoice final : public Voice {
   // WIDTH = 0 selects the same path automatically. Call from the audio thread
   // or before audio starts.
   void setMono(bool mono);
-  bool mono() const { return forceMono_; }
+  // Voice contract: setMonoOutput(true) is setMono(true); mono() reports
+  // whether render() currently writes L == R (only guaranteed in forced mono).
+  void setMonoOutput(bool mono) override { setMono(mono); }
+  bool mono() const override { return forceMono_; }
 
  private:
   enum Stage : uint8_t { kOff = 0, kAtk, kDec, kRel, kKill };

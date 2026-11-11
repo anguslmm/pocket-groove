@@ -1,0 +1,31 @@
+# GROOVE view states (docs/ux/groove-*.png, toast-value.png)
+demo
+down shift
+tap a
+up shift
+tap spc
+until 0 6
+shot groove-drum
+tap spc
+wait 300
+
+demo
+tap spc
+until 6 6
+shot groove-bass
+
+demo
+down shift
+tap k
+up shift
+tap spc
+until 7 10
+shot groove-lead
+
+demo
+global 15 39
+tap spc
+until 6 5
+tap [ 30
+until 6 6
+shot toast-value

@@ -1,0 +1,25 @@
+# SOUND view (docs/ux/sound*.png)
+demo
+tap 9
+tap spc
+until 6 6
+shot sound
+
+demo
+tap 9
+tap spc
+until 6 3
+down y
+until 6 6
+shot sound-lock
+up y
+
+demo
+down shift
+tap a
+up shift
+tap 9
+tap x
+tap spc
+until 0 6
+shot sound-kick
