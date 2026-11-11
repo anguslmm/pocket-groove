@@ -2,3 +2,4 @@ build/
 .pio/
 *.wav
 __pycache__/
+.claude/worktrees/
