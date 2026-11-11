@@ -83,3 +83,14 @@ endforeach()
 if(TARGET itest_bounce AND TARGET bounce)
   add_dependencies(itest_bounce bounce)
 endif()
+
+# The USB transfer client (tools/pg.py) against the device's protocol module
+# (pg::io::Xfer in host/tools/xfer_sim, on a pseudo-terminal). Needs Python 3
+# with pyserial; skipped (exit 77) without pyserial.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND AND TARGET xfer_sim AND NOT WIN32)
+  add_test(NAME test_pg_client
+           COMMAND ${Python3_EXECUTABLE} ${PG_ROOT}/tools/test_pg.py --sim $<TARGET_FILE:xfer_sim>
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(test_pg_client PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+endif()
