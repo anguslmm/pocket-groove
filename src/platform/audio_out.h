@@ -47,7 +47,8 @@ struct Stats {
   uint32_t writeErrors;     // driver write failed / timed out / was short
   uint32_t overloadYields;  // forced 2 ms sleeps while overloaded (keeps idle task + watchdog alive)
   float    lastUs;          // render callback time of the most recent block
-  float    maxUs;
+  float    maxUs;           // longest render since begin()/resetStats() (max-ever)
+  float    recentMaxUs;     // longest render over the last ~1-2 s (rolling)
   float    avgUs;           // exponential moving average, time constant 64 blocks
   float    maxPeriodUs;     // longest time between two consecutive block starts
   float    blockPeriodUs;   // nominal: kBlockFrames / sampleRate
@@ -78,6 +79,25 @@ bool    codecRead(uint8_t reg, uint8_t* value);
 
 Stats stats();
 void  resetStats();
+// Longest render time since the previous takeMaxUs() call (first call: since
+// begin), and resets it. For a periodic stats line; one caller only.
+float takeMaxUs();
+
+// Profiling: called on the audio task after every block (keep it short, no
+// blocking). Cycle-counter values of the audio core. nullptr removes it.
+struct BlockInfo {
+  uint32_t startCyc;    // cycle count when the render started
+  uint32_t renderCyc;   // render callback duration
+  uint32_t writeCyc;    // time spent handing the block to the driver (blocked = headroom)
+  uint32_t gapCyc;      // start-to-start distance from the previous block (0 for the first)
+  uint32_t periodCyc;   // nominal block period
+};
+void setBlockObserver(void (*fn)(const BlockInfo&, void*), void* user);
+
+// "[audio] hot path: IRAM|FLASH ..." -- where Engine::process and
+// LeadVoice::render really are in this image, IRAM text size, heap. Also
+// printed at every begin().
+int placementLine(char* buf, size_t cap);
 
 // Worst-case time from the start of a render block to the DAC, in frames
 // (render block + driver queue + DMA), for the current config.

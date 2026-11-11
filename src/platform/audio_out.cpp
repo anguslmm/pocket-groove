@@ -26,6 +26,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 
@@ -73,12 +74,21 @@ struct State {
   volatile uint32_t lastCyc = 0, maxCyc = 0, maxPeriodCyc = 0, stackFreeMin = 0;
   volatile float    avgCyc = 0.0f;
   volatile int      taskCore = -1;
+  // Windowed maxima: takeMaxUs() swaps winMaxCyc out (max since the previous
+  // call); recentPrev/recentCur are the max of the last two ~1 s windows.
+  std::atomic<uint32_t> winMaxCyc{0};
+  volatile uint32_t recentPrev = 0, recentCur = 0;
+  uint32_t recentCount = 0;
 };
 
 State s;
 
 // ISR side of the underrun counter. DRAM only (IRAM-safe ISR).
 volatile uint32_t s_underruns = 0;
+
+// Optional per-block observer (profiling). Read once per block by the audio task.
+void (*volatile s_obs)(const BlockInfo&, void*) = nullptr;
+void* volatile s_obsUser = nullptr;
 volatile bool     s_underrunArmed = false;
 
 int16_t s_block[kBlockFrames * 2];                 // DirectI2S: one block, copied by i2s_channel_write
@@ -172,6 +182,7 @@ void audioTask(void*) {
       s.resetReq = false;
       s.blocks = 0; s.lateBlocks = 0; s.writeErrors = 0; s.overloadYields = 0;
       s.lastCyc = 0; s.maxCyc = 0; s.maxPeriodCyc = 0; s.avgCyc = 0.0f;
+      s.winMaxCyc.store(0); s.recentPrev = 0; s.recentCur = 0; s.recentCount = 0;
       s_underruns = 0;
       havePrev = false;
     }
@@ -184,6 +195,14 @@ void audioTask(void*) {
 
     s.lastCyc = dt;
     if (dt > s.maxCyc) s.maxCyc = dt;
+    if (dt > s.winMaxCyc.load(std::memory_order_relaxed)) s.winMaxCyc.store(dt, std::memory_order_relaxed);
+    if (dt > s.recentCur) s.recentCur = dt;
+    if (++s.recentCount >= s.cfg.sampleRate / kBlockFrames) {   // ~1 s windows
+      s.recentCount = 0;
+      s.recentPrev = s.recentCur;
+      s.recentCur = 0;
+    }
+    const uint32_t gapCyc = havePrev ? t0 - prevStart : 0;
     const float avg = s.avgCyc;
     s.avgCyc = (avg == 0.0f) ? static_cast<float>(dt) : avg + (static_cast<float>(dt) - avg) * (1.0f / 64.0f);
     if (dt > period) s.lateBlocks = s.lateBlocks + 1;
@@ -195,6 +214,7 @@ void audioTask(void*) {
     havePrev = true;
 
     bool ok;
+    const uint32_t tw = esp_cpu_get_cycle_count();
     if (direct) {
       size_t written = 0;
       // Blocks until a DMA buffer is free: this is what paces the loop.
@@ -215,6 +235,15 @@ void audioTask(void*) {
       vTaskDelay(2);                       // never spin on a dead driver
     }
     s.blocks = s.blocks + 1;
+    if (auto obs = s_obs) {
+      BlockInfo bi;
+      bi.startCyc = t0;
+      bi.renderCyc = dt;
+      bi.writeCyc = esp_cpu_get_cycle_count() - tw;
+      bi.gapCyc = gapCyc;
+      bi.periodCyc = period;
+      obs(bi, s_obsUser);
+    }
 
     if (warmup < 16 && ++warmup == 16) {   // ignore start-up while the DMA ring fills
       s_underruns = 0;
@@ -384,7 +413,7 @@ void stopM5() {
 // pg::Engine::process and pg::lead::LeadVoice::render, the IRAM text size and
 // the heap. Printed once per begin(), so the boot log answers "which image is
 // this" without the app's help.
-void printPlacement() {
+int formatPlacement(char* buf, size_t cap) {
   const uintptr_t proc = reinterpret_cast<uintptr_t>(&_ZN2pg6Engine7processEPsi);
   const uintptr_t lead = reinterpret_cast<uintptr_t>(&_ZN2pg4lead9LeadVoice6renderEPfS2_i);
   const bool inRam = esp_ptr_in_iram(reinterpret_cast<void*>(proc)) && esp_ptr_in_iram(reinterpret_cast<void*>(lead));
@@ -393,8 +422,7 @@ void printPlacement() {
 #else
   const int tier = 0;
 #endif
-  char buf[220];
-  snprintf(buf, sizeof(buf),
+  return snprintf(buf, cap,
            "[audio] hot path: %s (build PG_AUDIO_RAM=%d; Engine::process @0x%08lx, LeadVoice::render @0x%08lx), "
            "IRAM text %lu B, heap free %lu min-ever %lu\n",
            inRam ? "IRAM" : "FLASH (cached)", tier, static_cast<unsigned long>(proc), static_cast<unsigned long>(lead),
@@ -402,6 +430,11 @@ void printPlacement() {
                                       reinterpret_cast<uintptr_t>(&_iram_text_start)),
            static_cast<unsigned long>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
            static_cast<unsigned long>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)));
+}
+
+void printPlacement() {
+  char buf[240];
+  formatPlacement(buf, sizeof(buf));
   Serial.print(buf);
 }
 
@@ -494,6 +527,10 @@ Stats stats() {
   st.overloadYields = s.overloadYields;
   st.lastUs         = static_cast<float>(s.lastCyc) * perUs;
   st.maxUs          = static_cast<float>(s.maxCyc) * perUs;
+  {
+    const uint32_t a = s.recentPrev, b = s.recentCur;
+    st.recentMaxUs  = static_cast<float>(a > b ? a : b) * perUs;
+  }
   st.avgUs          = s.avgCyc * perUs;
   st.maxPeriodUs    = static_cast<float>(s.maxPeriodCyc) * perUs;
   st.blockPeriodUs  = static_cast<float>(s.periodCycles) * perUs;
@@ -502,6 +539,19 @@ Stats stats() {
   st.taskCore       = s.taskCore;
   return st;
 }
+
+float takeMaxUs() {
+  const uint32_t c = s.winMaxCyc.exchange(0);
+  return static_cast<float>(c) / static_cast<float>(s.cyclesPerUs ? s.cyclesPerUs : 240);
+}
+
+void setBlockObserver(void (*fn)(const BlockInfo&, void*), void* user) {
+  s_obs = nullptr;
+  s_obsUser = user;
+  s_obs = fn;
+}
+
+int placementLine(char* buf, size_t cap) { return formatPlacement(buf, cap); }
 
 void resetStats() {
   if (s.running) s.resetReq = true;
