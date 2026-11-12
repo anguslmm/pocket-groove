@@ -184,6 +184,86 @@ class TransferTest(unittest.TestCase):
             pg.hello(l)
         l.close()
 
+    def test_find_port(self):
+        """Both firmware builds' ports are found; the USB audio build by its product string."""
+        class P:
+            def __init__(self, device, vid, pid, product=None, description="", serial_number=None, location=None):
+                self.device, self.vid, self.pid = device, vid, pid
+                self.product, self.description = product, description
+                self.serial_number, self.location = serial_number, location
+        usj = P("/dev/cu.usbmodem1101", 0x303A, 0x1001, "USB JTAG/serial debug unit", serial_number="DC:DA:0C:2A:3B:4C")
+        usj_tty = P("/dev/tty.usbmodem1101", 0x303A, 0x1001, "USB JTAG/serial debug unit", serial_number="DC:DA:0C:2A:3B:4C")
+        tusb = P("/dev/cu.usbmodem1201", 0x303A, 0x1001, "Pocket Groove", serial_number="DCDA0C2A3B4C")
+        tusb_linux = P("/dev/ttyACM0", 0x303A, 0x1001, None, "Pocket Groove - TinyUSB CDC", serial_number="DCDA0C2A3B4C")
+        ftdi = P("/dev/cu.usbserial-1", 0x0403, 0x6001, "FT232R")
+        self.assertEqual(pg.find_port([usj, usj_tty, ftdi]), "/dev/cu.usbmodem1101")   # normal build, macOS twins
+        self.assertEqual(pg.find_port([tusb, ftdi]), "/dev/cu.usbmodem1201")           # USB audio build
+        self.assertEqual(pg.find_port([tusb_linux]), "/dev/ttyACM0")                   # product only in the description
+        self.assertEqual(pg.find_port([usj, tusb]), "/dev/cu.usbmodem1201")            # another ESP32 board + ours
+        other = P("/dev/cu.usbmodem9", 0x303A, 0x1001, "USB JTAG/serial debug unit", serial_number="AA:BB")
+        with self.assertRaises(pg.PgError):
+            pg.find_port([usj, other])                                                 # two anonymous boards: ask
+        with self.assertRaises(pg.PgError):
+            pg.find_port([ftdi])
+
+    def test_port_settings(self):
+        """Opening never resets: BAUD (never 1200, the USB audio build's reboot-to-bootloader
+        request), DTR/RTS never touched, and the baud rate never changed afterwards."""
+        self.assertNotEqual(pg.BAUD, 1200)
+        events = []
+
+        class FakeSerial:
+            def __init__(self, port, baudrate=9600, **kw):
+                events.append(("open", port, baudrate, tuple(sorted(kw))))
+                self._baud = baudrate
+
+            def __setattr__(self, k, v):
+                if k in ("baudrate", "dtr", "rts") or k.startswith("set"):
+                    events.append(("set", k, v))
+                object.__setattr__(self, k, v)
+
+            def setDTR(self, v):
+                events.append(("setDTR", v))
+
+            def setRTS(self, v):
+                events.append(("setRTS", v))
+
+            def write(self, data):
+                return len(data)
+
+            def flush(self):
+                pass
+
+            def read(self, n):
+                return b""
+
+            def close(self):
+                events.append(("close",))
+
+        real = pg.serial.Serial
+        pg.serial.Serial = FakeSerial
+        try:
+            link = pg.Link("/dev/cu.fake", timeout=0.01, retries=1)
+            with self.assertRaises(pg.PgError):
+                pg.hello(link)   # no answer: the request is sent, nothing else is done to the port
+            link.close()
+        finally:
+            pg.serial.Serial = real
+        self.assertEqual(events[0][0], "open")
+        self.assertEqual(events[0][2], 115200)
+        for e in events[1:]:
+            self.assertIn(e[0], ("close",), "the client touched the port settings: %r" % (e,))
+        self.assertNotIn("dsrdtr", events[0][3])
+        self.assertNotIn("rtscts", events[0][3])
+
+    def test_request_fits_the_receive_queue(self):
+        """The longest request line (WR with a full chunk) fits the device's 240-byte line limit
+        and so the 256-byte USB receive queue of either build."""
+        body = "%d WR %d %s" % (99999, 9999999, "A" * (4 * ((pg.CHUNK + 2) // 3)))
+        line = b"\n" + pg.frame(body)
+        self.assertLessEqual(len(line), 241)
+        self.assertLessEqual(len(line), 256)
+
     def test_framing(self):
         f = pg.frame("12 HELLO")
         self.assertEqual(f, b"~PGX 12 HELLO %08X\n" % (zlib.crc32(b"12 HELLO") & 0xFFFFFFFF))
