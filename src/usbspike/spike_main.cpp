@@ -8,8 +8,11 @@
 // Audio path (the shape the instrument will use):
 //   plat::audio task (core 0, prio 20, 128-frame blocks, paced by I2S)
 //     render():  test signal, stereo
-//                -> usbaudio::push()   stereo frames into TinyUSB's IN FIFO (never blocks)
-//                -> mono sum (L+R)/2 into both slots -> I2S -> ES8311 -> jack
+//                -> plat::usbaudio::pushAndFoldToMono(): stereo frames into TinyUSB's
+//                   IN FIFO (never blocks), then the mono sum (L+R)/2 into both
+//                   slots -> I2S -> ES8311 -> jack
+// The USB code is the instrument's (src/platform/usb_audio.*); this file is
+// only the test signal and the status display.
 //   USB ISR (1 kHz): TinyUSB takes 44/45 frames per packet out of the FIFO.
 //
 // Test signal: left 440 Hz, right 660 Hz, both -12 dBFS sines, plus a 2 ms
@@ -31,16 +34,52 @@
 #include <cstdio>
 #include <cstring>
 
+#include <esp_attr.h>
+
 #include "../platform/audio_out.h"
 #include "../platform/display.h"
-#include "usb_audio.h"
-#include "usb_desc_check.h"
+#include "../platform/usb_audio.h"
+#include "../platform/usb_cdc.h"
+#include "../platform/usb_desc_check.h"
+
+// The console: PgSerial = the TinyUSB CDC port (PG_USB_AUDIO, CDC_ON_BOOT=0),
+// Serial = the USB-Serial/JTAG port in the no-USB baseline.
+#if PG_USB_AUDIO
+#define SPIKE_SERIAL PgSerial
+#else
+#define SPIKE_SERIAL Serial
+#endif
 
 extern "C" {
 extern int _data_start, _bss_end;   // ESP-IDF sections.ld: start of .dram0.data, end of .bss
 }
 
+namespace usbaudio = plat::usbaudio;
+
 namespace {
+
+// ---------------------------------------------------------------------------
+// Rate choice, kept across esp_restart() (the spike's G0 tap / 'r'): the USB
+// descriptor carries one rate, so a switch is a restart.
+// ---------------------------------------------------------------------------
+#ifndef USBSPIKE_RATE
+#define USBSPIKE_RATE 44100
+#endif
+constexpr uint32_t kRtcMagic = 0x55415331u;   // "UAS1"
+RTC_NOINIT_ATTR uint32_t s_rtcMagic;
+RTC_NOINIT_ATTR uint32_t s_rtcRate;
+
+uint32_t bootRate() {
+  if (s_rtcMagic == kRtcMagic && (s_rtcRate == 44100u || s_rtcRate == 32000u)) return s_rtcRate;
+  return USBSPIKE_RATE;
+}
+
+void requestRateAndRestart(uint32_t hz) {
+  s_rtcMagic = kRtcMagic;
+  s_rtcRate = (hz == 32000u) ? 32000u : 44100u;
+  delay(50);
+  esp_restart();
+}
 
 // ---------------------------------------------------------------------------
 // Test signal (audio task only)
@@ -109,11 +148,7 @@ volatile int64_t  g_audioT0 = 0;
 void IRAM_ATTR render(int16_t* out, int frames, void*) {
   if (g_audioT0 == 0) g_audioT0 = esp_timer_get_time();
   g_sig.fill(out, frames);
-  usbaudio::push(out, frames);                 // stereo to USB (no-op when no stream is open)
-  for (int i = 0; i < frames; ++i) {           // mono sum to the codec (it plays the LEFT slot)
-    const int32_t m = (static_cast<int32_t>(out[2 * i]) + out[2 * i + 1]) / 2;
-    out[2 * i] = out[2 * i + 1] = static_cast<int16_t>(m);
-  }
+  usbaudio::pushAndFoldToMono(out, frames);    // stereo to USB (no-op when no stream is open), mono sum to the codec
   g_framesRendered = g_framesRendered + static_cast<uint32_t>(frames);
 }
 
@@ -127,7 +162,7 @@ void say(const char* fmt, ...) {
   va_start(ap, fmt);
   vsnprintf(buf, sizeof(buf), fmt, ap);
   va_end(ap);
-  Serial.print(buf);
+  SPIKE_SERIAL.print(buf);
 }
 
 constexpr int kCols = 40;   // 240 px / 6 px (font size 1)
@@ -175,8 +210,8 @@ int checkDescriptors(bool verbose, bool dump) {
     say("[usb] configuration descriptor (%u B):\n", static_cast<unsigned>(cfgLen));
     hexDump("cfg", cfg, cfgLen);
   }
-  usbspike::CheckResult r;
-  const int errors = usbspike::checkConfiguration(cfg, cfgLen, usbaudio::sampleRate(), &r, descLine, nullptr, verbose);
+  pgusb::CheckResult r;
+  const int errors = pgusb::checkConfiguration(cfg, cfgLen, bootRate(), &r, descLine, nullptr, verbose);
   say("[desc] self-check of the %u-byte configuration the host receives: %s (%d errors, %d warnings); "
       "AC itf %u, AS itf %u, EP 0x%02x, max packet %u B, %lu Hz, %u ch x %u bit, %d IN EPs, FIFO %d/256 words\n",
       static_cast<unsigned>(cfgLen), errors ? "FAIL" : "PASS", errors, r.warnings, r.audioItfAc, r.audioItfAs,
@@ -227,7 +262,7 @@ void status(bool lcd) {
   const uint32_t heapMin = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
 
   say("[usb] t=%lus %s%s%s rate=%lu (host set %lu) opens=%lu | pkts %lu/s: %lu x%u %lu x%u %lu x%u zero %lu other %lu | "
-      "sent %.1f f/s (%+.0f ppm vs host) | fifo %u/%u tgt %u | underrun pkts %lu, overrun frames %lu | "
+      "sent %.1f f/s (%+.0f ppm vs host) | fifo %u/%u tgt %u | underrun pkts %lu, overrun frames %lu (start discards %lu) | "
       "i2s %.1f Hz (%+.0f ppm vs xtal) i2s-underruns %lu cpu %.1f%% | heap %lu min %lu | stack usbd %lu\n",
       static_cast<unsigned long>(now / 1000), u.mounted ? "MOUNTED" : "not-mounted", u.suspended ? " SUSPENDED" : "",
       u.streaming ? " STREAMING" : " idle", static_cast<unsigned long>(u.rate), static_cast<unsigned long>(u.hostSetRate),
@@ -238,7 +273,8 @@ void status(bool lcd) {
       static_cast<unsigned long>(u.pktZero - g_prev.pktZero), static_cast<unsigned long>(u.pktOther),
       static_cast<double>(dt > 0.0f ? static_cast<float>(dFr) / dt : 0.0f), static_cast<double>(hostPpm),
       u.fifoLevel, u.fifoDepth, u.fifoTarget, static_cast<unsigned long>(u.pktZero),
-      static_cast<unsigned long>(u.overrunFrames), static_cast<double>(i2sRate), static_cast<double>(i2sPpm),
+      static_cast<unsigned long>(u.overrunFrames), static_cast<unsigned long>(u.openingDiscards),
+      static_cast<double>(i2sRate), static_cast<double>(i2sPpm),
       static_cast<unsigned long>(a.underruns), static_cast<double>(a.cpuPercent), static_cast<unsigned long>(heapFree),
       static_cast<unsigned long>(heapMin), static_cast<unsigned long>(stackFree("usbd")));
 
@@ -290,11 +326,11 @@ void help() {
 }
 
 void toggleRate() {
-  const uint32_t next = usbaudio::sampleRate() == 44100u ? 32000u : 44100u;
+  const uint32_t next = bootRate() == 44100u ? 32000u : 44100u;
   say("[usb] restarting at %lu Hz\n", static_cast<unsigned long>(next));
   lcdLine(15, kYellow, "Restarting at %lu Hz...", static_cast<unsigned long>(next));
   delay(100);
-  usbaudio::requestRateAndRestart(next);
+  requestRateAndRestart(next);
 }
 
 void downloadMode() {
@@ -314,8 +350,12 @@ bool g_g0Was = false;
 }  // namespace
 
 void setup() {
-  Serial.setTxTimeoutMs(100);
+  const uint32_t rate = bootRate();
+  SPIKE_SERIAL.setTxTimeoutMs(100);
+#if !PG_USB_AUDIO
   Serial.begin(115200);
+#endif
+  usbaudio::begin(rate);             // CDC + UAC1, USB stack up (the descriptor carries `rate`); a stub without USB
 
   auto cfg = M5.config();            // same bring-up as plat::sys::begin()
   cfg.serial_baudrate = 0;
@@ -333,8 +373,6 @@ void setup() {
   plat::display::setBrightness(plat::display::kBrightnessFull);
   pinMode(0, INPUT_PULLUP);
 
-  usbaudio::begin();
-  const uint32_t rate = usbaudio::sampleRate();
   g_sig.init(rate);
 
   plat::audio::Config ac;
@@ -356,7 +394,7 @@ void setup() {
 
 void loop() {
   int c;
-  while ((c = Serial.read()) >= 0) {
+  while ((c = SPIKE_SERIAL.read()) >= 0) {
     switch (c) {
       case 'h': case '?': help(); break;
       case 's': status(false); break;

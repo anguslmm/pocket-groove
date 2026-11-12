@@ -19,6 +19,10 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
+#if PG_USB_AUDIO
+#include "usb_cdc.h"
+#endif
+
 #include <driver/i2s_std.h>
 #include <esp_cpu.h>
 #include <esp_memory_utils.h>
@@ -435,7 +439,11 @@ int formatPlacement(char* buf, size_t cap) {
 void printPlacement() {
   char buf[240];
   formatPlacement(buf, sizeof(buf));
+#if PG_USB_AUDIO
+  PgSerial.print(buf);    // the TinyUSB CDC port (CDC_ON_BOOT=0: Serial would be UART0)
+#else
   Serial.print(buf);
+#endif
 }
 
 }  // namespace

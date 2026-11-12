@@ -1,5 +1,6 @@
-// Desktop check of the USB audio spike's descriptors and of TinyUSB's IN flow
-// control, without hardware.
+// Desktop check of the USB audio function's descriptors (src/platform/
+// usb_audio.cpp, used by env:cardputer-adv-usb and env:usb-audio-spike) and of
+// TinyUSB's IN flow control, without hardware.
 //
 // Build and run (from the repository root; uses the TinyUSB headers that
 // PlatformIO installed for the firmware build, for Arduino's CDC block):
@@ -15,9 +16,9 @@
 //    it at run time (esp32-hal-tinyusb.c tinyusb_load_enabled_interfaces():
 //    9-byte config header + Arduino's CDC block from TinyUSB's
 //    TUD_CDC_DESCRIPTOR with USBCDC.cpp's arguments + our UAC1 block from
-//    src/usbspike/uac1_desc.h with the endpoint the core's allocator hands out),
+//    src/platform/uac1_desc.h with the endpoint the core's allocator hands out),
 //    for 44100 and 32000 Hz, prints it decoded field by field, and runs the
-//    validator (src/usbspike/usb_desc_check.h) over it.
+//    validator (src/platform/usb_desc_check.h) over it.
 //  2. Mutation tests: breaks one field at a time and requires the validator to
 //    catch each one (so a PASS means something).
 //  3. Simulates TinyUSB's ISO-IN flow control (audiod_calc_tx_packet_sz +
@@ -27,8 +28,15 @@
 //    and a consumer that takes one packet per 1 ms USB frame. Checks packet
 //    sizes (44/45 frames at 44.1 kHz), that no empty packet or FIFO overflow
 //    happens once running, and that the long-run rate equals the I2S rate.
-//  4. --dump FILE: parses "[usb] cfg xxxx: .." lines printed by the firmware's
-//    'd' serial command and validates the bytes the device really sends.
+//  4. Stream start: the host polls the endpoint some time after it selected
+//    the streaming alternate setting, and until then the DWC2 port retires an
+//    unpolled packet every 2 ms. Shows that the spike's open sequence
+//    overflows the FIFO once (its measured "148 frames dropped") and that the
+//    fixed one (usb_audio.cpp, OPENING phase) never does, for any delay.
+//  5. --dump FILE: parses "[usb] cfg xxxx: .." lines printed by the 'd'
+//    (spike) or 'u' (instrument) serial command and validates the bytes the
+//    device really sends.
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -80,13 +88,13 @@ std::vector<uint8_t> buildConfiguration(uint32_t rate) {
   const uint8_t cdc[] = {TUD_CDC_DESCRIPTOR(0, 4, 0x85, 64, 0x03, 0x84, 64)};   // USBCDC.cpp load_cdc_descriptor
   uint16_t inMask = (1u << 4) | (1u << 5), outMask = (1u << 3);
   const uint8_t ep = freeInEndpoint(inMask, outMask);
-  usbspike::Uac1Params p;
+  pgusb::Uac1Params p;
   p.itfAc = 2;
   p.epIn = static_cast<uint8_t>(0x80 | ep);
   p.strIdx = 5;
   p.sampleRate = rate;
-  uint8_t audio[usbspike::kUac1DescLen];
-  const size_t an = usbspike::buildUac1(audio, sizeof(audio), p);
+  uint8_t audio[pgusb::kUac1DescLen];
+  const size_t an = pgusb::buildUac1(audio, sizeof(audio), p);
   const uint16_t total = static_cast<uint16_t>(9 + sizeof(cdc) + an);
   // TINYUSB_CONFIG_DEFAULT / ESPUSB: self-powered attribute, 500 mA.
   const uint8_t hdr[] = {TUD_CONFIG_DESCRIPTOR(1, 4, 6, total, TUSB_DESC_CONFIG_ATT_SELF_POWERED, 500)};
@@ -184,7 +192,7 @@ void mutationTests(uint32_t rate) {
       {"bInterval 4", [](std::vector<uint8_t>& d) { d[findAudioEp(d) + 6] = 4; }},
       {"AC interface with one endpoint", [](std::vector<uint8_t>& d) { d[findAcInterface(d) + 4] = 1; }},
       {"AC header wTotalLength wrong", [](std::vector<uint8_t>& d) { d[findCs(d, 0x24, 0x01) + 5]++; }},
-      {"AS_GENERAL links the input terminal", [](std::vector<uint8_t>& d) { size_t o = findCs(d, 0x24, 0x01, 1); d[o + 3] = usbspike::kEntityIt; }},
+      {"AS_GENERAL links the input terminal", [](std::vector<uint8_t>& d) { size_t o = findCs(d, 0x24, 0x01, 1); d[o + 3] = pgusb::kEntityIt; }},
       {"format: 1 channel vs 2-channel terminal", [](std::vector<uint8_t>& d) { d[findCs(d, 0x24, 0x02, 1) + 4] = 1; }},
       {"format: 24-bit resolution in a 2-byte subframe", [](std::vector<uint8_t>& d) { d[findCs(d, 0x24, 0x02, 1) + 6] = 24; }},
       {"format: tSamFreq 48000 (not the running rate)", [](std::vector<uint8_t>& d) { size_t f = findCs(d, 0x24, 0x02, 1); d[f + 8] = 0x80; d[f + 9] = 0xBB; d[f + 10] = 0; }},
@@ -194,12 +202,12 @@ void mutationTests(uint32_t rate) {
       {"output terminal source does not exist", [](std::vector<uint8_t>& d) { d[findCs(d, 0x24, 0x03) + 7] = 9; }},
       {"output terminal not USB streaming", [](std::vector<uint8_t>& d) { size_t o = findCs(d, 0x24, 0x03); d[o + 4] = 0x01; d[o + 5] = 0x03; }},
       {"AS alt 0 with an endpoint", [](std::vector<uint8_t>& d) { size_t a = findAcInterface(d); for (size_t o = a; o < d.size(); o += d[o]) if (d[o + 1] == 0x04 && d[o + 5] == 1 && d[o + 6] == 2 && d[o + 3] == 0) { d[o + 4] = 1; break; } }},
-      {"duplicate entity ID", [](std::vector<uint8_t>& d) { d[findCs(d, 0x24, 0x03) + 3] = usbspike::kEntityIt; }},
+      {"duplicate entity ID", [](std::vector<uint8_t>& d) { d[findCs(d, 0x24, 0x03) + 3] = pgusb::kEntityIt; }},
   };
   for (const M& m : ms) {
     std::vector<uint8_t> d = buildConfiguration(rate);
     m.apply(d);
-    const int e = usbspike::checkConfiguration(d.data(), d.size(), rate, nullptr, quiet, nullptr);
+    const int e = pgusb::checkConfiguration(d.data(), d.size(), rate, nullptr, quiet, nullptr);
     char what[160];
     std::snprintf(what, sizeof(what), "mutation caught (%u Hz): %s", static_cast<unsigned>(rate), m.what);
     expect(e > 0, what);
@@ -248,49 +256,121 @@ struct FlowControl {
 struct SimResult {
   long packets = 0, zeroAfterStart = 0, overflowFrames = 0, other = 0;
   long zeroFirst10s = 0;
+  long openingDiscards = 0;        // frames the producer did not queue while OPENING (fixed producer only)
   long bySize[4] = {0, 0, 0, 0};   // nominal-1, nominal, nominal+1, other (steady state, t >= 10 s)
   long steadyPackets = 0;
   double steadyFrames = 0, framesIn = 0;
   int minLevel = 1 << 30, maxLevel = 0;   // FIFO level in steady state
+  int levelAtHostStart = -1;              // FIFO level when the first packet reached the host
 };
 
-// rate: nominal; ppm: I2S clock error vs. the host's USB frame clock; jitterMs:
-// uniform random extra delay of each block delivery (audio task scheduling);
-// prefill: bytes of silence written when the stream opens (what usb_audio.cpp
-// does: the driver's FIFO threshold, so flow control starts at its target).
-SimResult simulate(uint32_t rate, double ppm, double jitterMs, double seconds, uint16_t mps, unsigned seed, int prefill) {
+// Producer behaviour at stream start.
+enum class Producer {
+  Spike,   // the spike: at the first block after the open, prefill silence to the target, then push
+           // every block; a full FIFO is an overrun from the open on
+  Fixed,   // src/platform/usb_audio.cpp: OPENING until the first packet WITH DATA completes (the host
+           // is receiving), meanwhile hold the FIFO at the target (silence below it, at most one
+           // block above it, the excess discarded silently); RUNNING after that
+};
+
+struct SimOpts {
+  uint32_t rate = 44100;
+  double ppm = 0;            // I2S clock error vs. the host's USB frame clock
+  double jitterMs = 0;       // uniform random extra delay of each block delivery (audio task scheduling)
+  double seconds = 120;
+  double hostStartMs = 0;    // SET_INTERFACE at t = 0; the host polls the endpoint from this time on
+  Producer producer = Producer::Fixed;
+  unsigned seed = 1234u;
+};
+
+// The consumer side, as the driver and the DWC2 port do it (audio_device.c,
+// dcd_dwc2.c @ 88c7f0b81):
+//  * SET_INTERFACE (t = 0) clears the FIFO, opens the endpoint and queues a
+//    zero-length packet; it does not call tud_audio_tx_done_isr.
+//  * Each ISO IN transfer that COMPLETES runs audiod_tx_xfer_isr: the next
+//    packet is sized by flow control and taken out of the FIFO, then
+//    tud_audio_tx_done_isr(n_bytes_sent of the completed packet) runs.
+//  * Before the host polls, a queued packet is retried once (iso_retry =
+//    bInterval = 1) and then completed as failed with 0 bytes: one packet is
+//    dequeued (and lost) every 2 ms. From hostStartMs on, every queued packet
+//    goes out in the next frame: one completion per 1 ms with its real size.
+SimResult simulate(const SimOpts& o, uint16_t mps) {
   const uint16_t kDepth = 3104, kThreshold = kDepth / 2;   // CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ, default threshold
   const int kFrameBytes = 4, kBlock = 128;
+  const int target = kThreshold / kFrameBytes * kFrameBytes;   // usb_audio.cpp s_target
   FlowControl fc;
-  fc.calc(rate, 2, 2, 1);
-  std::mt19937 rng(seed);
-  std::uniform_real_distribution<double> jit(0.0, jitterMs);
-  const double blockMs = kBlock * 1000.0 / (rate * (1.0 + ppm * 1e-6));
-  double nextBlockIdeal = 0.0;              // I2S clock, in host ms
-  double nextBlockAt = jit(rng);
+  fc.calc(o.rate, 2, 2, 1);
+  std::mt19937 rng(o.seed);
+  std::uniform_real_distribution<double> jit(0.0, o.jitterMs);
+  std::uniform_real_distribution<double> phase(0.0, kBlock * 1000.0 / o.rate);
+  const double blockMs = kBlock * 1000.0 / (o.rate * (1.0 + o.ppm * 1e-6));
+  double nextBlockIdeal = phase(rng);       // the audio task's block grid is unrelated to the open
+  double nextBlockAt = nextBlockIdeal + jit(rng);
   int level = 0;                            // bytes in the FIFO
-  bool started = false;
+  bool started = false;                     // a packet with data has reached the host
+  bool running = false;                     // Fixed: the producer's phase
+  bool spikePrefillDone = false;
+  int queued = 0;                           // bytes of the packet the hardware holds (the ZLP at open)
+  int retry = 1;                            // iso_retry of the queued packet
   SimResult r;
-  const uint16_t nom = static_cast<uint16_t>(rate / 1000);
-  for (long ms = 0; ms < static_cast<long>(seconds * 1000.0); ++ms) {
-    if (prefill && nextBlockAt <= static_cast<double>(ms)) { level += prefill; prefill = 0; }
+  const uint16_t nom = static_cast<uint16_t>(o.rate / 1000);
+  for (long ms = 0; ms < static_cast<long>(o.seconds * 1000.0); ++ms) {
     // deliver every block whose time has come before this USB frame
     while (nextBlockAt <= static_cast<double>(ms)) {
-      const int room = (kDepth - level) / kFrameBytes;
-      const int n = kBlock < room ? kBlock : room;
-      r.overflowFrames += kBlock - n;
+      int n = kBlock;
+      if (o.producer == Producer::Spike) {
+        if (!spikePrefillDone) {
+          spikePrefillDone = true;
+          const int fill = std::min(target, (kDepth - level) / kFrameBytes * kFrameBytes);
+          level += fill;
+        }
+        const int room = (kDepth - level) / kFrameBytes;
+        n = std::min(kBlock, room);
+        r.overflowFrames += kBlock - n;
+      } else if (!running) {
+        int room = (kDepth - level) / kFrameBytes;
+        while (level + kFrameBytes <= target && room) {   // silence up to the target
+          int s = std::min((target - level) / kFrameBytes, std::min(kBlock, room));
+          level += s * kFrameBytes;
+          room -= s;
+        }
+        const int cap = target + kBlock * kFrameBytes;
+        const int allow = level < cap ? (cap - level) / kFrameBytes : 0;
+        n = std::min(kBlock, std::min(room, allow));
+        r.openingDiscards += kBlock - n;
+      } else {
+        const int room = (kDepth - level) / kFrameBytes;
+        n = std::min(kBlock, room);
+        r.overflowFrames += kBlock - n;
+      }
       level += n * kFrameBytes;
       r.framesIn += n;
       nextBlockIdeal += blockMs;
       nextBlockAt = nextBlockIdeal + jit(rng);
     }
-    // the ISR at the end of frame `ms` queues the next packet from the FIFO
+    // end of USB frame `ms`: does the queued packet complete, and with what?
+    int sent = -1;   // -1: nothing completes in this frame
+    if (static_cast<double>(ms) >= o.hostStartMs) {
+      sent = queued;                       // the host took it
+    } else if (retry > 0) {
+      --retry;                             // missed: retried in the next frame
+    } else {
+      sent = 0;                            // missed twice: completed as failed, 0 bytes (data lost)
+    }
+    if (sent < 0) continue;
+    // audiod_tx_xfer_isr: size and dequeue the next packet, then tx_done_isr(sent)
     const uint16_t sz = fc.packetSize(static_cast<uint16_t>(level), kDepth, kThreshold, mps);
-    const int frames = sz / kFrameBytes;
     level -= sz;
+    queued = sz;
+    retry = 1;
+    const int frames = sent / kFrameBytes;
+    if (frames && !running) running = true;            // tud_audio_tx_done_isr: OPENING -> RUNNING
+    if (static_cast<double>(ms) < o.hostStartMs) continue;   // a failed completion: nothing reached the host
     ++r.packets;
-    if (frames) started = true;
-    else if (started) {
+    if (frames) {
+      if (!started) r.levelAtHostStart = level + sz;
+      started = true;
+    } else if (started) {
       ++r.zeroAfterStart;
       if (ms < 10000) ++r.zeroFirst10s;
     }
@@ -314,19 +394,19 @@ void flowControlTests() {
       {44100, 0, 0}, {44100, +100, 1.0}, {44100, -100, 1.0}, {44100, +1000, 2.0}, {44100, -1000, 2.0},
       {32000, 0, 0}, {32000, +250, 1.0}, {32000, -250, 1.0},
   };
-  const int kPrefill = 3104 / 2;   // usb_audio.cpp: silence up to the driver's threshold when the stream opens
   for (const Case& c : cases) {
-    const uint16_t mps = usbspike::maxPacketBytes(c.rate);
-    SimResult r = simulate(c.rate, c.ppm, c.jitter, 120.0, mps, 1234u, kPrefill);
-    SimResult cold = simulate(c.rate, c.ppm, c.jitter, 120.0, mps, 1234u, 0);
+    const uint16_t mps = pgusb::maxPacketBytes(c.rate);
+    SimOpts o;
+    o.rate = c.rate; o.ppm = c.ppm; o.jitterMs = c.jitter;
+    SimResult r = simulate(o, mps);
     const double measured = r.steadyFrames / static_cast<double>(r.steadyPackets) * 1000.0;   // frames per host second
     const double expectRate = c.rate * (1.0 + c.ppm * 1e-6);
     const double rateErrPpm = (measured / expectRate - 1.0) * 1e6;
-    std::printf("  %5u Hz %+6.0f ppm jitter %.1f ms: steady sizes %u:%ld %u:%ld %u:%ld other:%ld, empty %ld (without prefill: %ld, "
-                "%ld in the first 10 s), overflow %ld frames, FIFO %d..%d B, delivered %.2f f/s (%+.1f ppm vs I2S)\n",
+    std::printf("  %5u Hz %+6.0f ppm jitter %.1f ms: steady sizes %u:%ld %u:%ld %u:%ld other:%ld, empty %ld, "
+                "overflow %ld frames, FIFO %d..%d B, delivered %.2f f/s (%+.1f ppm vs I2S)\n",
                 static_cast<unsigned>(c.rate), c.ppm, c.jitter, c.rate / 1000 - 1, r.bySize[0], c.rate / 1000, r.bySize[1],
-                c.rate / 1000 + 1, r.bySize[2], r.bySize[3], r.zeroAfterStart, cold.zeroAfterStart, cold.zeroFirst10s,
-                r.overflowFrames, r.minLevel, r.maxLevel, measured, rateErrPpm);
+                c.rate / 1000 + 1, r.bySize[2], r.bySize[3], r.zeroAfterStart, r.overflowFrames, r.minLevel, r.maxLevel,
+                measured, rateErrPpm);
     char what[200];
     std::snprintf(what, sizeof(what), "flow control %u Hz %+.0f ppm, jitter %.1f ms: no empty packet, no overflow, only N-1/N/N+1 sizes, "
                   "long-run rate = I2S rate within 10 ppm", static_cast<unsigned>(c.rate), c.ppm, c.jitter);
@@ -335,17 +415,70 @@ void flowControlTests() {
   // How late may a block be (audio task preempted / stalled) before the host
   // gets an empty packet? Informational: a uniform random delay of 0..J ms on
   // every block, 60 s each.
-  std::printf("  producer jitter tolerance at 44.1 kHz (prefilled): ");
+  std::printf("  producer jitter tolerance at 44.1 kHz: ");
   for (double j : {2.0, 4.0, 6.0, 8.0, 10.0, 12.0}) {
-    SimResult s = simulate(44100, 0, j, 60.0, usbspike::maxPacketBytes(44100), 77u, kPrefill);
+    SimOpts o;
+    o.jitterMs = j; o.seconds = 60; o.seed = 77u;
+    SimResult s = simulate(o, pgusb::maxPacketBytes(44100));
     std::printf("%.0f ms: %ld empty  ", j, s.zeroAfterStart);
   }
   std::printf("\n");
   // The 44.1 kHz cadence the host sees with a perfect clock: 9 x 44 + 1 x 45 per 10 ms.
-  SimResult r = simulate(44100, 0, 0, 60.0, usbspike::maxPacketBytes(44100), 1u, kPrefill);
-  const double share45 = static_cast<double>(r.bySize[2]) / static_cast<double>(r.bySize[1] + r.bySize[2]);
-  std::printf("  44.1 kHz ideal clock: %.3f %% of packets carry 45 frames (expected 10 %%), %ld carry 43\n", share45 * 100.0, r.bySize[0]);
-  expect(std::fabs(share45 - 0.10) < 0.0005 && r.bySize[0] == 0, "44.1 kHz cadence is 44/45 frames with 10 % of 45-frame packets");
+  {
+    SimOpts o;
+    o.seconds = 60; o.seed = 1u;
+    SimResult r = simulate(o, pgusb::maxPacketBytes(44100));
+    const double share45 = static_cast<double>(r.bySize[2]) / static_cast<double>(r.bySize[1] + r.bySize[2]);
+    std::printf("  44.1 kHz ideal clock: %.3f %% of packets carry 45 frames (expected 10 %%), %ld carry 43\n", share45 * 100.0, r.bySize[0]);
+    expect(std::fabs(share45 - 0.10) < 0.0005 && r.bySize[0] == 0, "44.1 kHz cadence is 44/45 frames with 10 % of 45-frame packets");
+  }
+}
+
+// Stream start: the spike measured "Overruns 148 frames dropped" once per
+// stream open, never growing afterwards. The host selects the streaming
+// alternate setting some ms before it polls the endpoint; until then the
+// DWC2 port retires one unpolled packet every 2 ms (above), so the FIFO
+// fills at about half the rate the audio task writes. The spike prefilled to
+// the target at the open and pushed everything: the FIFO ran full ~12 ms
+// later. The fixed producer waits for the first packet the host received.
+void streamStartTests() {
+  std::printf("  host start delay after SET_INTERFACE (ms):   spike producer: overrun frames    fixed producer: overrun / empty / "
+              "start discards / FIFO at host start\n");
+  double reproduces = -1;
+  long spikeAt30 = 0;
+  for (uint32_t rate : {44100u, 32000u}) {
+    const uint16_t mps = pgusb::maxPacketBytes(rate);
+    bool allClean = true;
+    for (double d : {0.0, 1.0, 3.0, 6.0, 10.0, 12.0, 15.0, 18.0, 20.0, 25.0, 30.0, 50.0, 100.0, 250.0, 1000.0, 5000.0}) {
+      long spikeOver = 0, fixedOver = 0, fixedZero = 0, fixedDisc = 0;
+      int lvl = 0;
+      // several phases of the audio task's block grid against the open
+      for (unsigned seed = 1; seed <= 8; ++seed) {
+        SimOpts o;
+        o.rate = rate; o.seconds = 20; o.hostStartMs = d; o.seed = seed; o.jitterMs = 0.5;
+        o.producer = Producer::Spike;
+        const SimResult s = simulate(o, mps);
+        o.producer = Producer::Fixed;
+        const SimResult f = simulate(o, mps);
+        spikeOver = std::max(spikeOver, s.overflowFrames);
+        fixedOver = std::max(fixedOver, f.overflowFrames);
+        fixedZero = std::max(fixedZero, f.zeroAfterStart);
+        fixedDisc = std::max(fixedDisc, f.openingDiscards);
+        lvl = std::max(lvl, f.levelAtHostStart);
+      }
+      std::printf("  %5u Hz %6.0f ms:%34ld%25ld / %ld / %ld / %d B\n", static_cast<unsigned>(rate), d, spikeOver, fixedOver,
+                  fixedZero, fixedDisc, lvl);
+      if (fixedOver || fixedZero) allClean = false;
+      if (rate == 44100u && reproduces < 0 && spikeOver >= 148) reproduces = d;
+      if (rate == 44100u && d == 30.0) spikeAt30 = spikeOver;
+    }
+    char what[200];
+    std::snprintf(what, sizeof(what), "%u Hz stream start, host polling 0..5000 ms after SET_INTERFACE: fixed producer has no overrun "
+                  "and no empty packet", static_cast<unsigned>(rate));
+    expect(allClean, what);
+  }
+  std::printf("  the spike's sequence drops >= 148 frames once the host starts %.0f ms after the open\n", reproduces);
+  expect(spikeAt30 > 0 && reproduces > 0, "the spike's start-of-stream overrun reproduces in the model (one-off, at the open)");
 }
 
 // ---------------------------------------------------------------------------
@@ -369,6 +502,8 @@ bool readDump(const char* path, std::vector<uint8_t>& out, uint32_t& rate) {
     const char* r = std::strstr(line, " rate ");
     unsigned hz;
     if (r && std::strstr(line, "USB audio spike") && std::sscanf(r, " rate %u", &hz) == 1) rate = hz;
+    const char* u = std::strstr(line, "[usb] rate ");   // the instrument's 'u' dump
+    if (u && std::sscanf(u, "[usb] rate %u", &hz) == 1) rate = hz;
   }
   std::fclose(f);
   return !out.empty();
@@ -388,13 +523,13 @@ int main(int argc, char** argv) {
     std::printf("== configuration descriptor as the device assembles it, %u Hz (%zu bytes)\n", static_cast<unsigned>(rate), cfg.size());
     decode(cfg);
     std::printf("  validator:\n");
-    usbspike::CheckResult r;
-    const int e = usbspike::checkConfiguration(cfg.data(), cfg.size(), rate, &r, printLine, nullptr, true);
+    pgusb::CheckResult r;
+    const int e = pgusb::checkConfiguration(cfg.data(), cfg.size(), rate, &r, printLine, nullptr, true);
     char what[200];
     std::snprintf(what, sizeof(what), "%u Hz configuration: 0 errors (%d warnings), audio EP 0x%02x max packet %u B, %d IN EPs, DWC2 FIFO %d/256 words",
                   static_cast<unsigned>(rate), r.warnings, r.audioEpIn, r.audioMaxPacket, r.inEndpoints, r.fifoWordsUsed);
     expect(e == 0 && r.warnings == 0, what);
-    expect(cfg.size() == 9 + TUD_CDC_DESC_LEN + usbspike::kUac1DescLen, "total length = 9 + 66 (CDC) + 91 (UAC1) = 166 bytes");
+    expect(cfg.size() == 9 + TUD_CDC_DESC_LEN + pgusb::kUac1DescLen, "total length = 9 + 66 (CDC) + 91 (UAC1) = 166 bytes");
     expect(r.audioEpIn == 0x83, "audio endpoint is 0x83 (first IN slot whose OUT twin the CDC uses, as tinyusb_get_free_in_endpoint picks)");
   }
 
@@ -405,6 +540,9 @@ int main(int argc, char** argv) {
   std::printf("== TinyUSB ISO-IN flow control simulation (FIFO 3104 B, threshold 1552 B, 128-frame producer)\n");
   flowControlTests();
 
+  std::printf("== stream start: host polling late after SET_INTERFACE (the spike's one-off overrun)\n");
+  streamStartTests();
+
   if (dump) {
     std::vector<uint8_t> cfg;
     uint32_t rate = 0;
@@ -412,8 +550,8 @@ int main(int argc, char** argv) {
     if (!readDump(dump, cfg, rate)) { expect(false, "dump contains '[usb] cfg' lines"); }
     else {
       decode(cfg);
-      usbspike::CheckResult r;
-      const int e = usbspike::checkConfiguration(cfg.data(), cfg.size(), rate, &r, printLine, nullptr, true);
+      pgusb::CheckResult r;
+      const int e = pgusb::checkConfiguration(cfg.data(), cfg.size(), rate, &r, printLine, nullptr, true);
       expect(e == 0, "configuration descriptor from the device validates");
       if (rate) {
         const std::vector<uint8_t> ref = buildConfiguration(rate);
