@@ -55,7 +55,7 @@ For the real instrument a dedicated data partition (converting app1, keeping eve
 
 ## 3. The pages and keys
 
-**Tab** (or G0) switches page. **Enter** prints the current page's report block to serial. **-** / **=** change the volume (2 dB steps, starts at -31.5 dB). Serial: `T` tilt report, `S` sampler report, `A` both, `>` next page.
+**Tab** (or G0) switches page. **Enter** prints the current page's report block to serial. **-** / **=** change the volume (2 dB steps, starts at -31.5 dB). Serial: `T` tilt report, `S` sampler report (plus the mic matrix block once a run finished), `A` both, `>` next page, `M` run the mic matrix, `Q` print its block.
 
 ### TILT
 
@@ -92,8 +92,11 @@ Lines: store state; input level of both I2S slots (RMS with DC removed, peak hel
 | p | the raw recording straight back, 1:1 |
 | x | stop all voices |
 | b | playback-cost benchmark, about 15 s (the first run writes a 1 MB test sample to flash first, a few seconds) |
+| **m** | **mic matrix**, about 30 s, hands off: tries 24 microphone setups with a 1 kHz test tone on the speaker, tests the DIN pin electrically, prints the `MICMATRIX` block and, if a setup works, switches the page to it (section 4b). Serial: `M` runs it, `Q` prints its block again |
 
 The recording stays in flash across reboots (and is played again by the next spike flash).
+
+The line above the message line shows the matrix progress, then in green **`MIC WORKS (config N)`** or in red **`MIC DEAD IN ALL N CONFIGS`**.
 
 ## 4. What to do and send back
 
@@ -112,6 +115,19 @@ Headphones (the speaker is fine for the tilt test, but the mic will hear it). Ab
 11. **Sampler report:** Enter. Copy the block from `===== PG-HWSPIKE SAMPLER BEGIN` to `END`.
 12. Flash the instrument back (section 1) and check a project loads.
 
+### 4b. Mic matrix (the microphone returned a constant -1; this settles it in one flash)
+
+Background: docs/hardware-notes.md 11.6. About 1 minute.
+
+1. Flash this build (section 1), open the monitor (`pio device monitor -e hw-spike`).
+2. **Unplug the headphones** (the speaker must play the test tone; with headphones in, the tone would be loud in your ears and the mic cannot hear it). Put the device on the table, screen up, and keep the room reasonably quiet.
+3. Tab to SAMPLER and press **`m`** (or send `M` on serial). Do not touch it for about 30 s: it beeps at 1 kHz in bursts and clicks between setups. The line above the message line shows `matrix N/24 <name>`.
+4. When it ends, that line shows **`MIC WORKS (config N)`** (green) or **`MIC DEAD IN ALL N CONFIGS`** (red), and the block `===== PG-HWSPIKE MICMATRIX BEGIN` ... `END` is printed on serial (send `Q` to print it again).
+5. If it says MIC WORKS, the page now runs that setup: press `r`, clap / speak, `r`, then `p` and the pitch keys to listen. Also do the silence measurement (`n`) at gain 1-4 (step 7 of section 4) and one clap recording at gain 3 (step 8).
+6. **Send:** the whole `MICMATRIX` block (copy from `BEGIN` to `END`, about 90 lines), then the SAMPLER block (Enter), and say how the recording sounds.
+
+### Send (whole session)
+
 **Send:** the two report blocks (or `A` on serial, which prints both), plus impressions: which tilt preset felt best, whether the dead zone / range / smoothing should change, latency felt OK or not, whether shake detection fired correctly, how the mic sounds (noisy, thin, boomy, distorted?) and which gain was usable.
 
 ## 5. Report fields
@@ -119,6 +135,17 @@ Headphones (the speaker is fine for the tilt test, but the mic will hear it). Ab
 **TILT:** `imu` registers read back after configuration (ACC_CONF / GYR_CONF / ranges / power; `err` = ERR_REG, should be 0); `rate` (`new_hz` = fresh samples/s, `dup_pct` = polls that found no new sample, `gaps` = samples whose sensortime step exceeded 1.5 periods, i.e. lost samples; `odr_sensortime_hz` assumes 39.0625 us per sensortime tick, `ticks_per_sample` is the raw value); `i2c` (one 18-byte burst read: average / max, and a 1-byte read); `cpu` (IMU task time per poll including the bus wait, the maths in cycles, % of core 1; the audio task's time); `noise` (std of the quietest 2 s window: accelerometer-only and fused angles, gyro); `rest` (gravity vector when still, bias); `drift` (gyro-only integration vs the accelerometer after `secs`, and the fused estimate's error); `fusion` (`sign_check` +1 = gyro and accelerometer agree on rotation direction, -1 = the gyro sign is inverted relative to the maths, 0 = no motion seen); `latency_ms` (estimate: half a poll period + the smoothing's group delay per preset + one audio block + the TX DMA ring; the BMI270's internal filter delay is not included); `keys_imu_off` / `keys_imu_on` (keyboard INT to event read, per state); `keys` (drops, FIFO overflows, I2C errors, downs vs ups); `play` (preset, shakes).
 
 **SAMPLER:** `store` (partition, LittleFS partition, running app, regions); `codec` (ES8311 registers read back); `live_L` / `live_R` (last full second per slot); `gain1..4` (silence: RMS with DC removed, peak, DC; last recording at that gain: peak, RMS, DC, clips, length); `rec` (samples, chunk, write count, average/max write time, erase time); `rec_drops` (`i2s_rx_overflows` = input DMA blocks lost while recording, `ring_drop_samples` = the flash writer fell behind, `max_rx_gap_us` vs `block_period_us`); `play` (live voice rendering); `bench_row: src voices poll_kb cyc_per_sample cyc_per_voice_sample max_block_cyc core_pct` and `miss_cyc_per_line`.
+
+**MICMATRIX** (one block per run, also appended to the SAMPLER block once a run finished):
+
+- `result:` the verdict, the winning config's name and slot, `applied=1` if the page now runs it, run time.
+- `pin_boot:` GPIO46 (I2S data in) as `M5.begin()` left it, read before our first I2S call: `oe` output enable, `out` output level, `out_sel` GPIO-matrix output signal (256 = plain GPIO), `ie` input enable, `wpu` / `wpd` pulls, `mcu_sel` IO_MUX function, `level` pad level, `in_sel_i2s1_sd` the GPIO-matrix input select of the I2S1 data-in signal (46 = from GPIO46, plus 128 if routed through the matrix). **`oe=1 out=1` here is the root cause of hardware-notes 11.6.** `pin_i2s:` the same right after `i2s_channel_init_std_mode`.
+- `pin_test:` fraction of 20,000 pad reads that were 1, with the codec running and its clocks on: `as_found` (pin as at boot), then output driver off with pull-up `pu` / pull-down `pd`, then the codec's serial output muted (reg 0x0A bit 6) with pull-up / pull-down. `verdict`: `codec_drives_line` (the line does not follow the pulls, or reads 0 under the pull-up while muted), `line_floats_codec_silent` (follows the pulls), prefixed `esp_drove_din_itself+` if the ESP's own output was on.
+- `chip:` ES8311 regs 0xFD-0xFF. `regs_before_XX:` / `regs_after_XX:` all registers 0x00-0x45 before the run and after the winner was applied (16 per line, from register XX).
+- `cfgNN:` one setup: `path` (our full-duplex driver, or the M5.Mic control), `din` (as-found / oe-off = the fix / forced-high / oe-off+pd), slot width, rate, whether the tone played, `loopR` (reg 0x44 = 0x58 sends the DAC to the R slot: an electrical proof that the codec drives ASDOUT; judged on L only), the better slot, its score and five registers read back after the capture. `cfgNN_L:` / `cfgNN_R:` 0.5 s capture per slot (a whole number of tone periods): `stuck` (every sample equal), `min` / `max`, `dc` (LSB), `rms` (dBFS, DC removed), `pk`, `tone` (level of the 1 kHz component, dBFS), `snr` (tone vs everything else, dB), `alive` (not stuck, >= 8 LSB span, RMS > -87 dBFS), `tone_ok` (alive, tone > -90 dBFS and >= 10 dB above the rest).
+- `rank:` config numbers, best first: alive first, then tone heard, then tone SNR; equal scores keep the table order.
+
+The 24 configs: 0 the spike as it was; 1 + DIN output driver off (the fix); 2 DIN forced high (repro); 3 output off + pull-down; 4 / 5 M5Unified's speaker + mic sequence with / without the fix; 6 esp_codec_dev's open + set_fs + start; 7 the same with the DAC reference in the R slot; 8 esp-bsp's es8311_init + microphone_config; 9 spike + DAC loopback (0x44 = 0x58); 10 / 11 32-bit slots (64 fs) with x8 / x4; 12 16-bit slots with x4 (wrong ratio, control); 13 DMIC on (control); 14 MIC2 input; 15 serial output muted (control: should read 0); 16 24-bit word; 17 Espressif's bias / HPF / ramp / 0x44 / 0x45 registers; 18 digital gain 0x16 = 0x24, 0x17 = 0xC8; 19 full codec reset first; 20 codec written before the I2S clocks start; 21 slow power-up with 100 ms settles; 22 / 23 M5Unified's own `M5.Mic` (port 0, 16 kHz, right slot, its exact callback; our driver shut down) as is / with the fix. Spike-based setups use PGA 18 dB; the reference sequences keep their own gain. During the run the DAC is at -8 dB and the tone at -12 dBFS; afterwards your volume is restored.
 
 The benchmark: one block = 128 frames at 44.1 kHz; voices loop over their source at +7 semitones (ratio 1.498, so the interpolation is exercised), started evenly spread over it. Sources: `ram48k` = 48 KB copy of the test sample in internal RAM; `flash48k` = the same 48 KB read through the mapping; `flash1m` = the whole 1 MB mapped test sample, voices up to 128 KB apart (sequential with 1 voice, cache-hostile with 8). `poll_kb` = before each block, that many KB of other mapped flash are read one byte per 32-byte cache line, marching through 256 KB (eight times the 32 KB data cache), so the voices' lines are evicted as they would be by an engine that reads flash tables in between; its time is not counted, but it gives `miss_cyc_per_line`, the cost of one data-cache line fill from flash. The voice loop runs from IRAM, as the instrument's hot path does, so the numbers are about data, not code.
 
@@ -128,14 +155,17 @@ The benchmark: one block = 128 frames at 44.1 kHz; voices loop over their source
 - **IMU:** M5.begin() uploads the BMI270 config file (M5Unified); the spike then writes ACC_CONF / GYR_CONF in performance mode at the chosen rate, +-4 g, +-1000 dps (values from the Rust BSP), and an esp_timer wakes a task on core 1 (priority 9, below the keyboard task) that reads 18 bytes from 0x0C at 400 kHz (accel, gyro, sensortime, data-ready flags). The maths runs there; the audio task reads two atomics.
 - **Recording:** `r` stops playback, erases the header sector and 512 KB, unmaps the region, then the audio task pushes the selected slot into a 16384-sample RAM ring while a writer task (core 1, priority 5) streams chunks of 256 / 1024 / 4096 bytes into the pre-erased flash and finally writes a header (length, gain, peak, CRC) and maps the region again.
 - **Playback:** linear-interpolating integer voices (32.32 position) read straight from the mapped flash pointer; nothing is copied.
+- **Mic matrix** (src/hwspike/mic_matrix.cpp, tone maths in tone.h): a job task on core 1 restarts the duplex driver once per setup (`duplex::restart` with the setup's slot width, DIN mode, codec sequence and order), lets it settle 250-600 ms while the audio task plays the tone, then the audio task correlates 22,050 frames per slot with an exact 441-sample (10-period) 1 kHz table: tone amplitude, residual and SNR with no leakage. The M5.Mic controls shut our driver down and use `M5.Mic.begin()` / `record()` / `end()`. Ranking and the report are portable and host-tested; the winner is restarted with your volume and gain preset. It writes no flash.
 
 ## 7. Verified offline / unverified
 
-Verified here: `pio run -e hw-spike` builds with no warnings in its sources; `cardputer-adv`, `cardputer-adv-usb` and `smoke` still build; partition table byte-identical (section 2); `test_hwspike` (ctest) covers the relative-tilt frame at arbitrary holding angles, the complementary filter (tracks a 1 rad/s turn, halves accelerometer noise, a flipped gyro sign diverges), the mapping (dead zone, range, clamp, glide back), shake detection (shake yes, slow tilt and single bump no), the resampler (bit-exact at 1.0, interpolation, pitch, 32.32 position accuracy, loop/one-shot end), the SVF at every extreme, the level statistics and both report formats (markers, fixed line counts, no truncation).
+Verified here (mic matrix, 2026-11-12): `pio run -e hw-spike -e cardputer-adv-usb` builds with no warnings in the spike's sources, partitions.bin still has MD5 `801ba716...`; `test_hwspike` covers the tone table at 44.1 / 32 / 16 kHz, the generator against `sin`, the detector (exact amplitude and DC of a pure tone, SNR of a tone 20 dB under white noise, a quiet tone 16 dB above noise found, other frequencies rejected, constant -1 and 1-LSB toggling judged dead), the ranking / verdict text and the MICMATRIX block (fixed markers, no truncation at worst-case values).
+
+Verified here (first version): `pio run -e hw-spike` builds with no warnings in its sources; `cardputer-adv`, `cardputer-adv-usb` and `smoke` still build; partition table byte-identical (section 2); `test_hwspike` (ctest) covers the relative-tilt frame at arbitrary holding angles, the complementary filter (tracks a 1 rad/s turn, halves accelerometer noise, a flipped gyro sign diverges), the mapping (dead zone, range, clamp, glide back), shake detection (shake yes, slow tilt and single bump no), the resampler (bit-exact at 1.0, interpolation, pitch, 32.32 position accuracy, loop/one-shot end), the SVF at every extreme, the level statistics and both report formats (markers, fixed line counts, no truncation).
 
 Not verified (needs the device):
 
-1. **The microphone works at all on this core.** guitar-audio-tools reports that with Arduino core 3.3.x (ESP-IDF 5.5, which this project uses) the ADV microphone returns only constant samples through M5.Mic (espressif/esp-idf#18621, open). The spike uses its own full-duplex `i2s_std` channel with driver-managed clocks, not M5.Mic, so it may not be affected; the `STUCK` flag and `live_*: stuck=1` show it if it is. If so, the next thing to try is the same firmware on pioarduino 54.03.20 (core 3.2.0).
+1. **The microphone.** Measured 2026-11-12: constant -1 in both slots at every gain. Root cause found in the sources (hardware-notes 11.6): `M5.begin()` leaves GPIO46 an output driven high, and ESP-IDF 5.5's I2S driver no longer switches that driver off (5.4 did), so the receiver reads the ESP's own 1s; this is espressif/esp-idf#18621. Not yet confirmed on the device: the mic matrix (section 4b) does that, with the fix as config 1.
 2. Which I2S slot carries the ADC (the Rust BSP takes the left one; both are measured) and whether reg 0x16's power-on value and the 0x24 preset mean what Espressif's driver says.
 3. That full duplex on one port with this codec is glitch-free (espp and the Rust BSP do it; not this code).
 4. The BMI270 register values beyond what the Rust BSP and espp state (ERR_REG is printed to catch a bad combination); the sensortime tick of 39.0625 us is from memory of the datasheet, so `odr_sensortime_hz` is only as good as that (the raw ticks are printed).

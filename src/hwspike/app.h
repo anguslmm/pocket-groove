@@ -50,7 +50,8 @@ void render(int16_t* outStereo, int frames);       // audio task
 void key(uint8_t k, bool down);
 void draw();
 void tick();
-void report();
+void report();          // the SAMPLER block, then the MICMATRIX block if a run finished
+bool startMatrix();     // key m: the self-diagnosing mic matrix (mic_matrix.h)
 }  // namespace sampler
 
 }  // namespace hws

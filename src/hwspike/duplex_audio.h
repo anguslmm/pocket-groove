@@ -16,6 +16,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "report.h"   // PinSnap (portable)
+
 namespace hws {
 namespace duplex {
 
@@ -24,10 +26,33 @@ constexpr int kBlockFrames = 128;
 // in: kBlockFrames stereo frames from the ADC (L,R,...); out: the same for the DAC.
 using ProcessFn = void (*)(const int16_t* in, int16_t* out, int frames, void* user);
 
+// Codec setup hook: writes the ES8311 registers (except the DAC volume, which
+// begin() ramps afterwards). nullptr = defaultCodecInit().
+using CodecFn = bool (*)(void* user);
+
+// What begin() does to GPIO46 (I2S data in) after the RX channel is set up.
+// M5.begin() on any ESP32-S3 drives GPIO46 HIGH as an output (power hold for
+// Capsule / Dial / DinMeter) and restores it only on a few boards, not the
+// Cardputer-Adv (M5Unified 0.2.29 M5Unified.hpp, begin()). ESP-IDF 5.4 set
+// the I2S input pin with gpio_set_direction(INPUT), which switched that driver
+// off; 5.5 only calls gpio_input_enable() (esp_driver_i2s/i2s_common.c,
+// i2s_gpio_check_and_set), so the ESP keeps driving the line itself.
+enum DinMode : uint8_t {
+  kDinAsFound = 0,      // leave it as the driver left it (the original spike)
+  kDinOutputOff = 1,    // gpio_output_disable(46): the fix
+  kDinForcedHigh = 2,   // drive it high on purpose (reproduces M5.begin's state)
+  kDinOffPulldown = 3,  // output off + weak pull-down (a floating line then reads 0)
+};
+
 struct Config {
   uint32_t sampleRate = 44100;
   uint8_t  dmaDesc = 6;       // DMA buffers of kBlockFrames each direction (6 x 128 = 17.4 ms at 44.1 kHz)
   uint8_t  volumeReg = 0x80;  // ES8311 reg 0x32 (0xBF = 0 dB, 0.5 dB/step); 0x80 = -31.5 dB, safe for earbuds
+  uint8_t  slotBits = 16;     // 16: 32 BCLK per frame (32 fs); 32: 64 fs (data stays 16-bit, MSB first)
+  uint8_t  dinMode = kDinAsFound;
+  CodecFn  codec = nullptr;
+  void*    codecUser = nullptr;
+  bool     codecBeforeClock = false;   // write the codec before the I2S clocks start (M5Unified's order)
 };
 
 struct Stats {
@@ -43,6 +68,7 @@ struct Stats {
 };
 
 bool begin(const Config& cfg, ProcessFn fn, void* user);
+bool restart(const Config& cfg);   // end() + begin() with the same process callback
 void end();
 bool running();
 const char* lastError();
@@ -57,6 +83,24 @@ uint8_t volumeReg();
 bool    setMicGain(uint8_t pgaNibble, int reg16);
 uint8_t bootReg16();
 bool    codecRead(uint8_t reg, uint8_t* v);
+bool    codecWrite(uint8_t reg, uint8_t v);
+// The spike's own sequence (DAC: the instrument's; ADC: the Rust BSP's), with
+// reg 0x14 = reg14Hi | PGA. Usable as a building block by other CodecFns.
+bool    defaultCodecInit();
+void    setReg14Hi(uint8_t hi);    // input select / DMIC bits kept by setMicGain (default 0x10)
+uint8_t micPga();
+int     micReg16();                // -1 = power-on value
+
+// GPIO46 register snapshots: at the first begin() before any I2S call (as
+// M5.begin() left it), and right after the RX channel was initialised (before
+// dinMode is applied). readPin() reads it now.
+PinSnap pinBoot();
+PinSnap pinAfterI2s();
+PinSnap readPin();
+void    applyDinMode(uint8_t mode);
+// Fraction of `reads` back-to-back reads of the GPIO46 pad that are 1.
+float   sampleDinOnes(uint32_t reads);
+void    setDinPulls(bool up, bool down);
 
 Stats stats();
 void  resetStats();          // applied by the audio task at its next block

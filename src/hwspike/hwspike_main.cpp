@@ -24,6 +24,7 @@
 #include "../platform/system.h"
 #include "app.h"
 #include "duplex_audio.h"
+#include "mic_matrix.h"
 #include "pg/platform.h"
 
 namespace sys = plat::sys;
@@ -90,7 +91,8 @@ uint32_t g_lastDraw = 0;
 
 void process(const int16_t* in, int16_t* out, int frames, void*) {
   sampler::input(in, frames);
-  if (g_page == kTilt) tilt::render(out, frames);
+  if (micmatrix::running()) micmatrix::process(in, out, frames);   // test tone + capture
+  else if (g_page == kTilt) tilt::render(out, frames);
   else sampler::render(out, frames);
 }
 
@@ -117,6 +119,7 @@ void handleKey(const keys::Event& e) {
       return;
     }
     if (k == kMinus || k == kEquals) {
+      if (micmatrix::running()) { app::msg("mic matrix running"); return; }
       int v = duplex::volumeReg() + (k == kEquals ? 4 : -4);
       if (v > 0xBF) v = 0xBF;
       if (v < 0x40) v = 0x40;
@@ -136,10 +139,15 @@ void pollSerial() {
     switch (c) {
       case 'T': tilt::report(); break;
       case 'S': sampler::report(); break;
-      case 'A': tilt::report(); sampler::report(); break;
+      case 'A': tilt::report(); sampler::report(); break;   // the sampler block includes the matrix block
       case '>': setPage(g_page == kTilt ? kSampler : kTilt); break;
+      case 'M':
+        setPage(kSampler);
+        sampler::startMatrix();
+        break;
+      case 'Q': micmatrix::report(); break;
       case '?':
-        app::sp("[hwspike] serial: T tilt report, S sampler report, A both, > next page\n");
+        app::sp("[hwspike] serial: T tilt report, S sampler report, A all, > next page, M mic matrix, Q matrix report\n");
         break;
       default: break;
     }
@@ -171,7 +179,7 @@ void setup() {
   tilt::begin();
   sampler::begin();
   tilt::enter();
-  app::sp("[boot] done. Tab/G0 page, Enter report. Serial: T S A > ?\n");
+  app::sp("[boot] done. Tab/G0 page, Enter report, SAMPLER m = mic matrix. Serial: T S A M Q > ?\n");
 }
 
 void loop() {
