@@ -447,7 +447,7 @@ All coordinates are inclusive pixels on the 240x135 framebuffer, with x to the r
 * **Boot banner**: (30,30) 180x44 PANEL with a GREEN frame. `POCKET GROOVE` in L, then `SPACE PLAY  / ALL KEYS`, `1-8 Q-I STEPS  A-K PADS`.
 
 ### 10.10 HELP (`help.png`, `help-explain.png`)
-* Full screen BG. A header bar 0..10 WHITE with `KEYS <VIEW>` in BG and `+FN/SHIFT/CTRL/OPT/ALT` LINE on the right.
+* Full screen BG. A header bar 0..10 WHITE with `KEYS <VIEW>` in BG and `FN/SFT/CTL/OPT/ALT/TAB` LINE on the right.
 * A key grid of 4x14 cells 16x17 at (1+17c, 14+19r), each with a 2-letter label (same colour groups as the keys-*.png diagrams).
 * A legend from y 92 at a 9 px pitch, with 5 lines.
 * Holding a modifier while the help is up redraws the grid for that layer.

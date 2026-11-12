@@ -338,7 +338,7 @@ Pads and notes play, and `opt`+step still queues a pattern.
 
 ![Key map overlay (hold /)](manual/m-help.png)
 
-Hold `/`: the key map of the current view replaces the screen until you release it; hold a modifier as well to see that layer. Tap `/`: explain mode. Every key you press shows a short description instead of acting; `space` still plays and stops; `/` or `` ` `` leaves.
+Hold `/`: the key map of the current view replaces the screen until you release it; hold a modifier as well to see that layer. Tap `/`: explain mode. Every key you press shows a short description instead of acting (hold a modifier while you press it to see that combo, e.g. `fn`+pad = mute); `space` still plays and stops; `/` or `` ` `` leaves.
 
 ---
 

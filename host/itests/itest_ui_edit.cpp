@@ -257,6 +257,60 @@ static void testHelp() {
   tap("/");
   tap("`");                                    // ` also leaves
   CHECK(!R->ui.explainMode());
+  // a key pressed with a modifier held explains the combo, not the bare key
+  // (owner report: FN + a key showed the key's text without FN)
+  struct Combo { const char* mod; const char* key; const char* title; };
+  const Combo combos[] = {
+      {"fn", "a", "FN+PAD: MUTE KICK"},      {"fn", "z", "FN+NOTE: SOLO KICK"},
+      {"fn", "3", "NOTHING WITH FN"},        {"fn", "9", "SOUND VIEW"},
+      {"opt", "3", "OPT+STEP: QUEUE P03"},   {"alt", "s", "ALT+PAD: ROLL SNAR"},
+      {"alt", ";", "ALT+UP: ROLL FASTER"},   {"ctl", "z", "CTRL+Z: UNDO"},
+      {"ctl", "s", "CTRL+S: SAVE"},          {"tab", "=", "TAB+=: TEMPO +1 BPM"},
+      {"tab", "a", "PAD A: KICK"},           {"sft", "3", "SHIFT+STEP: LENGTH 3"},
+      {"sft", "x", "SHIFT+NOTE 2: ACCENT"},  {"sft", "a", "PAD A: KICK"},
+  };
+  char title[40];
+  const char *l1, *l2;
+  tap("/");
+  for (const Combo& c : combos) {
+    down(c.mod);
+    tap(c.key);
+    CHECK_EQ(R->ui.explainKey(), K(c.key));
+    R->ui.explainText(title, &l1, &l2);
+    if (std::strcmp(title, c.title) != 0) std::printf("  %s+%s explains \"%s\"\n", c.mod, c.key, title);
+    CHECK(std::strcmp(title, c.title) == 0);
+    up(c.mod);
+    R->ui.explainText(title, &l1, &l2);         // still the gesture that was pressed
+    CHECK(std::strcmp(title, c.title) == 0);
+  }
+  tap("/");
+  // SHIFT+step inserts in SONG: the key map says so there, LENGTH elsewhere
+  char lab[3];
+  tap("p");
+  down("sft");
+  R->ui.helpKeyLabel(K("1"), lab);
+  CHECK(std::strcmp(lab, "IN") == 0);
+  R->ui.helpKeyLabel(K("'"), lab);           // SHIFT+' adds no page in SONG
+  CHECK(lab[0] == 0);
+  up("sft");
+  tap("/");
+  down("sft");
+  tap("3");
+  R->ui.explainText(title, &l1, &l2);
+  CHECK(std::strcmp(title, "SHIFT+STEP: INSERT P03") == 0);
+  up("sft");
+  tap("/");
+  tap("`");
+  down("sft");
+  R->ui.helpKeyLabel(K("1"), lab);
+  CHECK(std::strcmp(lab, "LN") == 0);
+  up("sft");
+  tap("/");
+  tap("a");
+  R->ui.explainText(title, &l1, &l2);
+  CHECK(std::strcmp(title, "PAD A: KICK") == 0);
+  CHECK(!R->ui.muted(0));                      // explain mode never acts
+  tap("/");
   // every key in every table explains without crashing
   for (const char* v : views) {
     tap(v);
