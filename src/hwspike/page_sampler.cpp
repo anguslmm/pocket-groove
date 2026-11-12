@@ -25,6 +25,7 @@
 #include "dsp.h"
 #include "duplex_audio.h"
 #include "mic_matrix.h"
+#include "mic_quality.h"
 #include "sample_store.h"
 
 namespace hws {
@@ -53,13 +54,16 @@ struct GainPreset {
   int     reg16;  // -1 = leave the power-on value
   int     pgaDb;
 };
+// reg 0x16 = 0x24 is esp_codec_dev's value, which the boot default (matrix
+// config 6) writes; 0x04 is the power-on value. On the device 0x16 changed
+// nothing measurable (cfg06 vs cfg01: +11.8 dB = the 12 dB PGA difference).
 const GainPreset kGains[kNumGainRows] = {
-    {"PGA 0dB (M5Unified)", 0, -1, 0},
-    {"PGA 15dB", 5, -1, 15},
-    {"PGA 30dB (espp/Rust max)", 10, -1, 30},
-    {"PGA 30 + r16=24 (Espressif)", 10, 0x24, 30},
+    {"PGA 0dB", 0, 0x24, 0},
+    {"PGA 15dB", 5, 0x24, 15},
+    {"PGA 30dB (boot default)", 10, 0x24, 30},
+    {"PGA 30 + r16=04 (power-on)", 10, 0x04, 30},
 };
-int g_gain = 2;
+int g_gain = 2;   // = matrix config 6 exactly (0x14 = 0x1A, 0x16 = 0x24)
 std::atomic<int> g_channel{0};
 
 // ---- meter (audio task accumulates, publishes) ---------------------------------
@@ -68,11 +72,9 @@ uint32_t g_mBlocks = 0, g_sBlocks = 0;  // audio task
 LevelAcc g_mPub[2], g_sPub[2];          // under g_mux
 portMUX_TYPE g_mux = portMUX_INITIALIZER_UNLOCKED;
 
-// ---- silence measurement --------------------------------------------------------
-std::atomic<uint32_t> g_measLeft{0};
-std::atomic<bool> g_measDone{false};
-LevelAcc g_measAcc;
-int g_measGain = 0;
+// ---- quality measurement (mic_quality.cpp) ------------------------------------------
+bool g_qualValid = false;
+MicQuality g_qual;   // UI copy of the last finished run
 
 // ---- recording -------------------------------------------------------------------
 enum RecState : int { kIdle = 0, kErasing, kRecording, kFinishing };
@@ -329,13 +331,6 @@ void IRAM_ATTR input(const int16_t* in, int frames) {
     g_mAcc[1].add(in[2 * i + 1]);
   }
   const int ch = g_channel.load(std::memory_order_relaxed);
-  if (g_measLeft.load(std::memory_order_relaxed) > 0) {
-    for (int i = 0; i < frames; ++i) g_measAcc.add(in[2 * i + ch]);
-    const uint32_t left = g_measLeft.load(std::memory_order_relaxed);
-    const uint32_t nl = left > static_cast<uint32_t>(frames) ? left - static_cast<uint32_t>(frames) : 0;
-    g_measLeft.store(nl, std::memory_order_relaxed);
-    if (nl == 0) g_measDone.store(true, std::memory_order_release);
-  }
   if (g_rec.load(std::memory_order_relaxed) == kRecording) {
     uint32_t h = g_head.load(std::memory_order_relaxed);
     const uint32_t t = g_tail.load(std::memory_order_acquire);
@@ -554,7 +549,7 @@ uint32_t g_peakHoldT = 0;
 
 bool startMatrix() {
   const int bs = g_bench.load();
-  if (micmatrix::running()) { app::msg("matrix already running"); return false; }
+  if (micmatrix::running() || quality::running()) { app::msg("already measuring"); return false; }
   if (g_rec.load() != kIdle || bs == kBRun || bs == kBPrep) { app::msg("busy"); return false; }
   quiesce();   // no playback from the mapping while the driver restarts
   if (!micmatrix::start()) {
@@ -562,13 +557,29 @@ bool startMatrix() {
     app::msg("matrix did not start");
     return false;
   }
-  app::msg("mic matrix: ~30 s, unplug headphones");
+  app::msg("mic matrix: ~50 s, unplug headphones");
+  return true;
+}
+
+bool startQuality() {
+  const int bs = g_bench.load();
+  if (micmatrix::running() || quality::running()) { app::msg("already measuring"); return false; }
+  if (g_rec.load() != kIdle || bs == kBRun || bs == kBPrep) { app::msg("busy"); return false; }
+  quiesce();   // the run owns the output
+  quality::GainSet gs[kNumGainRows];
+  for (int g = 0; g < kNumGainRows; ++g) gs[g] = {kGains[g].pga, kGains[g].reg16, kGains[g].pgaDb};
+  if (!quality::start(gs, kNumGainRows, g_gain, g_channel.load())) {
+    g_playEnable.store(store::mapped());
+    return false;
+  }
+  app::msg("quality: ~12 s, keep quiet, speaker on");
   return true;
 }
 
 void key(uint8_t k, bool down) {
   if (!down) return;
   if (micmatrix::running()) { app::msg("mic matrix running..."); return; }
+  if (quality::running()) { app::msg("quality measurement running..."); return; }
   if (k == kM) { startMatrix(); return; }
   const int rec = g_rec.load();
   const int bs = g_bench.load();
@@ -599,12 +610,7 @@ void key(uint8_t k, bool down) {
     return;
   }
   if (k == kN) {
-    if (g_measLeft.load() > 0) return;
-    g_measAcc.clear();
-    g_measGain = g_gain;
-    g_measDone.store(false);
-    g_measLeft.store(3 * app::g_sampleRate);
-    app::msg("silence: quiet for 3 s...");
+    startQuality();
     return;
   }
   if (k == kW) {
@@ -647,12 +653,27 @@ void tick() {
   const bool mr = micmatrix::running();
   if (s_matrixWasRunning && !mr) g_playEnable.store(store::mapped() && g_rec.load() == kIdle);
   s_matrixWasRunning = mr;
-  if (g_measDone.exchange(false)) {
-    const LevelResult r = levelResult(g_measAcc);
-    g_gr[g_measGain].silValid = true;
-    g_gr[g_measGain].sil = r;
-    app::msg("silence: %.1f dBFS rms, pk %.1f", static_cast<double>(r.acRmsDb), static_cast<double>(r.peakDb));
+  static bool s_qualWasRunning = false;
+  if (quality::tick()) {
+    g_qual = quality::result();
+    g_qualValid = true;
+    for (int g = 0; g < kNumGainRows; ++g) {
+      const NoiseRow& n = g_qual.noise[g];
+      if (!n.valid) continue;
+      g_gr[g].silValid = true;
+      g_gr[g].sil = LevelResult{};
+      g_gr[g].sil.acRmsDb = n.rmsDb;
+      g_gr[g].sil.peakDb = n.peakDb;
+      g_gr[g].sil.dcLsb = n.dcLsb;
+      g_gr[g].sil.clips = n.clips;
+      g_gr[g].sil.stuck = n.stuck;
+    }
+    app::msg("%s", quality::statusLine());
+    app::sp("[quality] %s (Enter prints the SAMPLER block)\n", quality::statusLine());
   }
+  const bool qr = quality::running();
+  if (s_qualWasRunning && !qr) g_playEnable.store(store::mapped() && g_rec.load() == kIdle);
+  s_qualWasRunning = qr;
   if (g_recResultReady.exchange(false)) {
     g_lastRec = g_jobRec;
     if (g_lastRec.valid) {
@@ -753,11 +774,9 @@ void draw() {
   } else {
     cv.line(7, kGrey, "no recording yet");
   }
-  const GainResults& gr = g_gr[g_gain];
-  if (g_measLeft.load() > 0) cv.line(9, kYellow, "[n] measuring silence...");
-  else if (gr.silValid) cv.line(9, kWhite, "[n] silence %.1f dBFS pk %.1f dc %.0f", static_cast<double>(gr.sil.acRmsDb),
-                                static_cast<double>(gr.sil.peakDb), static_cast<double>(gr.sil.dcLsb));
-  else cv.line(9, kGrey, "[n] measure silence (3 s)");
+  if (quality::running()) cv.line(9, kYellow, "%s", quality::statusLine());
+  else if (g_qualValid) cv.line(9, kWhite, "%s", quality::statusLine());
+  else cv.line(9, kGrey, "[n] mic quality: noise x4 gains + THD (12 s)");
   const float per = static_cast<float>(esp_rom_get_cpu_ticks_per_us()) * 1.0e6f / static_cast<float>(app::g_sampleRate);
   cv.line(10, kWhite, "[a-k] play x%u [v] act %lu [p]raw [x]stop", kVoiceModes[g_voiceMode],
           static_cast<unsigned long>(g_activeVoices));
@@ -785,7 +804,7 @@ void draw() {
   }
   if (micmatrix::running()) cv.line(13, kYellow, "%s", micmatrix::statusLine());
   else if (micmatrix::finished()) cv.line(13, micmatrix::works() ? kGreen : kRed, "%s", micmatrix::statusLine());
-  else if (!g_benchRows) cv.line(13, kGrey, "[m] mic matrix (~30 s, speaker on)");
+  else if (!g_benchRows) cv.line(13, kGrey, "[m] mic matrix (~50 s, speaker on)");
   cv.line(14, kYellow, "%s", app::currentMsg());
   cv.line(15, kGrey, "r 1-4 l n w a-k v p x b m  -/= vol");
 }
@@ -863,6 +882,7 @@ void report() {
   r.playAvgUs = g_playAvgCyc / cpu;
   r.playMaxUs = static_cast<float>(g_playMaxCyc) / cpu;
   r.playCpuPct = 100.0f * r.playAvgUs / duplex::stats().blockPeriodUs;
+  if (g_qualValid) r.quality = g_qual;
   app::fillMemory(&r.heapFree, &r.heapMin, &r.heapLargest, &r.staticDram);
   r.uptimeS = millis() / 1000;
   formatSamplerReport(r, app::reportSink, nullptr);

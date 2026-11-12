@@ -211,4 +211,162 @@ inline MicVerdict judgeMic(const ToneResult& r) {
   return v;
 }
 
+// ---------------------------------------------------------------------------
+// Which I2S slots carry the microphone (mic matrix ranking).
+//
+// ES8311 reg 0x44 bits 6:4 ADCDAT_SEL (Linux sound/soc/codecs/es8311.c,
+// "AIF1TX Source"): 0 ADC+ADC, 1 ADC+0, 2 0+ADC, 3 0+0, 4 DACL+ADC,
+// 5 ADC+DACR, 6 DACL+DACR (left slot first). A slot that carries the DAC
+// reference is the test tone itself, never the microphone. Independently of
+// the register, a slot whose tone sits within kDacRefTolDb of the digital
+// stimulus level with more than kDacRefSnrDb SNR is the DAC loop (the device
+// read exactly -12.0 dBFS / 63.8 dB there; the mic through the speaker
+// hears -25..-37 dBFS at about 30 dB SNR).
+constexpr float kDacRefTolDb = 1.5f;
+constexpr float kDacRefSnrDb = 45.0f;
+
+inline bool looksLikeDacRef(const ToneResult& r, float stimDb) {
+  return r.n > 1 && r.toneDb > stimDb - kDacRefTolDb && r.toneDb < stimDb + kDacRefTolDb && r.snrDb > kDacRefSnrDb;
+}
+
+// out[0] / out[1]: may the L / R slot be ranked as the microphone?
+inline void micSlots(bool r44Valid, uint8_t r44, bool loopR, const ToneResult res[2], bool tonePlayed, float stimDb,
+                     bool out[2]) {
+  out[0] = out[1] = true;
+  if (loopR) out[1] = false;
+  if (r44Valid) {
+    const int sel = (r44 >> 4) & 7;
+    if (!(sel == 0 || sel == 1 || sel == 5)) out[0] = false;
+    if (!(sel == 0 || sel == 2 || sel == 4)) out[1] = false;
+  }
+  if (tonePlayed)
+    for (int s = 0; s < 2; ++s)
+      if (looksLikeDacRef(res[s], stimDb)) out[s] = false;
+}
+
+// ---------------------------------------------------------------------------
+// Fundamental + harmonics 2..kMaxHarm of the table's tone, exact over a whole
+// number of table lengths (harmonic h of table entry i is table entry
+// (h * i) mod len, so one table serves all of them). Separates the old tone
+// "SNR" (tone vs everything else) into distortion (THD, harmonics 2-5) and
+// noise (what is left after DC, the tone and its harmonics).
+constexpr int kMaxHarm = 5;
+
+struct HarmonicResult {
+  uint32_t n = 0;
+  int      nHarm = 0;            // highest harmonic measured (below Nyquist)
+  float    dcLsb = 0;
+  float    acRmsDb = -120;       // all AC, dBFS RMS
+  float    peakDb = -120;
+  float    fundDb = -120;        // fundamental amplitude (peak), dBFS
+  float    harmDb[kMaxHarm + 1] = {-120, -120, -120, -120, -120, -120};   // [h] = amplitude, dBFS; [0], [1] unused
+  float    thdDb = -120;         // 10 log10(sum harmonic power / fundamental power)
+  float    thdPct = 0;
+  float    noiseDb = -120;       // RMS of the rest, dBFS
+  float    snrDb = -120;         // fundamental / noise (no harmonics)
+  float    sinadDb = -120;       // fundamental / (noise + harmonics) = the matrix's "snr"
+};
+
+class HarmonicDetector {
+ public:
+  void begin(const ToneTable* t) {
+    t_ = t;
+    clear();
+  }
+  void clear() {
+    for (int h = 0; h <= kMaxHarm; ++h) {
+      idx_[h] = 0;
+      re_[h] = im_[h] = 0.0f;
+      reT_[h] = imT_[h] = 0.0;
+    }
+    sum_ = 0;
+    sumsq_ = 0;
+    n_ = 0;
+    peak_ = 0;
+  }
+  void add(int16_t x) {
+    const int32_t v = x;
+    sum_ += v;
+    sumsq_ += static_cast<uint64_t>(static_cast<int64_t>(v) * v);
+    const int32_t a = v < 0 ? -v : v;
+    if (a > peak_) peak_ = a;
+    ++n_;
+    if (!t_ || t_->len == 0) return;
+    const float f = static_cast<float>(v);
+    const int len = t_->len;
+    for (int h = 1; h <= kMaxHarm; ++h) {
+      re_[h] += f * t_->c[idx_[h]];
+      im_[h] += f * t_->s[idx_[h]];
+      idx_[h] += h;
+      while (idx_[h] >= len) idx_[h] -= len;
+    }
+    if (idx_[1] == 0) {   // one table length done: flush the float sums
+      for (int h = 1; h <= kMaxHarm; ++h) {
+        reT_[h] += static_cast<double>(re_[h]);
+        imT_[h] += static_cast<double>(im_[h]);
+        re_[h] = im_[h] = 0.0f;
+      }
+    }
+  }
+  uint32_t count() const { return n_; }
+
+  HarmonicResult result() const {
+    HarmonicResult r;
+    r.n = n_;
+    if (n_ == 0) return r;
+    const double n = static_cast<double>(n_);
+    const double mean = static_cast<double>(sum_) / n;
+    double var = static_cast<double>(sumsq_) / n - mean * mean;
+    if (var < 0.0) var = 0.0;
+    r.dcLsb = static_cast<float>(mean);
+    r.acRmsDb = db(std::sqrt(var));
+    r.peakDb = db(static_cast<double>(peak_));
+    if (!t_ || t_->len == 0) return r;
+    double pw[kMaxHarm + 1] = {0, 0, 0, 0, 0, 0};
+    int nh = 1;
+    for (int h = 1; h <= kMaxHarm; ++h) {
+      if (2u * t_->freq * static_cast<uint32_t>(h) >= t_->rate) break;
+      nh = h;
+      const double re = reT_[h] + static_cast<double>(re_[h]);
+      const double im = imT_[h] + static_cast<double>(im_[h]);
+      const double amp = 2.0 * std::sqrt(re * re + im * im) / n;
+      pw[h] = amp * amp / 2.0;
+      if (h == 1) r.fundDb = db(amp);
+      else r.harmDb[h] = db(amp);
+    }
+    r.nHarm = nh;
+    double harm = 0.0;
+    for (int h = 2; h <= nh; ++h) harm += pw[h];
+    double noise = var - pw[1] - harm;
+    if (noise < 0.0) noise = 0.0;
+    r.noiseDb = db(std::sqrt(noise));
+    if (pw[1] > 0.0) {
+      r.thdDb = harm > 0.0 ? ratioDb(harm / pw[1]) : -120.0f;
+      r.thdPct = static_cast<float>(100.0 * std::sqrt(harm / pw[1]));
+      r.snrDb = noise > pw[1] * 1e-12 ? ratioDb(pw[1] / noise) : 120.0f;
+      r.sinadDb = (noise + harm) > pw[1] * 1e-12 ? ratioDb(pw[1] / (noise + harm)) : 120.0f;
+    }
+    return r;
+  }
+
+ private:
+  static float db(double lsb) {
+    if (!(lsb > 0.0)) return -120.0f;
+    const double d = 20.0 * std::log10(lsb / 32768.0);
+    return d < -120.0 ? -120.0f : static_cast<float>(d);
+  }
+  static float ratioDb(double p) {
+    const double d = 10.0 * std::log10(p);
+    return d < -120.0 ? -120.0f : (d > 120.0 ? 120.0f : static_cast<float>(d));
+  }
+  const ToneTable* t_ = nullptr;
+  int idx_[kMaxHarm + 1] = {0, 0, 0, 0, 0, 0};
+  float re_[kMaxHarm + 1] = {0, 0, 0, 0, 0, 0}, im_[kMaxHarm + 1] = {0, 0, 0, 0, 0, 0};
+  double reT_[kMaxHarm + 1] = {0, 0, 0, 0, 0, 0}, imT_[kMaxHarm + 1] = {0, 0, 0, 0, 0, 0};
+  int64_t sum_ = 0;
+  uint64_t sumsq_ = 0;
+  uint32_t n_ = 0;
+  int32_t peak_ = 0;
+};
+
 }  // namespace hws

@@ -89,6 +89,35 @@ int formatTiltReport(const TiltReport& r, LineSink sink, void* user) {
   return e.lines();
 }
 
+namespace {
+
+void qualityLines(Emitter& e, const MicQuality& q) {
+  e.line("quality: valid=%d slot=%s rate=%lu sil_s=%s fft=%d secs=%s (key n; noise = RMS with DC removed, dBFS; "
+         "spur = largest line >= 40 Hz as sine dBFS, floor = median bin)",
+         q.valid ? 1 : 0, q.slot ? "R" : "L", U(q.rate), F(q.silSecs, 1, q.valid).s, q.fftN, F(q.secs, 1, q.valid).s);
+  for (int g = 0; g < kNumGainRows; ++g) {
+    const NoiseRow& n = q.noise[g];
+    e.line("noise_gain%d: pga_db=%d r14=%02X r16=%02X rms=%s pk=%s dc=%s stuck=%d clips=%lu spur_hz=%s spur=%s "
+           "floor=%s spur_over_floor_db=%s frames=%lu",
+           g + 1, n.pgaDb, n.reg14, n.reg16, F(n.rmsDb, 1, n.valid).s, F(n.peakDb, 1, n.valid).s,
+           F(n.dcLsb, 1, n.valid).s, n.stuck ? 1 : 0, U(n.clips), F(n.spurHz, 0, n.spurValid).s,
+           F(n.spurDb, 1, n.spurValid).s, F(n.floorDb, 1, n.spurValid).s, F(n.spurOverFloorDb, 1, n.spurValid).s,
+           U(n.frames));
+  }
+  const HarmonicResult& t = q.tone;
+  const bool tv = q.toneValid;
+  e.line("tone: valid=%d hz=%lu gain=%d vol=%02X stim_dbfs=%s n=%lu level=%s h2=%s h3=%s h4=%s h5=%s thd_db=%s thd_pct=%s",
+         tv ? 1 : 0, U(q.toneHz), q.gain + 1, q.vol, F(q.stimDb, 1, tv).s, U(t.n), F(t.fundDb, 1, tv).s,
+         F(t.harmDb[2], 1, tv).s, F(t.harmDb[3], 1, tv).s, F(t.harmDb[4], 1, tv).s, F(t.harmDb[5], 1, tv).s,
+         F(t.thdDb, 1, tv).s, F(t.thdPct, 2, tv).s);
+  e.line("tone_noise: noise=%s snr_noise_db=%s sinad_db=%s ac_rms=%s pk=%s dc=%s (sinad = the matrix's tone snr; "
+         "snr_noise without the harmonics)",
+         F(t.noiseDb, 1, tv).s, F(t.snrDb, 1, tv).s, F(t.sinadDb, 1, tv).s, F(t.acRmsDb, 1, tv).s,
+         F(t.peakDb, 1, tv).s, F(t.dcLsb, 1, tv).s);
+}
+
+}  // namespace
+
 int formatSamplerReport(const SamplerReport& r, LineSink sink, void* user) {
   Emitter e(sink, user);
   e.line("===== PG-HWSPIKE SAMPLER BEGIN %s =====", kReportVersion);
@@ -134,6 +163,7 @@ int formatSamplerReport(const SamplerReport& r, LineSink sink, void* user) {
     e.line("bench_row: %s %d %d %s %s %lu %s", b.src, b.voices, b.pollKb, F(b.cycPerSample, 1).s,
            F(b.cycPerVoiceSample, 1).s, U(b.maxBlockCyc), F(b.corePct, 2).s);
   }
+  qualityLines(e, r.quality);
   e.line("mem: heap_free=%lu heap_min=%lu heap_largest=%lu static_dram=%lu uptime_s=%lu", U(r.heapFree),
          U(r.heapMin), U(r.heapLargest), U(r.staticDram), U(r.uptimeS));
   e.line("===== PG-HWSPIKE SAMPLER END =====");
@@ -158,8 +188,22 @@ void rankMicMatrix(MicMatrixReport& r) {
   r.best = -1;
   if (n > 0) {
     const MicCfgRow& c = r.cfg[r.rank[0]];
-    if (c.ran && c.v[c.bestSlot].alive) r.best = r.rank[0];
+    const int s = c.bestSlot ? 1 : 0;
+    if (c.ran && c.micOk[s] && c.v[s].alive) r.best = r.rank[0];
   }
+}
+
+void scoreMicRow(MicCfgRow& row) {
+  int best = -1;
+  for (int s = 0; s < 2; ++s)
+    if (row.micOk[s] && (best < 0 || row.v[s].score > row.v[best].score)) best = s;
+  if (best < 0) {
+    row.bestSlot = 0;
+    row.score = -1.5e9f;   // no microphone slot at all (e.g. both slots the DAC reference)
+    return;
+  }
+  row.bestSlot = best;
+  row.score = row.v[best].score;
 }
 
 void micMatrixVerdict(const MicMatrixReport& r, char* out, size_t n) {
@@ -204,6 +248,24 @@ void slotLine(Emitter& e, int idx, const char* slot, const ToneResult& t, const 
          F(t.snrDb, 1, tone).s, v.alive ? 1 : 0, v.tone ? 1 : 0);
 }
 
+// Registers that differ from the baseline after the config ran.
+void diffLine(Emitter& e, int idx, const MicCfgRow& c) {
+  if (!c.diffValid) {
+    e.line("cfg%02d_diff: na", idx);
+    return;
+  }
+  constexpr int kShow = 26;   // 6 chars each: the line stays below kReportLineMax
+  char buf[kReportLineMax + 1];
+  int k = 0;
+  const int n = c.nDiff < 0 ? 0 : (c.nDiff > kMaxRegDiffs ? kMaxRegDiffs : c.nDiff);
+  for (int j = 0; j < n && j < kShow; ++j)
+    k += snprintf(buf + k, sizeof(buf) - static_cast<size_t>(k), " %02X=%02X", c.diffReg[j], c.diffVal[j]);
+  if (c.nDiff > kShow && n >= kShow)
+    k += snprintf(buf + k, sizeof(buf) - static_cast<size_t>(k), " +%d", c.nDiff - kShow);
+  buf[k] = 0;
+  e.line("cfg%02d_diff: n=%d%s", idx, c.nDiff, n ? buf : " (= baseline)");
+}
+
 const char* dinName(int d) {
   switch (d) {
     case 0: return "as-found";
@@ -237,6 +299,8 @@ int formatMicMatrixReport(const MicMatrixReport& r, LineSink sink, void* user) {
   if (r.chipValid) e.line("chip: fd=%02X fe=%02X ff=%02X", r.chip[0], r.chip[1], r.chip[2]);
   else e.line("chip: na");
   regLines(e, "regs_before", r.regsBefore, r.regsBeforeValid);
+  e.line("baseline: regs_before; every config starts from it (0x00-0x1C 0x31-0x37 0x44 0x45 restored), "
+         "cfgNN_diff = registers that differ after the capture");
   const int n = r.n < 0 ? 0 : (r.n > kMaxMicCfgs ? kMaxMicCfgs : r.n);
   for (int i = 0; i < n; ++i) {
     const MicCfgRow& c = r.cfg[i];
@@ -249,11 +313,13 @@ int formatMicMatrixReport(const MicMatrixReport& r, LineSink sink, void* user) {
       snprintf(regs, sizeof(regs), "r01=%02X r02=%02X r0A=%02X r14=%02X r44=%02X", c.r01, c.r02, c.r0A, c.r14, c.r44);
     else
       snprintf(regs, sizeof(regs), "regs=na");
-    e.line("cfg%02d: %s path=%s din=%s slot_bits=%d rate=%lu tone=%d loopR=%d best=%s score=%s %s", i, c.name,
+    const char* mic = c.micOk[0] ? (c.micOk[1] ? "LR" : "L") : (c.micOk[1] ? "R" : "-");
+    e.line("cfg%02d: %s path=%s din=%s slot_bits=%d rate=%lu tone=%d loopR=%d mic=%s best=%s score=%s %s", i, c.name,
            c.m5mic ? "M5.Mic" : "duplex", dinName(c.din), c.slotBits, U(c.rate), c.tone ? 1 : 0, c.loopbackR ? 1 : 0,
-           c.bestSlot ? "R" : "L", F(c.score, 1).s, regs);
+           mic, c.bestSlot ? "R" : "L", F(c.score, 1).s, regs);
     slotLine(e, i, "L", c.res[0], c.v[0], c.tone);
     if (!c.m5mic) slotLine(e, i, "R", c.res[1], c.v[1], c.tone);
+    diffLine(e, i, c);
   }
   {
     char buf[kReportLineMax + 1];

@@ -96,6 +96,39 @@ struct BenchRow {
 constexpr int kNumGainRows = 4;
 constexpr int kMaxBenchRows = 40;
 
+// ---- microphone quality (SAMPLER key n, mic_quality.cpp) ------------------------
+// 2 s of room silence per gain preset, then 1 s of the 1 kHz speaker tone at
+// the current preset. No stimulus timing needed: hands off for ~12 s.
+struct NoiseRow {
+  bool     valid = false;
+  int      pgaDb = 0;
+  uint8_t  reg14 = 0, reg16 = 0;
+  float    rmsDb = -120;      // noise floor: RMS with DC removed, dBFS
+  float    peakDb = -120, dcLsb = 0;
+  bool     stuck = false;
+  uint32_t clips = 0;
+  // averaged spectrum (Hann): the largest line at or above 40 Hz and the median bin
+  bool     spurValid = false;
+  float    spurHz = 0, spurDb = -120, floorDb = -120, spurOverFloorDb = 0;
+  uint32_t frames = 0;        // FFT frames averaged
+};
+
+struct MicQuality {
+  bool     valid = false;
+  int      slot = 0;          // I2S slot measured (0 L, 1 R)
+  int      gain = 0;          // preset of the tone measurement
+  uint32_t rate = 0;
+  float    silSecs = 0;
+  int      fftN = 0;
+  NoiseRow noise[kNumGainRows];
+  bool     toneValid = false;
+  uint8_t  vol = 0;           // DAC volume register during the tone
+  float    stimDb = 0;        // digital level of the tone sent to the DAC, dBFS
+  uint32_t toneHz = 0, toneN = 0;
+  HarmonicResult tone;
+  float    secs = 0;          // whole run
+};
+
 struct SamplerReport {
   // storage
   bool     storeOk = false;
@@ -126,6 +159,8 @@ struct SamplerReport {
   BenchRow bench[kMaxBenchRows];
   float    missCycPerLine = 0;      // polluter: cycles per data-cache line from flash
   float    playAvgUs = 0, playMaxUs = 0, playCpuPct = 0;
+  // microphone quality (key n)
+  MicQuality quality;
   // memory
   uint32_t heapFree = 0, heapMin = 0, heapLargest = 0, staticDram = 0;
   uint32_t uptimeS = 0;
@@ -141,7 +176,8 @@ struct PinSnap {
   uint16_t outSel = 0;
 };
 
-constexpr int kMaxMicCfgs = 28;
+constexpr int kMaxMicCfgs = 36;
+constexpr int kMaxRegDiffs = 40;
 constexpr int kNumCodecRegs = 0x46;   // 0x00 .. 0x45
 
 struct MicCfgRow {
@@ -157,6 +193,13 @@ struct MicCfgRow {
   bool     regsValid = false;
   ToneResult res[2];           // L, R (M5.Mic: both = its mono stream)
   MicVerdict v[2];
+  bool     micOk[2] = {true, true};   // slot may be ranked as the microphone (not the DAC reference, see micSlots())
+  // registers (0x00-0x1C, 0x31-0x37, 0x44, 0x45; not 0x32) that differ from
+  // the run's baseline after the capture
+  bool     diffValid = false;
+  int      nDiff = 0;
+  uint8_t  diffReg[kMaxRegDiffs] = {0};
+  uint8_t  diffVal[kMaxRegDiffs] = {0};
   int      bestSlot = 0;
   float    score = -1.0e9f;
 };
@@ -169,7 +212,7 @@ struct MicMatrixReport {
   bool     chipValid = false;
   uint8_t  chip[3] = {0, 0, 0};                 // regs 0xFD 0xFE 0xFF
   bool     regsBeforeValid = false, regsAfterValid = false;
-  uint8_t  regsBefore[kNumCodecRegs] = {0};
+  uint8_t  regsBefore[kNumCodecRegs] = {0};     // = the baseline every config starts from
   uint8_t  regsAfter[kNumCodecRegs] = {0};
   int      n = 0;
   MicCfgRow cfg[kMaxMicCfgs];
@@ -181,7 +224,8 @@ struct MicMatrixReport {
 
 // The one-line verdict the page shows: "MIC WORKS (config N)" or "MIC DEAD IN ALL N CONFIGS".
 void micMatrixVerdict(const MicMatrixReport& r, char* out, size_t n);
-// Fills r.rank (by score, stable) and r.best (first that works, else -1).
+// Fills r.rank (by score, stable) and r.best (first whose best slot is a
+// microphone slot that is alive, else -1).
 void rankMicMatrix(MicMatrixReport& r);
 
 // Each emits the whole block (BEGIN ... END) through sink, line by line.
@@ -189,5 +233,9 @@ void rankMicMatrix(MicMatrixReport& r);
 int formatTiltReport(const TiltReport& r, LineSink sink, void* user);
 int formatSamplerReport(const SamplerReport& r, LineSink sink, void* user);
 int formatMicMatrixReport(const MicMatrixReport& r, LineSink sink, void* user);
+
+// Picks row.bestSlot among the microphone slots (row.micOk) and sets row.score;
+// a row with no microphone slot scores below every dead one.
+void scoreMicRow(MicCfgRow& row);
 
 }  // namespace hws

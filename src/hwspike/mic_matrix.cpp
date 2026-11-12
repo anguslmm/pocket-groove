@@ -24,6 +24,18 @@
 //    data 46, ws 43, bck 41, 16 kHz, right slot) and the exact
 //    _microphone_enabled_cb_cardputer_adv writes, used as its examples do
 //    (begin, record, wait, end); our duplex driver is shut down meanwhile.
+//
+// Second run (after the 2026-11-12 result, hardware-notes 11.7):
+//  * Baseline: the registers at the start of the run (= the boot default)
+//    are written back before every config (kRegSet, diff only), so each one
+//    starts from the same state; cfgNN_diff reports what it left different.
+//  * Ranking only on microphone slots (tone.h micSlots(): never a slot routed
+//    to the DAC reference by reg 0x44, never one that is the stimulus itself).
+//  * Configs 24-34: the cold-reset candidates (why the reset killed the ADC).
+//    Reset bits of reg 0x00 do NOT restore the register file (the device's
+//    regs_after kept esp_codec_dev's 0x10 / 0x11 / 0x15 / 0x1B through
+//    esp-bsp's 0x1F reset), so "cold" here = reset asserted + the power-on
+//    values written explicitly (kPor).
 #include "mic_matrix.h"
 
 #include <Arduino.h>
@@ -52,11 +64,22 @@ constexpr uint8_t kPga = 6;                 // 18 dB analog PGA for the spike-ba
 constexpr uint8_t kReg14 = 0x10 | kPga;
 constexpr uint8_t kMatrixVol = 0xAF;        // DAC -8 dB during the run (tone -12 dBFS -> -20 dB)
 constexpr float   kToneAmp = 8192.0f;       // -12 dBFS
+constexpr float   kStimDb = -12.041f;       // 20 log10(8192 / 32768)
 constexpr uint32_t kToneHz = 1000;
 constexpr uint32_t kCaptureMs = 500;
 constexpr uint8_t kDelay = 0xF0;            // pseudo register in a table: delay val * 4 ms
 
 enum Seq : uint8_t { kSeqSpike, kSeqM5, kSeqAdf, kSeqAdfRef, kSeqBsp, kSeqResetSpike, kSeqSlowSpike };
+
+// What happens to reg 0x00 (and the register file) before the sequence.
+enum Pre : uint8_t {
+  kPreNone = 0,
+  kPreReset,       // 0x00 = 0x1F (CSM off, every block in reset), 20 ms; registers as they are (0x15 = 0x40 from the baseline)
+  kPreReset15,     // 0x15 = 0x00 (ADC soft ramp off) first, then as kPreReset
+  kPreCold,        // 0x00 = 0x1F, 20 ms, then kPor written: as close to power-on as I2C gets
+  kPreRstCsmOn,    // 0x00 = 0x9F (blocks reset, CSM stays on), 20 ms, 0x00 = 0x80
+  kPreCsmCycle,    // 0x00 = 0x00 (CSM off, no block reset), 20 ms
+};
 
 struct RegW {
   uint8_t reg, val;
@@ -73,7 +96,24 @@ struct MCfg {
   uint16_t settleMs;
   bool loopR;            // R slot = DAC loopback (not the mic)
   bool m5mic;
+  Pre pre;
 };
+
+// ES8311 power-on values of every register a config writes (not 0x00, 0x32).
+// Measured on this device (regs_before of 2026-11-12, registers the spike had
+// not written): 0x03-0x08, 0x0B, 0x0C, 0x0F, 0x10, 0x11, 0x15, 0x16,
+// 0x18-0x1B. The rest are the datasheet defaults as remembered, NOT read from
+// the datasheet in this session (UNVERIFIED): 0x01 00, 0x02 00, 0x09 00,
+// 0x0A 00, 0x0D FC, 0x0E 6A, 0x12 02, 0x13 40, 0x14 10, 0x17 00, 0x1C 4C,
+// 0x31 00, 0x37 48, 0x44 00, 0x45 00. Analog power-down (0x0D) last.
+const RegW kPor[] = {{0x01, 0x00}, {0x02, 0x00}, {0x03, 0x10}, {0x04, 0x10}, {0x05, 0x00}, {0x06, 0x03}, {0x07, 0x00},
+                     {0x08, 0xFF}, {0x09, 0x00}, {0x0A, 0x00}, {0x0B, 0x00}, {0x0C, 0x20}, {0x0E, 0x6A}, {0x0F, 0x00},
+                     {0x10, 0x13}, {0x11, 0x7C}, {0x12, 0x02}, {0x13, 0x40}, {0x14, 0x10}, {0x15, 0x00}, {0x16, 0x04},
+                     {0x17, 0x00}, {0x18, 0x00}, {0x19, 0x00}, {0x1A, 0x00}, {0x1B, 0x0C}, {0x1C, 0x4C}, {0x31, 0x00},
+                     {0x37, 0x48}, {0x44, 0x00}, {0x45, 0x00}, {0x0D, 0xFC}};
+
+// The registers the baseline restore and the per-config diff cover.
+bool inRegSet(int r) { return r <= 0x1C || (r >= 0x31 && r <= 0x37) || r == 0x44 || r == 0x45; }
 
 const RegW kP02x4[] = {{0x02, 0x10}};
 const RegW kPLoop[] = {{0x44, 0x58}};
@@ -84,6 +124,7 @@ const RegW kP24[] = {{0x0A, 0x00}};
 const RegW kPBias[] = {{0x0B, 0x00}, {0x0C, 0x00}, {0x10, 0x1F}, {0x11, 0x7F}, {0x13, 0x10},
                        {0x1B, 0x0A}, {0x1C, 0x6A}, {0x15, 0x40}, {0x44, 0x08}, {0x45, 0x00}};
 const RegW kPDig[] = {{0x16, 0x24}, {0x17, 0xC8}};
+const RegW kPPga30[] = {{0x14, 0x1A}};
 
 #define P(x) x, static_cast<uint8_t>(sizeof(x) / sizeof(x[0]))
 using duplex::kDinAsFound;
@@ -91,32 +132,47 @@ using duplex::kDinForcedHigh;
 using duplex::kDinOffPulldown;
 using duplex::kDinOutputOff;
 
+// 0-23: the first run's configs, same numbers (now each from the baseline).
+// 24-34: why a reset kills the ADC, and a cold init (hardware-notes 11.7).
 const MCfg kCfgs[] = {
-    // name                         bits din              seq             patch       before settle loopR m5mic
-    {"spike-as-is",                 16, kDinAsFound,     kSeqSpike,      nullptr, 0, false, 250, false, false},
-    {"spike+din-fix",               16, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 250, false, false},
-    {"spike+din-forced-high",       16, kDinForcedHigh,  kSeqSpike,      nullptr, 0, false, 250, false, false},
-    {"spike+din-off+pulldown",      16, kDinOffPulldown, kSeqSpike,      nullptr, 0, false, 250, false, false},
-    {"m5unified-seq",               16, kDinOutputOff,   kSeqM5,         nullptr, 0, false, 250, false, false},
-    {"m5unified-seq-as-is",         16, kDinAsFound,     kSeqM5,         nullptr, 0, false, 250, false, false},
-    {"esp_codec_dev",               16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 250, false, false},
-    {"esp_codec_dev+dacref",        16, kDinOutputOff,   kSeqAdfRef,     nullptr, 0, false, 250, true,  false},
-    {"esp-bsp-es8311",              16, kDinOutputOff,   kSeqBsp,        nullptr, 0, false, 250, false, false},
-    {"spike+loopback-44=58",        16, kDinOutputOff,   kSeqSpike,      P(kPLoop),  false, 250, true,  false},
-    {"slot32-x8-512fs",             32, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 250, false, false},
-    {"slot32-x4-256fs",             32, kDinOutputOff,   kSeqSpike,      P(kP02x4),  false, 250, false, false},
-    {"slot16-x4-128fs",             16, kDinOutputOff,   kSeqSpike,      P(kP02x4),  false, 250, false, false},
-    {"dmic-on",                     16, kDinOutputOff,   kSeqSpike,      P(kPDmic),  false, 250, false, false},
-    {"input-mic2",                  16, kDinOutputOff,   kSeqSpike,      P(kPMic2),  false, 250, false, false},
-    {"sdp-out-muted",               16, kDinOutputOff,   kSeqSpike,      P(kPMute),  false, 250, false, false},
-    {"sdp-out-24bit",               16, kDinOutputOff,   kSeqSpike,      P(kP24),    false, 250, false, false},
-    {"esp-bias-hpf-regs",           16, kDinOutputOff,   kSeqSpike,      P(kPBias),  false, 250, false, false},
-    {"digital-gain-16=24-17=C8",    16, kDinOutputOff,   kSeqSpike,      P(kPDig),   false, 250, false, false},
-    {"full-reset-first",            16, kDinOutputOff,   kSeqResetSpike, nullptr, 0, false, 300, false, false},
-    {"codec-before-clock",          16, kDinOutputOff,   kSeqSpike,      nullptr, 0, true,  300, false, false},
-    {"slow-power-up",               16, kDinOutputOff,   kSeqSlowSpike,  nullptr, 0, false, 600, false, false},
-    {"M5.Mic-as-examples",          16, kDinAsFound,     kSeqSpike,      nullptr, 0, false, 200, false, true},
-    {"M5.Mic+din-fix",              16, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 200, false, true},
+    // name                         bits din              seq             patch       before settle loopR m5mic pre
+    {"spike-as-is",                 16, kDinAsFound,     kSeqSpike,      nullptr, 0, false, 250, false, false, kPreNone},
+    {"spike+din-fix",               16, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 250, false, false, kPreNone},
+    {"spike+din-forced-high",       16, kDinForcedHigh,  kSeqSpike,      nullptr, 0, false, 250, false, false, kPreNone},
+    {"spike+din-off+pulldown",      16, kDinOffPulldown, kSeqSpike,      nullptr, 0, false, 250, false, false, kPreNone},
+    {"m5unified-seq",               16, kDinOutputOff,   kSeqM5,         nullptr, 0, false, 250, false, false, kPreNone},
+    {"m5unified-seq-as-is",         16, kDinAsFound,     kSeqM5,         nullptr, 0, false, 250, false, false, kPreNone},
+    {"esp_codec_dev",               16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 250, false, false, kPreNone},
+    {"esp_codec_dev+dacref",        16, kDinOutputOff,   kSeqAdfRef,     nullptr, 0, false, 250, true,  false, kPreNone},
+    {"esp-bsp-es8311",              16, kDinOutputOff,   kSeqBsp,        nullptr, 0, false, 250, false, false, kPreNone},
+    {"spike+loopback-44=58",        16, kDinOutputOff,   kSeqSpike,      P(kPLoop),  false, 250, true,  false, kPreNone},
+    {"slot32-x8-512fs",             32, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 250, false, false, kPreNone},
+    {"slot32-x4-256fs",             32, kDinOutputOff,   kSeqSpike,      P(kP02x4),  false, 250, false, false, kPreNone},
+    {"slot16-x4-128fs",             16, kDinOutputOff,   kSeqSpike,      P(kP02x4),  false, 250, false, false, kPreNone},
+    {"dmic-on",                     16, kDinOutputOff,   kSeqSpike,      P(kPDmic),  false, 250, false, false, kPreNone},
+    {"input-mic2",                  16, kDinOutputOff,   kSeqSpike,      P(kPMic2),  false, 250, false, false, kPreNone},
+    {"sdp-out-muted",               16, kDinOutputOff,   kSeqSpike,      P(kPMute),  false, 250, false, false, kPreNone},
+    {"sdp-out-24bit",               16, kDinOutputOff,   kSeqSpike,      P(kP24),    false, 250, false, false, kPreNone},
+    {"esp-bias-hpf-regs",           16, kDinOutputOff,   kSeqSpike,      P(kPBias),  false, 250, false, false, kPreNone},
+    {"digital-gain-16=24-17=C8",    16, kDinOutputOff,   kSeqSpike,      P(kPDig),   false, 250, false, false, kPreNone},
+    {"full-reset-first",            16, kDinOutputOff,   kSeqResetSpike, nullptr, 0, false, 300, false, false, kPreNone},
+    {"codec-before-clock",          16, kDinOutputOff,   kSeqSpike,      nullptr, 0, true,  300, false, false, kPreNone},
+    {"slow-power-up",               16, kDinOutputOff,   kSeqSlowSpike,  nullptr, 0, false, 600, false, false, kPreNone},
+    {"M5.Mic-as-examples",          16, kDinAsFound,     kSeqSpike,      nullptr, 0, false, 200, false, true,  kPreNone},
+    {"M5.Mic+din-fix",              16, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 200, false, true,  kPreNone},
+    // --- cold-reset candidates (24 = the boot default as a control: M5.Mic's end left 0x00 = 0x00) ---
+    {"esp (control)",               16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 300, false, false, kPreNone},
+    {"reset(15=40)+esp 0.3s",      16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 300, false, false, kPreReset},
+    {"reset(15=40)+esp 1.2s",       16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 1200, false, false, kPreReset},
+    {"reset(15=40)+esp 3s",         16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 3000, false, false, kPreReset},
+    {"15=00,reset+esp 0.3s",        16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 300, false, false, kPreReset15},
+    {"cold+esp 0.3s",               16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 300, false, false, kPreCold},
+    {"cold+esp codec-first",        16, kDinOutputOff,   kSeqAdf,        nullptr, 0, true,  300, false, false, kPreCold},
+    {"rst-csm-on(9F)+esp",          16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 300, false, false, kPreRstCsmOn},
+    {"csm-off/on(00)+esp",          16, kDinOutputOff,   kSeqAdf,        nullptr, 0, false, 300, false, false, kPreCsmCycle},
+    {"cold+esp-bsp",                16, kDinOutputOff,   kSeqBsp,        nullptr, 0, false, 300, false, false, kPreCold},
+    {"cold+spike",                  16, kDinOutputOff,   kSeqSpike,      nullptr, 0, false, 300, false, false, kPreCold},
+    {"m5unified-seq+pga30",         16, kDinOutputOff,   kSeqM5,         P(kPPga30), false, 250, false, false, kPreNone},
 };
 #undef P
 constexpr int kNumCfgs = static_cast<int>(sizeof(kCfgs) / sizeof(kCfgs[0]));
@@ -135,7 +191,7 @@ ToneTable g_tab, g_tab16;
 ToneGen g_gen;
 ToneDetector g_det[2];
 MicMatrixReport g_rep;
-char g_status[48] = "[m] mic matrix (~30 s, speaker on)";
+char g_status[48] = "[m] mic matrix (~50 s, speaker on)";
 uint8_t g_userVol = 0x80;
 
 bool W(uint8_t reg, uint8_t val) { return duplex::codecWrite(reg, val); }
@@ -156,7 +212,76 @@ bool runTable(const RegW* t, int n) {
 // ---- codec sequences -----------------------------------------------------------
 bool seqSpike() {
   duplex::setReg14Hi(0x10);
-  return duplex::defaultCodecInit();
+  return duplex::spikeCodecInit();
+}
+
+// ---- baseline --------------------------------------------------------------------
+uint8_t g_base[kNumCodecRegs];
+bool g_baseValid = false;
+
+// Writes back every register of kRegSet that differs from the baseline
+// (0x00 first, 0x32 = volume left to duplex's ramp).
+void restoreBaseline() {
+  if (!g_baseValid) return;
+  uint8_t v = 0;
+  if (duplex::codecRead(0x00, &v) && v != g_base[0x00]) W(0x00, g_base[0x00]);
+  for (int r = 1; r < kNumCodecRegs; ++r) {
+    if (!inRegSet(r) || r == 0x32) continue;
+    if (duplex::codecRead(static_cast<uint8_t>(r), &v) && v != g_base[r]) W(static_cast<uint8_t>(r), g_base[r]);
+  }
+}
+
+void diffRegs(MicCfgRow& row) {
+  row.nDiff = 0;
+  row.diffValid = g_baseValid;
+  if (!g_baseValid) return;
+  for (int r = 0; r < kNumCodecRegs; ++r) {
+    if (!inRegSet(r) || r == 0x32) continue;
+    uint8_t v = 0;
+    if (!duplex::codecRead(static_cast<uint8_t>(r), &v)) {
+      row.diffValid = false;
+      continue;
+    }
+    if (v == g_base[r]) continue;
+    if (row.nDiff < kMaxRegDiffs) {
+      row.diffReg[row.nDiff] = static_cast<uint8_t>(r);
+      row.diffVal[row.nDiff] = v;
+    }
+    ++row.nDiff;
+  }
+}
+
+bool runPre(Pre p) {
+  switch (p) {
+    case kPreNone: return true;
+    case kPreReset: {
+      const bool ok = W(0x00, 0x1F);
+      delay(20);
+      return ok;
+    }
+    case kPreReset15: {
+      bool ok = W(0x15, 0x00);
+      ok = W(0x00, 0x1F) && ok;
+      delay(20);
+      return ok;
+    }
+    case kPreCold: {
+      const bool ok = W(0x00, 0x1F);
+      delay(20);
+      return runTable(kPor, static_cast<int>(sizeof(kPor) / sizeof(kPor[0]))) && ok;
+    }
+    case kPreRstCsmOn: {
+      bool ok = W(0x00, 0x9F);
+      delay(20);
+      return W(0x00, 0x80) && ok;
+    }
+    case kPreCsmCycle: {
+      const bool ok = W(0x00, 0x00);
+      delay(20);
+      return ok;
+    }
+  }
+  return true;
 }
 
 bool seqM5() {
@@ -166,49 +291,6 @@ bool seqM5() {
                              {0x14, 0x10}, {0x17, 0xBF}, {0x1C, 0x6A}};
   bool ok = runTable(spk, sizeof(spk) / sizeof(spk[0]));
   return runTable(mic, sizeof(mic) / sizeof(mic[0])) && ok;
-}
-
-bool seqAdf(bool dacRef) {
-  bool ok = true;
-  // es8311_open (slave, use_mclk = false, no inversion)
-  if (R(0x0D) != 0xFA) ok = W(0x0D, 0xFA) && ok;
-  ok = W(0x44, 0x08) && ok;
-  ok = W(0x44, 0x08) && ok;
-  static const RegW open1[] = {{0x01, 0x30}, {0x02, 0x00}, {0x03, 0x10}, {0x16, 0x24}, {0x04, 0x10}, {0x05, 0x00},
-                               {0x0B, 0x00}, {0x0C, 0x00}, {0x10, 0x1F}, {0x11, 0x7F}, {0x00, 0x80}};
-  ok = runTable(open1, sizeof(open1) / sizeof(open1[0])) && ok;
-  ok = W(0x00, static_cast<uint8_t>(R(0x00) & 0xBF)) && ok;             // slave
-  ok = W(0x01, 0xBF) && ok;                                             // 0x3F | MCLK from SCLK
-  ok = W(0x06, static_cast<uint8_t>(R(0x06) & ~0x20)) && ok;            // SCLK not inverted
-  ok = W(0x13, 0x10) && ok;
-  ok = W(0x1B, 0x0A) && ok;
-  ok = W(0x1C, 0x6A) && ok;
-  ok = W(0x44, dacRef ? 0x58 : 0x08) && ok;
-  // es8311_set_fs: 16 bit, I2S normal, 44.1 kHz with MCLK = 256 fs
-  uint8_t d = static_cast<uint8_t>(R(0x09) | 0x0C), a = static_cast<uint8_t>(R(0x0A) | 0x0C);
-  ok = W(0x09, d) && ok;
-  ok = W(0x0A, a) && ok;
-  ok = W(0x09, static_cast<uint8_t>(R(0x09) & 0xFC)) && ok;
-  ok = W(0x0A, static_cast<uint8_t>(R(0x0A) & 0xFC)) && ok;
-  ok = W(0x02, static_cast<uint8_t>((R(0x02) & 0x07) | (0 << 5) | (3 << 3))) && ok;
-  ok = W(0x05, 0x00) && ok;
-  ok = W(0x03, static_cast<uint8_t>((R(0x03) & 0x80) | (0 << 6) | 0x10)) && ok;
-  ok = W(0x04, static_cast<uint8_t>((R(0x04) & 0x80) | 0x10)) && ok;
-  ok = W(0x07, static_cast<uint8_t>((R(0x07) & 0xC0) | 0x00)) && ok;
-  ok = W(0x08, 0xFF) && ok;
-  ok = W(0x06, static_cast<uint8_t>((R(0x06) & 0xE0) | (4 - 1))) && ok;
-  // es8311_start (BOTH, analog mic)
-  ok = W(0x00, 0x80) && ok;
-  ok = W(0x01, 0xBF) && ok;
-  ok = W(0x09, static_cast<uint8_t>(R(0x09) & 0xBF)) && ok;
-  ok = W(0x0A, static_cast<uint8_t>(R(0x0A) & 0xBF)) && ok;
-  static const RegW start[] = {{0x17, 0xBF}, {0x0E, 0x02}, {0x12, 0x00}, {0x14, 0x1A}};
-  ok = runTable(start, sizeof(start) / sizeof(start[0])) && ok;
-  ok = W(0x14, static_cast<uint8_t>(R(0x14) & ~0x40)) && ok;
-  static const RegW start2[] = {{0x0D, 0x01}, {0x15, 0x40}, {0x37, 0x08}, {0x45, 0x00}};
-  ok = runTable(start2, sizeof(start2) / sizeof(start2[0])) && ok;
-  // the DAC output stage the board needs (es8311_open writes 0x13 = 0x10 already)
-  return ok;
 }
 
 bool seqBsp() {
@@ -233,13 +315,14 @@ bool seqBsp() {
 
 bool codecFor(void* user) {
   const MCfg& c = *static_cast<const MCfg*>(user);
-  bool ok = true;
+  restoreBaseline();
+  bool ok = runPre(c.pre);
   switch (c.seq) {
-    case kSeqSpike: ok = seqSpike(); break;
-    case kSeqM5: ok = seqM5(); break;
-    case kSeqAdf: ok = seqAdf(false); break;
-    case kSeqAdfRef: ok = seqAdf(true); break;
-    case kSeqBsp: ok = seqBsp(); break;
+    case kSeqSpike: ok = seqSpike() && ok; break;
+    case kSeqM5: ok = seqM5() && ok; break;
+    case kSeqAdf: ok = duplex::espCodecDevInit(false) && ok; break;
+    case kSeqAdfRef: ok = duplex::espCodecDevInit(true) && ok; break;
+    case kSeqBsp: ok = seqBsp() && ok; break;
     case kSeqResetSpike: {
       static const RegW rst[] = {{0x00, 0x1F}, {kDelay, 5}, {0x00, 0x00}};
       ok = runTable(rst, 3);
@@ -303,14 +386,13 @@ bool capture(uint32_t settleMs, bool tone) {
   return true;
 }
 
+// Verdict per slot, then the score of the better MICROPHONE slot only: a slot
+// that reg 0x44 routes to the DAC, or that is the stimulus itself, never counts.
 void judge(MicCfgRow& row) {
   for (int s = 0; s < 2; ++s) row.v[s] = judgeMic(row.res[s]);
-  if (row.loopbackR || row.m5mic) {
-    row.bestSlot = 0;
-  } else {
-    row.bestSlot = (row.v[1].score > row.v[0].score) ? 1 : 0;
-  }
-  row.score = row.v[row.bestSlot].score;
+  micSlots(row.regsValid, row.r44, row.loopbackR, row.res, row.tone, kStimDb, row.micOk);
+  if (row.m5mic) row.micOk[1] = false;   // one mono stream, printed once
+  scoreMicRow(row);
 }
 
 void readRegs(MicCfgRow& row) {
@@ -357,6 +439,7 @@ void runDuplexCfg(int i) {
   row.res[0] = g_det[0].result();
   row.res[1] = g_det[1].result();
   readRegs(row);
+  diffRegs(row);
   row.ran = true;
   judge(row);
 }
@@ -439,6 +522,7 @@ void runM5MicCfg(int i) {
   row.m5mic = true;
   row.rate = kM5Rate;
   duplex::end();
+  restoreBaseline();   // no clock: the codec takes I2C without one
   if (c.din == kDinAsFound) restoreBootPin();
   auto mc = M5.Mic.config();
   mc.pin_data_in = 46;
@@ -461,6 +545,7 @@ void runM5MicCfg(int i) {
     for (uint32_t t = 0; t < kCaptureMs && ok; t += 100) ok = m5Record(&det);
   }
   readRegs(row);
+  diffRegs(row);
   M5.Mic.end();
   row.ran = ok;
   if (ok) {
@@ -483,6 +568,8 @@ void job(void*) {
   g_rep.chipValid = duplex::codecRead(0xFD, &g_rep.chip[0]) && duplex::codecRead(0xFE, &g_rep.chip[1]) &&
                     duplex::codecRead(0xFF, &g_rep.chip[2]);
   dumpRegs(g_rep.regsBefore, &g_rep.regsBeforeValid);
+  memcpy(g_base, g_rep.regsBefore, sizeof(g_base));
+  g_baseValid = g_rep.regsBeforeValid;
   const uint8_t userPga = duplex::micPga();
   const int userReg16 = duplex::micReg16();
 
@@ -503,12 +590,15 @@ void job(void*) {
             static_cast<double>(r.res[1].toneDb));
   }
 
+  restoreBaseline();
   rankMicMatrix(g_rep);
-  // The sampler can only run a duplex setup: take the best working one of those.
+  // The sampler can only run a duplex setup: take the best one whose best
+  // slot is a live microphone slot (never the DAC reference).
   int apply = -1;
   for (int k = 0; k < g_rep.n; ++k) {
     const MicCfgRow& r = g_rep.cfg[g_rep.rank[k]];
-    if (r.ran && !r.m5mic && r.v[r.bestSlot].alive) {
+    const int s = r.bestSlot ? 1 : 0;
+    if (r.ran && !r.m5mic && r.micOk[s] && r.v[s].alive) {
       apply = g_rep.rank[k];
       break;
     }
@@ -524,8 +614,7 @@ void job(void*) {
     duplex::setMicGain(userPga, userReg16);
     g_appliedSlot = g_rep.cfg[apply].bestSlot;
   } else {
-    restoreBootPin();
-    duplex::Config dc;
+    duplex::Config dc;   // the boot default (esp_codec_dev + DIN fix)
     dc.sampleRate = app::g_sampleRate;
     dc.volumeReg = g_userVol;
     duplex::setReg14Hi(0x10);

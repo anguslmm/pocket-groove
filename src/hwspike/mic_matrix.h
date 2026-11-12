@@ -1,7 +1,7 @@
 // Pocket Groove hardware spike -- the self-diagnosing microphone matrix
 // (SAMPLER page, key m; serial M). docs/hw-spike.md section 4b.
 //
-// One run (about 30 s, no human timing needed) tries every candidate setup of
+// One run (about 50 s, no human timing needed) tries every candidate setup of
 // the ES8311 ADC and the I2S input, each for 0.5 s with a 1 kHz tone on the
 // speaker as the stimulus, plus an electrical test of the DIN pin (GPIO46),
 // two M5.Mic control runs and a full register dump, then ranks the setups and,

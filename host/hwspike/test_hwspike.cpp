@@ -11,6 +11,7 @@
 
 #include "dsp.h"
 #include "report.h"
+#include "spectrum.h"
 #include "tilt_math.h"
 
 using namespace hws;
@@ -634,12 +635,282 @@ void testMatrixReport() {
   checkBlock(c1, "===== PG-HWSPIKE MICMATRIX BEGIN", "===== PG-HWSPIKE MICMATRIX END =====", "matrix report (full)");
   bool sawDead = false, sawRank = false, sawPin = false;
   for (auto& l : c1.lines) {
-    if (l.find("result: MIC DEAD IN ALL 28 CONFIGS") != std::string::npos) sawDead = true;
+    if (l.find("result: MIC DEAD IN ALL " + std::to_string(kMaxMicCfgs) + " CONFIGS") != std::string::npos) sawDead = true;
     if (l.rfind("rank:", 0) == 0) sawRank = true;
     if (l.find("pin_test: as_found=1.00") != std::string::npos) sawPin = true;
   }
   check(sawDead && sawRank && sawPin, "matrix report: verdict, rank and pin test lines present");
   for (size_t i = 0; i < 14 && i < c1.lines.size(); ++i) std::printf("  %s\n", c1.lines[i].c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Second matrix run: microphone slots only, register diffs
+void testMicSlots() {
+  ToneTable t;
+  t.init(1000, 44100);
+  const int N = 441 * 50;
+  std::vector<int16_t> ref(N), mic(N);
+  std::mt19937 rng(3);
+  std::normal_distribution<double> nd(0.0, 60.0);
+  for (int n = 0; n < N; ++n) {
+    const double ph = 2.0 * 3.14159265358979 * 1000.0 * n / 44100.0;
+    ref[n] = static_cast<int16_t>(std::lrint(8192.0 * std::sin(ph)));                   // DAC reference: exactly -12 dBFS
+    mic[n] = static_cast<int16_t>(std::lrint(1780.0 * std::sin(ph + 1.0) + nd(rng)));   // ~ -25 dBFS, ~30 dB SNR
+  }
+  ToneResult res[2] = {detect(t, mic), detect(t, ref)};
+  const float stim = -12.041f;
+  check(looksLikeDacRef(res[1], stim), "slots: the stimulus itself is recognised as the DAC reference");
+  check(!looksLikeDacRef(res[0], stim), "slots: the microphone through the speaker is not");
+  bool ok[2];
+  micSlots(true, 0x08, false, res, true, stim, ok);
+  check(ok[0] && !ok[1], "slots: 0x44 = 0x08 but R is the stimulus -> only L counts");
+  micSlots(true, 0x58, false, res, false, stim, ok);
+  check(ok[0] && !ok[1], "slots: 0x44 = 0x58 routes DACR to R -> only L counts (no tone needed)");
+  micSlots(true, 0x48, false, res, false, stim, ok);
+  check(!ok[0] && ok[1], "slots: 0x44 = 0x48 routes DACL to L -> only R counts");
+  micSlots(false, 0, true, res, false, stim, ok);
+  check(ok[0] && !ok[1], "slots: loopR flag excludes R");
+  ToneResult two[2] = {res[0], res[0]};
+  micSlots(true, 0x08, false, two, true, stim, ok);
+  check(ok[0] && ok[1], "slots: both slots the ADC -> both count");
+
+  // The device's config 8: L dead, R the DAC reference at 63.8 dB SNR. It must not win.
+  MicMatrixReport r;
+  r.n = 3;
+  std::vector<int16_t> dead(N);
+  for (int n = 0; n < N; ++n) dead[n] = static_cast<int16_t>((n * 7919) % 3 == 0 ? 0 : -1);
+  // cfg0: the mic in both slots; cfg1: L dead, R = reference (r44 = 0x58); cfg2: same, r44 back to 0x08
+  ToneResult in0[2] = {detect(t, mic), detect(t, mic)};
+  ToneResult in1[2] = {detect(t, dead), detect(t, ref)};
+  const ToneResult* ins[3] = {in0, in1, in1};
+  const uint8_t r44[3] = {0x08, 0x58, 0x08};
+  for (int i = 0; i < 3; ++i) {
+    MicCfgRow& c = r.cfg[i];
+    c.ran = true;
+    c.tone = true;
+    c.regsValid = true;
+    c.r44 = r44[i];
+    for (int s = 0; s < 2; ++s) {
+      c.res[s] = ins[i][s];
+      c.v[s] = judgeMic(c.res[s]);
+    }
+    micSlots(c.regsValid, c.r44, false, c.res, c.tone, stim, c.micOk);
+    scoreMicRow(c);
+  }
+  check(r.cfg[1].v[1].score > r.cfg[0].v[0].score, "slots: the reference alone out-scores the mic (the bug)");
+  rankMicMatrix(r);
+  check(r.rank[0] == 0 && r.best == 0, "slots: ranking picks the real microphone, not the DAC reference", r.best, 0);
+  check(r.cfg[1].bestSlot == 0 && !r.cfg[1].micOk[1], "slots: a dead mic slot stays the config's best slot");
+  check(!r.cfg[2].micOk[1], "slots: stimulus-level R excluded even with 0x44 = 0x08");
+  MicCfgRow none;
+  none.ran = true;
+  none.micOk[0] = none.micOk[1] = false;
+  none.v[0] = none.v[1] = judgeMic(detect(t, mic));
+  scoreMicRow(none);
+  check(none.score < judgeMic(detect(t, std::vector<int16_t>(N, -1))).score, "slots: no mic slot scores below dead");
+}
+
+void testDiffLine() {
+  MicMatrixReport r;
+  r.n = 2;
+  r.cfg[0].ran = r.cfg[1].ran = true;
+  r.cfg[0].diffValid = true;
+  r.cfg[0].nDiff = 2;
+  r.cfg[0].diffReg[0] = 0x15;
+  r.cfg[0].diffVal[0] = 0x00;
+  r.cfg[0].diffReg[1] = 0x44;
+  r.cfg[0].diffVal[1] = 0x58;
+  r.cfg[1].diffValid = true;
+  r.cfg[1].nDiff = 50;   // more than stored and shown
+  for (int i = 0; i < kMaxRegDiffs; ++i) {
+    r.cfg[1].diffReg[i] = static_cast<uint8_t>(i);
+    r.cfg[1].diffVal[i] = 0xFF;
+  }
+  Collect c;
+  formatMicMatrixReport(r, collect, &c);
+  checkBlock(c, "===== PG-HWSPIKE MICMATRIX BEGIN", "===== PG-HWSPIKE MICMATRIX END =====", "matrix report (diffs)");
+  bool saw0 = false, saw1 = false, sawBase = false;
+  for (auto& l : c.lines) {
+    if (l == "cfg00_diff: n=2 15=00 44=58") saw0 = true;
+    if (l.rfind("cfg01_diff: n=50 00=FF", 0) == 0 && l.find(" +24") != std::string::npos) saw1 = true;
+    if (l.rfind("baseline:", 0) == 0) sawBase = true;
+  }
+  check(saw0, "matrix report: diff line lists reg=value");
+  check(saw1, "matrix report: long diff truncated with +N");
+  check(sawBase, "matrix report: baseline line");
+}
+
+// ---------------------------------------------------------------------------
+// Harmonics / THD (quality measurement)
+void testHarmonics() {
+  ToneTable t;
+  t.init(1000, 44100);
+  const int N = 44100;   // 1 s = 100 table lengths
+  const double fa = 4000.0, a2 = 40.0, a3 = 20.0, a5 = 4.0;
+  std::mt19937 rng(5);
+  std::normal_distribution<double> nd(0.0, 4.0);
+  std::vector<int16_t> x(N);
+  for (int n = 0; n < N; ++n) {
+    const double w = 2.0 * 3.14159265358979 * 1000.0 * n / 44100.0;
+    x[n] = static_cast<int16_t>(std::lrint(12.0 + fa * std::sin(w + 0.3) + a2 * std::sin(2 * w + 1.1) +
+                                           a3 * std::cos(3 * w) + a5 * std::sin(5 * w + 2.0) + nd(rng)));
+  }
+  HarmonicDetector d;
+  d.begin(&t);
+  for (int16_t v : x) d.add(v);
+  const HarmonicResult r = d.result();
+  near(r.fundDb, 20.0 * std::log10(fa / 32768.0), 0.02, "harm: fundamental level");
+  near(r.harmDb[2], 20.0 * std::log10(a2 / 32768.0), 0.3, "harm: 2nd harmonic level");
+  near(r.harmDb[3], 20.0 * std::log10(a3 / 32768.0), 0.5, "harm: 3rd harmonic level");
+  near(r.harmDb[5], 20.0 * std::log10(a5 / 32768.0), 2.0, "harm: 5th harmonic level");
+  check(r.harmDb[4] < -85.0f, "harm: absent 4th harmonic is at the noise", r.harmDb[4], -85);
+  const double thd = std::sqrt(a2 * a2 + a3 * a3 + a5 * a5) / fa;
+  near(r.thdPct, 100.0 * thd, 0.03, "harm: THD percent");
+  near(r.thdDb, 20.0 * std::log10(thd), 0.2, "harm: THD dB");
+  near(r.noiseDb, 20.0 * std::log10(4.0 / 32768.0), 0.5, "harm: noise without tone and harmonics");
+  near(r.snrDb, 10.0 * std::log10((fa * fa / 2) / 16.0), 0.5, "harm: SNR without harmonics");
+  check(r.sinadDb < r.snrDb && r.sinadDb > 0, "harm: SINAD below SNR when harmonics exist");
+  near(r.dcLsb, 12.0, 0.1, "harm: DC");
+  check(r.nHarm == 5, "harm: five harmonics below Nyquist at 44.1 kHz", r.nHarm, 5);
+  const ToneResult tr = detect(t, x);
+  near(tr.snrDb, r.sinadDb, 0.05, "harm: the matrix's tone snr == sinad");
+  ToneTable t16;
+  t16.init(3000, 16000);
+  HarmonicDetector d16;
+  d16.begin(&t16);
+  for (int n = 0; n < 16000; ++n)
+    d16.add(static_cast<int16_t>(std::lrint(1000.0 * std::sin(2 * 3.14159265358979 * 3000.0 * n / 16000.0))));
+  const HarmonicResult r16 = d16.result();
+  check(r16.nHarm == 2, "harm: only 2 harmonics of 3 kHz below 8 kHz", r16.nHarm, 2);
+  near(r16.fundDb, 20.0 * std::log10(1000.0 / 32768.0), 0.05, "harm: 16 kHz fundamental");
+  HarmonicDetector e;
+  e.begin(&t);
+  check(e.result().n == 0 && e.result().fundDb <= -119.0f, "harm: empty");
+  for (int n = 0; n < 4410; ++n) e.add(-1);
+  check(e.result().fundDb <= -119.0f && e.result().noiseDb <= -119.0f, "harm: constant has no tone and no noise");
+}
+
+// ---------------------------------------------------------------------------
+// FFT / averaged spectrum / worst spur
+void testSpectrum() {
+  {
+    const int n = 64;
+    std::vector<float> re(n), im(n, 0.0f);
+    for (int i = 0; i < n; ++i) re[i] = std::cos(2.0f * 3.14159265f * 5.0f * static_cast<float>(i) / n);
+    fftRadix2(re.data(), im.data(), n);
+    bool ok = true;
+    for (int k = 0; k < n; ++k) {
+      const float m = std::sqrt(re[k] * re[k] + im[k] * im[k]);
+      const float want = (k == 5 || k == n - 5) ? n / 2.0f : 0.0f;
+      if (std::fabs(m - want) > 1e-3f) ok = false;
+    }
+    check(ok, "fft: bin-centred cosine is one line of n/2");
+  }
+  const int N = 2048;
+  const float rate = 44100.0f;
+  std::vector<float> re(N), im(N), pw(N / 2 + 1);
+  std::vector<int16_t> frame(N);
+  {  // 50 Hz hum at -70 dBFS on white noise (-80 dBFS RMS) with DC
+    SpectrumAcc s;
+    check(s.begin(pw.data(), N), "spectrum: begin");
+    std::mt19937 rng(9);
+    const double sigma = 32768.0 * std::pow(10.0, -80.0 / 20.0);
+    std::normal_distribution<double> nd(0.0, sigma);
+    const double a = 32768.0 * std::pow(10.0, -70.0 / 20.0);
+    long t = 0;
+    for (int f = 0; f < 20; ++f) {
+      for (int i = 0; i < N; ++i, ++t)
+        frame[i] = static_cast<int16_t>(
+            std::lrint(-300.0 + a * std::sin(2 * 3.14159265358979 * 50.0 * t / 44100.0) + nd(rng)));
+      s.addFrame(frame.data(), re.data(), im.data());
+    }
+    const SpurResult sp = s.worstSpur(rate, 40.0f, re.data());
+    check(sp.valid && std::fabs(sp.hz - 50.0f) < 22.0f, "spectrum: hum found at 50 Hz", sp.hz, 50);
+    near(sp.db, -70.0, 0.5, "spectrum: hum 0.3 bin off-centre still reads its sine level (main-lobe energy)");
+    check(sp.overFloorDb > 15.0f, "spectrum: hum stands well above the median bin", sp.overFloorDb, 15);
+    // white noise: mean power per bin = sigma^2 * sum(w^2) = sigma^2 * 3N/8, median of an exponential = 0.693 x mean
+    // (averaged over 20 frames the distribution narrows, so the median sits between 0.69 and 1 x mean)
+    const double floorMean = 20.0 * std::log10(4.0 * std::sqrt(sigma * sigma * 3.0 * N / 8.0) / N / 32768.0);
+    const double fl = sp.floorDb;
+    check(fl > floorMean - 1.7 && fl < floorMean + 0.3, "spectrum: median bin of white noise",
+          sp.floorDb, floorMean);
+    check(s.frames() == 20, "spectrum: frame count");
+  }
+  {  // DC only: not a spur
+    SpectrumAcc s;
+    s.begin(pw.data(), N);
+    std::mt19937 rng(1);
+    std::normal_distribution<double> nd(0.0, 3.0);
+    for (int f = 0; f < 8; ++f) {
+      for (int i = 0; i < N; ++i) frame[i] = static_cast<int16_t>(std::lrint(5000.0 + nd(rng)));
+      s.addFrame(frame.data(), re.data(), im.data());
+    }
+    const SpurResult sp = s.worstSpur(rate, 40.0f, re.data());
+    check(sp.valid && sp.overFloorDb < 12.0f, "spectrum: DC is not a spur", sp.overFloorDb, 12);
+  }
+  {  // full-scale bin-centred sine reads ~0 dBFS
+    SpectrumAcc s;
+    s.begin(pw.data(), N);
+    for (int i = 0; i < N; ++i)
+      frame[i] = static_cast<int16_t>(std::lrint(32000.0 * std::sin(2 * 3.14159265358979 * 100.0 * i / N)));
+    s.addFrame(frame.data(), re.data(), im.data());
+    const SpurResult sp = s.worstSpur(rate, 40.0f, re.data());
+    check(sp.bin == 100, "spectrum: bin of a centred sine", sp.bin, 100);
+    near(sp.db, 20.0 * std::log10(32000.0 / 32768.0), 0.05, "spectrum: centred sine level");
+  }
+  {
+    SpectrumAcc s;
+    check(!s.begin(pw.data(), 1000), "spectrum: n not a power of two refused");
+    check(!s.worstSpur(rate, 40.0f, re.data()).valid, "spectrum: no frames -> no spur");
+  }
+}
+
+void testQualityReport() {
+  SamplerReport r;
+  Collect c0;
+  formatSamplerReport(r, collect, &c0);
+  bool sawNa = false;
+  for (auto& l : c0.lines)
+    if (l.rfind("tone: valid=0", 0) == 0 && l.find("thd_db=na") != std::string::npos) sawNa = true;
+  check(sawNa, "quality report: unmeasured tone prints na");
+  MicQuality& q = r.quality;
+  q.valid = q.toneValid = true;
+  q.slot = 1;
+  q.rate = 4294967295u;
+  q.fftN = 2048;
+  q.silSecs = q.secs = 12345.6f;
+  q.toneHz = q.toneN = 4294967295u;
+  q.vol = 0xAF;
+  q.stimDb = -120.0f;
+  for (auto& n : q.noise) {
+    n.valid = n.spurValid = n.stuck = true;
+    n.pgaDb = 30;
+    n.rmsDb = n.peakDb = n.spurDb = n.floorDb = -120.0f;
+    n.spurOverFloorDb = -120.0f;
+    n.dcLsb = -32768.0f;
+    n.spurHz = 22050.0f;
+    n.clips = n.frames = 4294967295u;
+  }
+  q.tone.fundDb = q.tone.thdDb = q.tone.noiseDb = q.tone.snrDb = q.tone.sinadDb = -120.0f;
+  for (float& h : q.tone.harmDb) h = -120.0f;
+  q.tone.thdPct = 100.0f;
+  q.tone.dcLsb = -32768.0f;
+  q.tone.n = 4294967295u;
+  Collect c1;
+  formatSamplerReport(r, collect, &c1);
+  check(c1.lines.size() == c0.lines.size(), "quality report: fixed line count");
+  checkBlock(c1, "===== PG-HWSPIKE SAMPLER BEGIN", "===== PG-HWSPIKE SAMPLER END =====", "sampler report (quality)");
+  int noiseLines = 0;
+  bool sawTone = false;
+  for (auto& l : c1.lines) {
+    if (l.rfind("noise_gain", 0) == 0) ++noiseLines;
+    if (l.rfind("tone_noise:", 0) == 0 && l.find("sinad_db=-120.0") != std::string::npos) sawTone = true;
+  }
+  check(noiseLines == kNumGainRows, "quality report: one noise line per gain", noiseLines, kNumGainRows);
+  check(sawTone, "quality report: tone noise line");
+  for (auto& l : c1.lines)
+    if (l.rfind("quality:", 0) == 0 || l.rfind("noise_gain1", 0) == 0 || l.rfind("tone", 0) == 0)
+      std::printf("  %s\n", l.c_str());
 }
 
 }  // namespace
@@ -657,6 +928,11 @@ int main() {
   testReports();
   testTone();
   testMatrixReport();
+  testMicSlots();
+  testDiffLine();
+  testHarmonics();
+  testSpectrum();
+  testQualityReport();
   std::printf("test_hwspike: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

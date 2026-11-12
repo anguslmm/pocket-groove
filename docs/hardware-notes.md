@@ -173,7 +173,7 @@ One project (MothDeck) claims the internal speaker stays silent with its firmwar
 
 - Analog MEMS mic into the ES8311 ADC, read over I2S on GPIO46 with the same BCLK/WS [SRC M5Unified mic config; espp header comment].
 - M5Unified's mic callback resets the codec (`0x00=0x80`) and enables only the ADC clocks (`0x01=0xBA`) ([L1537 onwards](https://github.com/m5stack/M5Unified/blob/0.2.29/src/M5Unified.inl#L1537)). `M5.Mic` and `M5.Speaker` therefore reconfigure the codec against each other. Full duplex needs `0x01=0xBF` and one shared I2S port, as espp does ([cardputer_adv_codec.cpp](https://github.com/esp-cpp/espp/blob/351825c16377173ff9fd6716a0f089eaf461d7d2/components/m5stack-cardputer/src/cardputer_adv_codec.cpp)).
-- Open ESP-IDF issue: on IDF 5.5.x and later the ADV mic can return constant samples ([espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621), open as of this research). It concerns RX, not TX. **Read on 2026-11-12 and root-caused from source: see 11.6.** The issue is real (opened 2026-05-14, "Status: In Progress", no fix); the constant comes from GPIO46 being left as an output driven high by `M5.begin()`, which IDF 5.4's I2S driver happened to switch off and 5.5's no longer does.
+- Open ESP-IDF issue: on IDF 5.5.x and later the ADV mic can return constant samples ([espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621), open as of this research). It concerns RX, not TX. **Read on 2026-11-12 and root-caused from source: see 11.6.** The issue is real (opened 2026-05-14, "Status: In Progress", no fix); the constant comes from GPIO46 being left as an output driven high by `M5.begin()`, which IDF 5.4's I2S driver happened to switch off and 5.5's no longer does. Confirmed on the device 2026-11-12, with the fix and levels: 11.7.
 
 ---
 
@@ -760,7 +760,7 @@ All of it runs **from flash**: about 9 KB of code per sample (listener 2.9 KB, f
 | Cache sensitivity | barely affected by a 16-64 KB data-cache polluter per block or by spreading 8 voices over 1 MB |
 | 8 voices | about **6.6 % of a core** |
 
-So flash-resident samples are viable for the instrument. The open question is only the microphone (11.6).
+So flash-resident samples are viable for the instrument. The microphone works since the DIN fix (11.6, 11.7).
 
 ### 11.6 Microphone: constant -1 on every sample, measured 2026-11-12, root cause from source
 
@@ -802,4 +802,56 @@ The spike's set is the Rust BSP's, which records on this board. Each difference 
 
 **Full duplex on IDF 5.5** (esp_driver_i2s/i2s_std.c @v5.5.5): `i2s_new_channel(&cfg, &tx, &rx)` marks the port full duplex; the RX channel initialised second becomes a slave (`full_duplex_slave`), shares TX's BCLK / WS internally (`i2s_ll_share_bck_ws`, `tx_conf.sig_loopback`) and gets its own clock at >= 8x BCLK; the slot config equals TX's. The spike does exactly that (one `i2s_std_config_t` for both). Both slots carry the ADC by default (reg 0x44 ADCDAT_SEL = 0); M5Unified reads the right slot, the Rust BSP the left.
 
-**Status:** the hw-spike mic matrix (docs/hw-spike.md, step 7b) tests this and the alternatives in one flash. The result goes here when the owner sends the `MICMATRIX` block.
+**Status:** confirmed on the device by the mic matrix, 2026-11-12: see 11.7.
+
+### 11.7 Microphone: root cause confirmed, fix, levels, measured 2026-11-12
+
+Reported by the owner from the hw-spike mic matrix (docs/hw-spike.md 4b, first version: 24 configs, 1 kHz tone at -12 dBFS digital on the speaker, DAC at -8 dB, 0.5 s capture per config, 44.1 kHz, 16-bit slots unless noted).
+
+**Root cause confirmed: the ESP32 itself drove the I2S data-in pin.**
+
+| Line | Value | Meaning |
+|---|---|---|
+| `pin_boot` | `oe=1 out=1 out_sel=256 ie=1 level=1` | GPIO46 as `M5.begin()` left it: a plain GPIO output driven high |
+| `pin_i2s` | `oe=1 out=1` | still driven after `i2s_channel_init_std_mode` (IDF 5.5 only enables the input) |
+| `pin_test` | `as_found=1.00 pu=0.53 pd=0.47 mute_pu=0.00 mute_pd=0.00` | with our driver off, the line toggles (codec data); with the codec's output muted it reads 0 under a pull-up: the codec drives it. Verdict `esp_drove_din_itself+codec_drives_line` |
+
+**Fix:** `gpio_set_direction(GPIO_NUM_46, GPIO_MODE_INPUT)` after the RX channel is initialised (output driver off, I2S input routing kept). An extra pull-down changes nothing (cfg03 = cfg01). The spike now does this at every `duplex::begin()` (`Config::dinMode = kDinOutputOff` by default).
+
+**Levels** (tone = level of the 1 kHz component, dBFS; snr = tone vs everything else, i.e. SINAD):
+
+| Config | Setup | Left slot | Notes |
+|---|---|---|---|
+| 0 | spike as it was | stuck -1 (both slots) | the bug |
+| 1, 3 | spike (Rust BSP set) + DIN fix, PGA 18 dB (r14=16) | rms -40.1, pk -36.6, **tone -37.1, snr 30.0** | works |
+| 6 | **esp_codec_dev** open + set_fs + start, PGA 30 dB (r14=1A, r44=08) | -1788..1862, rms -28.3, **tone -25.3, snr 30.9** | **best real microphone; now the boot default** |
+| 7 | 6 + DAC reference (r44=58) | L as 6 | R = -8192..8192, tone -12.0, snr 63.8: the DAC loop, **not** the mic |
+| 10 / 11 | 32-bit slots x8 (512 fs) / x4 (256 fs) | tone -37.1 / snr 30.0, 30.6 | both work |
+| 12 | 16-bit slots x4 (128 fs, wrong ratio) | snr 22.1 | still works, worse |
+| 13 / 14 | DMIC on / MIC2 input | dead | controls: the mic is analog on MIC1 |
+| 15 | ADC serial output muted | stuck 0 | control |
+| 16 | 24-bit word in 16-bit slots | tone -37.1, snr 30.8 | works |
+| 17 | Espressif bias / HPF / ramp regs (0x10=1F 0x11=7F 0x1B=0A 0x15=40 ...) | tone -37.1, snr 29.9 | no change |
+| 18 | 0x16=0x24, 0x17=0xC8 | tone -32.6, snr 29.9 | +4.5 dB = 0x17 (9 x 0.5 dB); **0x16 0x04 -> 0x24 changes no level** (cfg06 vs cfg01 is +11.8 dB = the 12 dB PGA step) |
+| 4 | M5Unified speaker + mic sequence + DIN fix (r01=BA, r14=10) | -3..3, rms -92.4 | judged dead |
+| 22 / 23 | `M5.Mic` as in M5's examples / + DIN fix | stuck -8 / -8..8, rms -78.5 (x8 scaling), no tone | the first is the bug; the second nearly dead |
+| 8 | esp-bsp `es8311_init` (reset 0x1F first) + mic config | -2..1, rms -94.9: **dead** | R = DAC reference (r44=58 leaked from 7) |
+| 19 | full reset (0x1F, 20 ms, 0x00) then the spike set | -1..0, rms -96.3: **dead** | |
+| 20 | spike set written before the I2S clocks start (after 19) | rms -69.1, tone -67.8, snr 3.3 | nearly dead |
+| 21 | reset, slow power-up with 100 ms waits | rms -85.4, tone -84.2 | nearly dead |
+
+- **SNR about 30 dB at both 18 and 30 dB PGA** (cfg01 vs cfg06): the residual scales with the gain, so it is the acoustic path (speaker distortion, room), not the ADC's noise floor. The SAMPLER quality measurement (key `n`, docs/hw-spike.md) now separates noise from distortion and measures the room-silence floor per gain.
+- **M5Unified's microphone sequence and `M5.Mic` did not give a usable signal on this board / framework, even with the pin fix** (cfg04, cfg23). Caveat: both run with the DAC clocks off (0x01 = 0xBA), so no stimulus reached the speaker, at PGA 0 dB; -92 dBFS / +-3 LSB is close to what a quiet room gives at 0 dB, so these two rows cannot tell "ADC off" from "quiet". The second matrix adds cfg35 (M5Unified's sequence + PGA 30 dB, judged on room noise) to settle it. For the instrument it does not matter: we use our own full-duplex driver.
+- **Matrix bugs found in the result** (fixed in the second version): the ranking picked cfg08's R slot, which with 0x44 = 0x58 is the DAC reference (the tone itself, exactly -12 dBFS, 63.8 dB), and the page applied it, so the mic could not be recorded on that build; 0x44 = 0x58 and esp_codec_dev's 0x0B / 0x0C / 0x10 / 0x11 / 0x15 / 0x1B leaked from configs 6-8 into all later ones (they were never restored).
+- **The 0x00 reset bits do not restore the register file.** `regs_after` (after esp-bsp's 0x1F reset) still held esp_codec_dev's 0x0C=00 0x10=1F 0x11=7F 0x15=40 0x1B=0A. A "full reset" therefore leaves every register as it was; an init that must work from any prior state has to write every register it depends on.
+
+**The boot default now** (src/hwspike/duplex_audio.cpp `defaultCodecInit`): I2S clocks running, then esp_codec_dev's sequence exactly as cfg06 ran it (0x0D=FA, 0x44=08 x2, 0x01=30, 0x02=00, 0x03=10, 0x16=24, 0x04=10, 0x05=00, 0x0B=00, 0x0C=00, 0x10=1F, 0x11=7F, 0x00=80, 0x00&=BF, 0x01=BF, 0x06&=~20, 0x13=10, 0x1B=0A, 0x1C=6A, 0x44=08, 0x09/0x0A = 16-bit I2S, 0x02=18, 0x05=00, 0x03=10, 0x04=10, 0x07, 0x08=FF, 0x06 low bits 3, 0x00=80, 0x01=BF, 0x09/0x0A unmuted, 0x17=BF, 0x0E=02, 0x12=00, 0x14=1A, 0x0D=01, 0x15=40, 0x37=08, 0x45=00), then the gain preset (default 3 = 0x14=1A, 0x16=24, i.e. cfg06 to the register), GPIO46 output off, record the LEFT slot, 0x44 = 0x08 (no loopback). It contains no reset pulse.
+
+**Open question: an ADC init that works after a reset (cold codec, every time).** What the data show: every config with a 0x1F reset was dead in its own 0.3-0.8 s window (8, 19, 21), and the ADC came back over the next configs without any further change (after 8: cfg09 alive with a weak tone, cfg10 back to -37.1; after 19: cfg20 at -67.8, i.e. ~30 dB down). The DAC path was never affected (R loop at -12.0 straight after the reset in cfg08). cfg06 itself powers the analog part down and up again (0x0D = 0xFA -> 0x01) and works with 250 ms settle, so an analog VMID / bias start-up after power-down is *not* slow enough to explain it. Between configs the I2S clocks stop, so the codec only advances while clocked: roughly 50 dB of recovery per second of clocked time, linear in dB, ~2 s in all. Two candidates, both from the register meanings (Linux sound/soc/codecs/es8311.[ch], read 2026-11-12):
+
+1. **The ADC soft ramp.** 0x15 bits 7:4 = ADC_RAMPRATE (0 = disabled, n = 0.25 dB per 2^(n+1) LRCK). esp_codec_dev writes 0x15 = 0x40, which leaked into every later config, and the power-on value is 0x00. A reset of the ADC digital block plausibly restarts the ADC volume from mute and ramps it back. Against it: 0x40 means 0.25 dB / 32 LRCK, i.e. 95 dB in 0.28 s at 44.1 kHz, faster than the ~2 s seen, unless the ramp counts something slower than LRCK.
+2. **The chip state machine.** 0x00 = 0x1F or 0x00 also switches CSM_ON off; switching it back on re-runs the power-up sequence (timed by 0x0B / 0x0C, which esp_codec_dev sets to 0 = shortest), possibly with a slow reference / modulator settle that 0x0D cycling alone does not trigger.
+
+At power-on the codec is in reset with 0x15 = 0x00, and the boot default's first 0x00 = 0x80 releases it before 0x15 = 0x40 is written; on a warm ESP reboot the codec is not reset at all. So the boot default does not depend on the answer, but the instrument needs it (re-init after a codec reset, or after another firmware). The second matrix (docs/hw-spike.md 4b, configs 24-35) proves one: from the same baseline, a control (24, the boot default unchanged; it runs after `M5.Mic.end()` left 0x00 = 0x00, so it is also a state-machine off/on case), a reset with 0x15 = 0x40 settled 0.3 / 1.2 / 3 s (curve), 0x15 = 0x00 before the reset (candidate 1), reset bits with CSM kept on (0x9F) and CSM off/on without block resets (candidate 2), a "cold" emulation (reset asserted, every register written to its power-on value, analog powered down) followed by the boot default, the same with the codec written before the clocks, esp-bsp and the spike set from cold, and M5Unified's sequence at PGA 30 dB (35). The power-on values for the cold emulation are this device's own regs_before for 0x03-0x08, 0x0B, 0x0C, 0x0F-0x11, 0x15, 0x16, 0x18-0x1B; the rest (0x01, 0x02, 0x09, 0x0A, 0x0D=FC, 0x0E=6A, 0x12=02, 0x13=40, 0x14=10, 0x17=00, 0x1C=4C, 0x31, 0x37=48, 0x44, 0x45) are the datasheet defaults as remembered, UNVERIFIED.
+
+**Prediction to check** (config numbers of the second matrix): if candidate 1 is right, cfg28 (0x15 = 0x00, reset, boot default) and cfg29 (cold + boot default) work at 0.3 s while cfg25 (reset with 0x15 = 0x40, 0.3 s) is dead and cfg27 (3 s) has recovered; the self-sufficient init is then "write 0x15 = 0x00 before releasing a reset (or never reset), then the boot default". If candidate 2 is right, cfg31 (0x9F, CSM kept on) works and cfg32 (CSM off/on only) is dead, and the init must keep CSM on or wait ~2 s of clocked time after switching it on. cfg25-27 give the recovery curve either way.
