@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pocket Groove on the desktop: builds build/host/pocket-groove if needed and runs it.
+#   tools/pg-desktop [options]          (tools/pg-desktop --help for the options)
+# Run it from the repository root: projects live in ./projects (where tools/pg
+# pull/push work) and F9 recordings in ./bounces/live. docs/DESKTOP.md has the key map.
+# Needs CMake, a C++17 compiler and SDL2 (macOS: brew install sdl2 cmake).
+set -e
+here=$(cd "$(dirname "$0")/.." && pwd)
+build="$here/build/host"
+log="$build/pg-desktop-build.log"
+mkdir -p "$build"
+jobs=$( (getconf _NPROCESSORS_ONLN || sysctl -n hw.ncpu || echo 4) 2>/dev/null | head -n 1)
+
+# Configure (fast when nothing changed; picks up SDL2 installed after an
+# earlier configure), then build only the app: a code change is in on the next launch.
+if ! cmake -S "$here/host" -B "$build" -DCMAKE_BUILD_TYPE=Release >"$log" 2>&1; then
+  cat "$log" >&2
+  echo "pg-desktop: cmake configure failed (log: $log)" >&2
+  exit 1
+fi
+if grep -q "SDL2 not found" "$log"; then
+  echo "pg-desktop: SDL2 not found. On a Mac: brew install sdl2   (Debian/Ubuntu: apt install libsdl2-dev)" >&2
+  exit 1
+fi
+echo "pg-desktop: building..." >&2
+if ! cmake --build "$build" --target pocket-groove -j "$jobs" >>"$log" 2>&1; then
+  tail -n 40 "$log" >&2
+  echo "pg-desktop: build failed (full log: $log)" >&2
+  exit 1
+fi
+exec "$build/pocket-groove" "$@"

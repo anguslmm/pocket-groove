@@ -1,0 +1,38 @@
+# Key script for test_desktop_app (desktop_check.py). The same lines drive
+# the desktop app (pocket-groove --script, through SDL's event queue) and
+# host/tools/ui_shot (desktop_check.py adds "battery 255 / sd 0 / boot" in
+# front and turns focuslost into the matching key-ups); the shots must be
+# pixel-identical. Stopped transport only, and long waits before each shot,
+# so nothing on screen depends on where the live audio was.
+wait 400
+tap 9          # SOUND view of the selected track (BASS after boot)
+wait 150
+tap x          # focus the second parameter of the page
+tap =
+tap =
+wait 150
+tap 0          # MIX
+wait 150
+tap `          # home
+wait 150
+tap 3          # bass step 3 on/off
+tap w          # bass step 10 on/off
+down tab       # tempo layer
+tap =          # +1 BPM
+up tab
+wait 150
+down shift
+tap s          # select SNARE without sound
+up shift
+tap 5
+tap 6
+wait 3000
+shot keys
+down a         # a held pad ...
+down sft
+focuslost      # ... and SHIFT, when the window loses focus: both must come up
+wait 100
+expect-released
+wait 2500
+shot after-focus
+quit
