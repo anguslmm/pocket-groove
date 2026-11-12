@@ -140,4 +140,131 @@ int formatSamplerReport(const SamplerReport& r, LineSink sink, void* user) {
   return e.lines();
 }
 
+// ---- MICMATRIX --------------------------------------------------------------------
+void rankMicMatrix(MicMatrixReport& r) {
+  const int n = r.n < 0 ? 0 : (r.n > kMaxMicCfgs ? kMaxMicCfgs : r.n);
+  for (int i = 0; i < n; ++i) r.rank[i] = i;
+  // stable insertion sort by score, best first; configs that did not run go last
+  auto key = [&](int i) { return r.cfg[i].ran ? r.cfg[i].score : -2.0e9f; };
+  for (int i = 1; i < n; ++i) {
+    const int x = r.rank[i];
+    int j = i - 1;
+    while (j >= 0 && key(r.rank[j]) < key(x)) {
+      r.rank[j + 1] = r.rank[j];
+      --j;
+    }
+    r.rank[j + 1] = x;
+  }
+  r.best = -1;
+  if (n > 0) {
+    const MicCfgRow& c = r.cfg[r.rank[0]];
+    if (c.ran && c.v[c.bestSlot].alive) r.best = r.rank[0];
+  }
+}
+
+void micMatrixVerdict(const MicMatrixReport& r, char* out, size_t n) {
+  if (!out || n == 0) return;
+  if (r.best >= 0 && r.best < r.n) {
+    snprintf(out, n, "MIC WORKS (config %d)", r.best);
+  } else {
+    int ran = 0;
+    for (int i = 0; i < r.n && i < kMaxMicCfgs; ++i) ran += r.cfg[i].ran ? 1 : 0;
+    snprintf(out, n, "MIC DEAD IN ALL %d CONFIGS", ran);
+  }
+}
+
+namespace {
+
+void pinLine(Emitter& e, const char* key, const PinSnap& p, const char* what) {
+  if (!p.valid) {
+    e.line("%s: na", key);
+    return;
+  }
+  e.line("%s: oe=%u out=%u out_sel=%u ie=%u wpu=%u wpd=%u mcu_sel=%u level=%u in_sel_i2s1_sd=%u (%s)", key, p.oe, p.out,
+         p.outSel, p.ie, p.wpu, p.wpd, p.mcuSel, p.level, p.inSel, what);
+}
+
+void regLines(Emitter& e, const char* key, const uint8_t* regs, bool valid) {
+  if (!valid) {
+    e.line("%s: na", key);
+    return;
+  }
+  for (int base = 0; base < kNumCodecRegs; base += 16) {
+    char buf[80];
+    int k = 0;
+    for (int i = base; i < base + 16 && i < kNumCodecRegs; ++i)
+      k += snprintf(buf + k, sizeof(buf) - static_cast<size_t>(k), " %02X", regs[i]);
+    e.line("%s_%02X:%s", key, base, buf);
+  }
+}
+
+void slotLine(Emitter& e, int idx, const char* slot, const ToneResult& t, const MicVerdict& v, bool tone) {
+  e.line("cfg%02d_%s: stuck=%d min=%d max=%d dc=%s rms=%s pk=%s tone=%s snr=%s alive=%d tone_ok=%d", idx, slot,
+         t.stuck ? 1 : 0, t.mn, t.mx, F(t.dcLsb, 1).s, F(t.acRmsDb, 1).s, F(t.peakDb, 1).s, F(t.toneDb, 1, tone).s,
+         F(t.snrDb, 1, tone).s, v.alive ? 1 : 0, v.tone ? 1 : 0);
+}
+
+const char* dinName(int d) {
+  switch (d) {
+    case 0: return "as-found";
+    case 1: return "oe-off";
+    case 2: return "forced-high";
+    case 3: return "oe-off+pd";
+    default: return "?";
+  }
+}
+
+}  // namespace
+
+int formatMicMatrixReport(const MicMatrixReport& r, LineSink sink, void* user) {
+  Emitter e(sink, user);
+  e.line("===== PG-HWSPIKE MICMATRIX BEGIN %s =====", kReportVersion);
+  char verdict[48];
+  micMatrixVerdict(r, verdict, sizeof(verdict));
+  if (r.best >= 0 && r.best < r.n)
+    e.line("result: %s name=%s slot=%s applied=%d secs=%s", verdict, r.cfg[r.best].name,
+           r.cfg[r.best].bestSlot ? "R" : "L", r.applied ? 1 : 0, F(r.secs, 1).s);
+  else
+    e.line("result: %s applied=0 secs=%s", verdict, F(r.secs, 1).s);
+  pinLine(e, "pin_boot", r.pinBoot, "GPIO46 before our I2S init");
+  pinLine(e, "pin_i2s", r.pinAfterI2s, "GPIO46 after i2s_channel_init_std_mode");
+  if (r.pinTestValid)
+    e.line("pin_test: as_found=%s pu=%s pd=%s mute_pu=%s mute_pd=%s verdict=%s (fraction of reads = 1)",
+           N(r.pinOnes[0], 2).s, N(r.pinOnes[1], 2).s, N(r.pinOnes[2], 2).s, N(r.pinOnes[3], 2).s,
+           N(r.pinOnes[4], 2).s, r.pinVerdict ? r.pinVerdict : "na");
+  else
+    e.line("pin_test: na");
+  if (r.chipValid) e.line("chip: fd=%02X fe=%02X ff=%02X", r.chip[0], r.chip[1], r.chip[2]);
+  else e.line("chip: na");
+  regLines(e, "regs_before", r.regsBefore, r.regsBeforeValid);
+  const int n = r.n < 0 ? 0 : (r.n > kMaxMicCfgs ? kMaxMicCfgs : r.n);
+  for (int i = 0; i < n; ++i) {
+    const MicCfgRow& c = r.cfg[i];
+    if (!c.ran) {
+      e.line("cfg%02d: %s ran=0", i, c.name);
+      continue;
+    }
+    char regs[64];
+    if (c.regsValid)
+      snprintf(regs, sizeof(regs), "r01=%02X r02=%02X r0A=%02X r14=%02X r44=%02X", c.r01, c.r02, c.r0A, c.r14, c.r44);
+    else
+      snprintf(regs, sizeof(regs), "regs=na");
+    e.line("cfg%02d: %s path=%s din=%s slot_bits=%d rate=%lu tone=%d loopR=%d best=%s score=%s %s", i, c.name,
+           c.m5mic ? "M5.Mic" : "duplex", dinName(c.din), c.slotBits, U(c.rate), c.tone ? 1 : 0, c.loopbackR ? 1 : 0,
+           c.bestSlot ? "R" : "L", F(c.score, 1).s, regs);
+    slotLine(e, i, "L", c.res[0], c.v[0], c.tone);
+    if (!c.m5mic) slotLine(e, i, "R", c.res[1], c.v[1], c.tone);
+  }
+  {
+    char buf[kReportLineMax + 1];
+    int k = snprintf(buf, sizeof(buf), "rank:");
+    for (int i = 0; i < n && k < static_cast<int>(sizeof(buf)) - 8; ++i)
+      k += snprintf(buf + k, sizeof(buf) - static_cast<size_t>(k), " %d", r.rank[i]);
+    e.line("%s%s (config numbers, best first)", buf, n == 0 ? " -" : "");
+  }
+  regLines(e, "regs_after", r.regsAfter, r.regsAfterValid);
+  e.line("===== PG-HWSPIKE MICMATRIX END =====");
+  return e.lines();
+}
+
 }  // namespace hws

@@ -173,7 +173,7 @@ One project (MothDeck) claims the internal speaker stays silent with its firmwar
 
 - Analog MEMS mic into the ES8311 ADC, read over I2S on GPIO46 with the same BCLK/WS [SRC M5Unified mic config; espp header comment].
 - M5Unified's mic callback resets the codec (`0x00=0x80`) and enables only the ADC clocks (`0x01=0xBA`) ([L1537 onwards](https://github.com/m5stack/M5Unified/blob/0.2.29/src/M5Unified.inl#L1537)). `M5.Mic` and `M5.Speaker` therefore reconfigure the codec against each other. Full duplex needs `0x01=0xBF` and one shared I2S port, as espp does ([cardputer_adv_codec.cpp](https://github.com/esp-cpp/espp/blob/351825c16377173ff9fd6716a0f089eaf461d7d2/components/m5stack-cardputer/src/cardputer_adv_codec.cpp)).
-- Open ESP-IDF issue: on IDF 5.5.x and later the ADV mic can return constant samples ([espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621), open as of this research). It concerns RX, not TX.
+- Open ESP-IDF issue: on IDF 5.5.x and later the ADV mic can return constant samples ([espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621), open as of this research). It concerns RX, not TX. **Read on 2026-11-12 and root-caused from source: see 11.6.** The issue is real (opened 2026-05-14, "Status: In Progress", no fix); the constant comes from GPIO46 being left as an output driven high by `M5.begin()`, which IDF 5.4's I2S driver happened to switch off and 5.5's no longer does.
 
 ---
 
@@ -715,3 +715,91 @@ So every level except 0 and 255 switched the backlight current at **256 Hz**, sq
 ### 11.3 Key ghosting
 
 Three closed keys on three corners of a rectangle of the TCA8418 scan matrix (scan row = col / 2, scan col = row + 4 * (col & 1); 4.5) make the controller report the fourth corner, in the same FIFO batch as the third key. The smoke test saw the phantom arrive in the same batch. Four deliberately pressed keys that close no rectangle read correctly. The rectangles are in the scan matrix, not the printed layout: a+s+d ghosts f. The UI's handling and the full audit are in docs/ghosting-audit.md.
+
+### 11.4 IMU (BMI270), hw-spike TILT page, measured 2026-11-12
+
+Reported by the owner from `env:hw-spike` (docs/hw-spike.md), device flat on the table for the noise and drift numbers.
+
+| Item | Result |
+|---|---|
+| Identity | BMI270 at **0x69**, chip id **0x24** |
+| Rate at 200 Hz ODR | **198 new samples/s**, 1 % duplicate polls |
+| Noise at rest | **0.06 deg** from the accelerometer alone, **0.003 deg** fused (gyro-complementary) |
+| Gyro-only drift | **0.66 deg/min** after the boot bias calibration |
+| I2C, one 18-byte burst at 400 kHz | **728 us average, 1.49 ms max** (shared bus, M5.In_I2C) |
+| Keyboard with the IMU running | **no key events lost** (52 downs); key INT-to-read **402 us average, 800 us max** |
+| Shake detection | worked |
+| Control latency (estimate) | **31-36 ms** across the presets, of which **17 ms is the audio output buffer** |
+| Cost in the spike | **981 us per poll** on core 1 (728 us of it the I2C read, which M5's I2C layer busy-waits) and about **60,800 CPU cycles of maths per sample** (253 us): **19.6 % of core 1** at 200 Hz. Far too much for the instrument. |
+
+**Owner's verdict on tilt:** "super fun already". All four presets are useful for different purposes: `acc-fast` is twitchy, `acc-smooth` is the general-purpose one, `fused` and `fused-wide` are for subtle moves. Keep all four as user choices.
+
+**Why the maths costs ~60,800 cycles** (read from the spike's code and its compiled ELF, `.pio/build/hw-spike/firmware.elf`, 2026-11-12). Not accidental double promotion (`-Wdouble-promotion` is clean) and not per-sample trigonometry alone. The listener `tilt::onSample` (src/hwspike/page_tilt.cpp) is a diagnostic harness, and per fresh sample the disassembly shows:
+
+- **Two** gravity fusions (the display one and the mapper's), each with two normalisations: about 8 `sqrtf` calls and up to 12 float divides. This build does every float divide as a call to the ROM's software `__divsf3`: 25-30 per sample in total, counting the seven `WindowStd::add` running-mean divides.
+- **4 `expf`**: the four `onePoleK()` coefficients are recomputed every sample, although they only change with the rate or preset. Plus **1 `exp2f`** for the cutoff, which newlib implements as **`powf(2, x)`** (`__ieee754_powf`, 1.5 KB of code).
+- **4 `atan2f`** (absolute tilt of the raw and the fused vector, display only); 2 more while Space is held.
+- Seven running standard deviations, the shake detector (another `expf` and `sqrtf`), and the gyro sign check with **explicit doubles**: a software double **`sqrt` + divide every sample** (`signCheck = sPO / sqrt(sPP * sOO)`; `__ieee754_sqrt` is a bit-by-bit loop) and double accumulations while moving.
+- Five `std::atomic<bool>::exchange` calls (out of line, `__atomic_exchange_1`) and a critical section copying the 168-byte `Live` snapshot.
+
+All of it runs **from flash**: about 9 KB of code per sample (listener 2.9 KB, fusion / mapper / filters 2.2 KB, `powf` 1.7 KB, `atan2f` + `atanf` 0.7 KB, `expf` 0.5 KB, double `sqrt` 0.6 KB, `scalbnf`), i.e. ~280 32-byte cache lines. Between two polls 5 ms apart the UI's LCD redraw, the keyboard task and core 0's audio code go through the same instruction cache. The arithmetic itself is roughly 10-15 k cycles. Most of the rest is instruction-cache refills from flash (100+ cycles each), plus any preemption inside the measured window (the keyboard task, priority 10, can run inside it). This split is an estimate from the code, not measured separately on the device; it is consistent with the 60.8 k total.
+
+**What a production version should do** (the spike's tilt page stays as it is):
+
+- **Rate:** 200 Hz ODR is right for feel; the latency budget is dominated by the audio buffer, not the IMU. 100 Hz would also do and halves the bus traffic.
+- **Bus:** the 728 us read is the larger cost, and it is busy-waited. Read only accelerometer + gyroscope (12 bytes; dropping sensortime and the status byte saves a third), or use the BMI270 FIFO (headerless acc + gyr frames) and read 2-4 frames per transaction at 50-100 Hz. Consider 1 MHz (the BMI270 supports Fast-mode Plus; check the TCA8418 and ES8311 limits before raising the shared bus) or an interrupt-driven transfer, so the wait is not CPU time. Target: **<= 3 % of core 1 for the bus at 200 samples/s**.
+- **Maths:** one fusion only (the mapper's); no absolute-tilt display maths, running std, sign check or drift diagnostics; precompute the one-pole coefficients when the rate or preset changes (no `expf` per sample); normalise with one `sqrtf` and multiply by the reciprocal; `atan2f` only while held (2 calls) or a small polynomial for +-60 deg; the cutoff curve by table or a fast `exp2` at control rate, never `powf`; no doubles; the per-sample function and its helpers in IRAM (1-2 KB), so it never refetches from flash. Target: **<= 3,000 cycles (12 us) per sample, about 0.25 % of a core at 200 Hz**, and a fixed total of **<= 4 % of core 1** including the bus.
+
+### 11.5 Sample storage and playback from flash, hw-spike SAMPLER page, measured 2026-11-12
+
+| Item | Result |
+|---|---|
+| Recording to the app1 flash region while streaming | **nothing lost**: 1387 blocks, `i2s_rx_overflows=0`, `ring_drop_samples=0`, longest gap between input blocks 2.9 ms |
+| Flash write per 256-sample chunk | **351 us average, 383 us max**; pre-erase 48 ms |
+| Playback from memory-mapped flash | about **44-46 cycles per voice-sample**, against **29-31 from RAM** |
+| Cache sensitivity | barely affected by a 16-64 KB data-cache polluter per block or by spreading 8 voices over 1 MB |
+| 8 voices | about **6.6 % of a core** |
+
+So flash-resident samples are viable for the instrument. The open question is only the microphone (11.6).
+
+### 11.6 Microphone: constant -1 on every sample, measured 2026-11-12, root cause from source
+
+**Measured** (hw-spike SAMPLER page, full-duplex I2S, 44.1 kHz, 16-bit stereo slots): every sample in **both** slots is -1 (0xFFFF) at every PGA gain (0, 15, 30 dB, and 30 dB + reg 0x16 = 0x24), with and without headphones; DC -1.0 LSB, peak -90.3 dBFS (1 LSB), no noise at all. The codec registers read back as written (`r01=BF r09=00 r0A=0C r0D=01 r0E=02 r14=1A r15=00 r16=04 r17=BF r1C=6A`), and the RX path delivers its blocks on time. Playback works.
+
+**The upstream issue is real.** [espressif/esp-idf#18621](https://github.com/espressif/esp-idf/issues/18621) (read 2026-11-12): "I²S: ES8311 codec mic returns silent/constant samples on ESP32-S3 — regression between IDF v5.4.2 and v5.5.1 (IDFGH-17668)", opened 2026-05-14 on this board (Cardputer-Adv), "Status: In Progress", no fix. Constant `-8` or `-1` on IDF 5.5.1, real audio on 5.4.2 with identical code. A later comment sees the same on IDF 6.0.3 / 6.1 with the new `i2s_channel_*` driver and no MCLK. Another (2026-10-13) finds that a minimal `i2s_std` RX probe works on every version, that the failure appears with M5Unified's setup / `Mic_Class`, and that a workaround which resets the GPIO pins helps. [guitar-audio-tools @46b3d0d](https://github.com/c5e3/guitar-audio-tools/blob/46b3d0dada4008d24a6d992eaf8f7298b91763f5/README.md) pins Arduino core 3.2.0 (IDF 5.4) for the same reason: "With core 3.3.x (ESP-IDF 5.5) the ADV microphone returns only constant samples (-1)".
+
+**Root cause (from source; the matrix's `pin_boot` / `pin_test` lines confirm or refute it):**
+
+1. **`M5.begin()` drives GPIO46 high as an output on every ESP32-S3 board** before it knows the board ("Power Hold pin for Capsule/Dial/DinMeter"). It restores the pad only on CoreS3, StackChan, AtomS3R Cam, AtomS3R Ext, StampS3 and StampS3Bat. The Cardputer-Adv is not in that list, so GPIO46 stays an **output at level 1** ([M5Unified 0.2.29 src/M5Unified.hpp L353-L406](https://github.com/m5stack/M5Unified/blob/0.2.29/src/M5Unified.hpp#L353-L406); 0.2.23 does it unconditionally, L359-L361). GPIO46 is the I2S data in, from the ES8311's ASDOUT.
+2. **ESP-IDF 5.4.2** set an I2S input pin with `gpio_set_direction(gpio, GPIO_MODE_INPUT)` ([esp_driver_i2s/i2s_common.c L885 @v5.4.2](https://github.com/espressif/esp-idf/blob/v5.4.2/components/esp_driver_i2s/i2s_common.c#L885)), which also **switches the output driver off**. **ESP-IDF 5.5.5** calls only `gpio_input_enable(gpio)` ([L939 @v5.5.5](https://github.com/espressif/esp-idf/blob/v5.5.5/components/esp_driver_i2s/i2s_common.c#L939)), which sets nothing but the input enable ([esp_driver_gpio/src/gpio.c L206-L211 @v5.5.5](https://github.com/espressif/esp-idf/blob/v5.5.5/components/esp_driver_gpio/src/gpio.c#L206-L211)).
+3. So on IDF 5.5 the ESP32 keeps driving DIN high against the codec, and the I2S receiver samples its own output: **all ones, -1 in both slots**, whatever the codec registers and gain. Through M5.Mic (magnification 16 / (over_sampling 1 x 2) = x8) the same -1 becomes **-8**, the issue's other value.
+
+This explains every observation: constant -1 in both slots, no noise at any gain, codec registers correct, playback fine, the IDF 5.4 -> 5.5 regression with M5Unified unchanged, the Rust BSP working (esp-hal, no M5Unified), the minimal probe working, and the pin-reset workaround. **Fix:** after the RX channel is initialised (or after `M5.begin()`), `gpio_set_direction(GPIO_NUM_46, GPIO_MODE_INPUT)`. It keeps the I2S input routing and turns the driver off. The spike's matrix config 1 (`spike+din-fix`) is exactly that.
+
+**Our setup against the references** (all read 2026-11-12; "-" = not written, i.e. power-on value):
+
+| Register | spike | M5Unified mic cb | Rust BSP (records on this board) | esp_codec_dev (esp-adf) | esp-bsp es8311 |
+|---|---|---|---|---|---|
+| 0x00 reset / CSM | 0x80 | 0x80 | 0x80 | 0x80 (open and start; no reset pulse) | 0x1F, 20 ms, 0x00, 0x80 |
+| 0x01 clocks | 0xBF | 0xBA (ADC only) | 0xBF | 0x30, then 0xBF | 0xBF |
+| 0x02 pre-div / multiplier | 0x18 | 0x18 | 0x18 | 0x18 (x8 forced without MCLK) | 0x18 (row 1.4112 MHz / 44.1 kHz) |
+| 0x03 / 0x04 OSR, 0x05 dividers | - | - | - | 0x10 / 0x10 / 0x00 | 0x10 / 0x10 / 0x00 |
+| 0x06-0x08 BCLK / LRCK dividers (master only) | - | - | - | 0x06 low bits 3, 0x07 0, 0x08 0xFF | same |
+| 0x09 / 0x0A SDP in / out | 0x00 / 0x0C | - / - | - / 0x0C | 16-bit I2S, unmuted (0x0C) | 0x0C / 0x0C |
+| 0x0B, 0x0C, 0x10, 0x11 | - | - | - | 0x00, 0x00, **0x1F, 0x7F** | - |
+| 0x0D / 0x0E / 0x12 / 0x13 | 0x01 / 0x02 / 0x00 / 0x10 | 0x01 / 0x02 / - / - | as spike | 0xFA then 0x01 / 0x02 / 0x00 / 0x10 | 0x01 / 0x02 / 0x00 / 0x10 |
+| 0x14 input + PGA | 0x10 + gain | 0x10 | 0x10 + gain | 0x1A, DMIC bit cleared | 0x1A |
+| 0x15 ramp | - | - | - | **0x40** | - |
+| 0x16 ADC scale | - (reads 0x04) | - | - | **0x24** | - (setter only) |
+| 0x17 ADC volume | 0xBF | 0xBF | 0xBF | 0xBF | **0xC8** |
+| 0x1B / 0x1C HPF / EQ | - / 0x6A | - / 0x6A | - / 0x6A | **0x0A** / 0x6A | - / 0x6A |
+| 0x44 / 0x45 | - | - | - | **0x08** (or 0x58 = ADCL + DACR reference) / 0x00 | - |
+| Order | I2S running, then codec | codec, then I2S | stream running, then codec | codec, then I2S | codec, then I2S |
+
+The spike's set is the Rust BSP's, which records on this board. Each difference to Espressif's drivers (bias registers 0x10 / 0x11, HPF 0x1B, ramp 0x15, digital gain 0x16, 0x44 / 0x45, explicit OSR and dividers equal to the power-on values, full reset, order) is a separate matrix config, but none of them can make an all-ones stream while the registers read back correctly; the pin can.
+
+**Clocking.** With 16-bit stereo slots BCLK = 32 fs; reg 0x02 = 0x18 multiplies it by 8 to 256 fs. That is what esp_codec_dev computes for MCLK-from-SCLK (it forces pre_multi = 3 = x8 whenever `use_mclk` is false, and drops to x4 only at 8 kHz) and what esp-bsp's table gives for its 1.4112 MHz row. The ADC needs no other ratio than the DAC: both run from the same internal MCLK and OSR registers. 32-bit slots (64 fs) with x8 = 512 fs (esp_codec_dev's choice) and with x4 = 256 fs are matrix configs 10 and 11.
+
+**Full duplex on IDF 5.5** (esp_driver_i2s/i2s_std.c @v5.5.5): `i2s_new_channel(&cfg, &tx, &rx)` marks the port full duplex; the RX channel initialised second becomes a slave (`full_duplex_slave`), shares TX's BCLK / WS internally (`i2s_ll_share_bck_ws`, `tx_conf.sig_loopback`) and gets its own clock at >= 8x BCLK; the slot config equals TX's. The spike does exactly that (one `i2s_std_config_t` for both). Both slots carry the ADC by default (reg 0x44 ADCDAT_SEL = 0); M5Unified reads the right slot, the Rust BSP the left.
+
+**Status:** the hw-spike mic matrix (docs/hw-spike.md, step 7b) tests this and the alternatives in one flash. The result goes here when the owner sends the `MICMATRIX` block.

@@ -24,6 +24,7 @@
 #include "app.h"
 #include "dsp.h"
 #include "duplex_audio.h"
+#include "mic_matrix.h"
 #include "sample_store.h"
 
 namespace hws {
@@ -37,7 +38,7 @@ namespace {
 constexpr uint8_t k1 = key(0, 1), k4 = key(0, 4);
 constexpr uint8_t kR = key(1, 4), kW = key(1, 2), kP = key(1, 10);
 constexpr uint8_t kL = key(2, 10), kA = key(2, 2), kK = key(2, 9);
-constexpr uint8_t kX = key(3, 4), kV = key(3, 6), kB = key(3, 7), kN = key(3, 8);
+constexpr uint8_t kX = key(3, 4), kV = key(3, 6), kB = key(3, 7), kN = key(3, 8), kM = key(3, 9);
 
 constexpr int8_t kPitchSemis[8] = {-12, -7, -5, 0, 3, 5, 7, 12};   // a s d f g h j k
 constexpr int8_t kStack[8] = {0, 12, 7, 19, -12, 5, 24, 3};        // extra voices of one trigger
@@ -551,8 +552,24 @@ float g_peakHold[2] = {-120, -120};
 uint32_t g_peakHoldT = 0;
 }  // namespace
 
+bool startMatrix() {
+  const int bs = g_bench.load();
+  if (micmatrix::running()) { app::msg("matrix already running"); return false; }
+  if (g_rec.load() != kIdle || bs == kBRun || bs == kBPrep) { app::msg("busy"); return false; }
+  quiesce();   // no playback from the mapping while the driver restarts
+  if (!micmatrix::start()) {
+    g_playEnable.store(store::mapped());
+    app::msg("matrix did not start");
+    return false;
+  }
+  app::msg("mic matrix: ~30 s, unplug headphones");
+  return true;
+}
+
 void key(uint8_t k, bool down) {
   if (!down) return;
+  if (micmatrix::running()) { app::msg("mic matrix running..."); return; }
+  if (k == kM) { startMatrix(); return; }
   const int rec = g_rec.load();
   const int bs = g_bench.load();
   const bool busy = rec != kIdle || bs == kBRun || bs == kBPrep;
@@ -620,6 +637,16 @@ void key(uint8_t k, bool down) {
 }
 
 void tick() {
+  static bool s_matrixWasRunning = false;
+  int slot = 0;
+  if (micmatrix::tick(&slot)) {
+    g_channel.store(slot);
+    applyGain();   // the user's gain preset on top of the setup the matrix switched to
+    app::msg("%s: slot %s", micmatrix::statusLine(), slot ? "R" : "L");
+  }
+  const bool mr = micmatrix::running();
+  if (s_matrixWasRunning && !mr) g_playEnable.store(store::mapped() && g_rec.load() == kIdle);
+  s_matrixWasRunning = mr;
   if (g_measDone.exchange(false)) {
     const LevelResult r = levelResult(g_measAcc);
     g_gr[g_measGain].silValid = true;
@@ -751,12 +778,16 @@ void draw() {
       }
     cv.line(12, kGreen, "8v cyc/v-smp ram %.0f fl %.0f 1M %.0f", static_cast<double>(c[0]), static_cast<double>(c[1]),
             static_cast<double>(c[2]));
-    cv.line(13, kGreen, "flash line fill %.0f cyc", static_cast<double>(g_missCyc));
+    if (!micmatrix::running() && !micmatrix::finished())
+      cv.line(13, kGreen, "flash line fill %.0f cyc", static_cast<double>(g_missCyc));
   } else {
     cv.line(12, kGrey, "[b] playback cost bench (~15 s)");
   }
+  if (micmatrix::running()) cv.line(13, kYellow, "%s", micmatrix::statusLine());
+  else if (micmatrix::finished()) cv.line(13, micmatrix::works() ? kGreen : kRed, "%s", micmatrix::statusLine());
+  else if (!g_benchRows) cv.line(13, kGrey, "[m] mic matrix (~30 s, speaker on)");
   cv.line(14, kYellow, "%s", app::currentMsg());
-  cv.line(15, kGrey, "r 1-4 l n w a-k v p x b  -/= vol");
+  cv.line(15, kGrey, "r 1-4 l n w a-k v p x b m  -/= vol");
 }
 
 void report() {
@@ -835,6 +866,7 @@ void report() {
   app::fillMemory(&r.heapFree, &r.heapMin, &r.heapLargest, &r.staticDram);
   r.uptimeS = millis() / 1000;
   formatSamplerReport(r, app::reportSink, nullptr);
+  if (micmatrix::finished()) micmatrix::report();
 }
 
 }  // namespace sampler

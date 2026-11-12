@@ -8,10 +8,12 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "tone.h"
+
 namespace hws {
 
 constexpr int kReportLineMax = 200;
-constexpr const char* kReportVersion = "hwspike-1";
+constexpr const char* kReportVersion = "hwspike-2";
 
 using LineSink = void (*)(const char* line, void* user);   // line without '\n'
 
@@ -129,9 +131,63 @@ struct SamplerReport {
   uint32_t uptimeS = 0;
 };
 
+// ---- MICMATRIX (sampler page key m, mic_matrix.cpp) ----------------------------
+// GPIO46 (I2S data in) as the registers say: output enable / level / output
+// signal, input enable, pulls, IO_MUX function, pad level, and which GPIO the
+// I2S1 data-in signal is routed from (in_sel; 46 expected).
+struct PinSnap {
+  bool     valid = false;
+  uint8_t  oe = 0, out = 0, ie = 0, wpu = 0, wpd = 0, mcuSel = 0, level = 0, inSel = 0;
+  uint16_t outSel = 0;
+};
+
+constexpr int kMaxMicCfgs = 28;
+constexpr int kNumCodecRegs = 0x46;   // 0x00 .. 0x45
+
+struct MicCfgRow {
+  const char* name = "";
+  int      slotBits = 16;
+  int      din = 0;            // 0 as found, 1 output driver off (fix), 2 forced high (repro), 3 off + pull-down
+  bool     tone = true;        // 1 kHz stimulus played on the DAC / speaker during the capture
+  bool     loopbackR = false;  // reg 0x44 routes the DAC to the R slot: judged on L only
+  bool     m5mic = false;      // M5.Mic control (our driver shut down)
+  bool     ran = false;
+  uint32_t rate = 0;
+  uint8_t  r01 = 0, r02 = 0, r0A = 0, r14 = 0, r44 = 0;
+  bool     regsValid = false;
+  ToneResult res[2];           // L, R (M5.Mic: both = its mono stream)
+  MicVerdict v[2];
+  int      bestSlot = 0;
+  float    score = -1.0e9f;
+};
+
+struct MicMatrixReport {
+  PinSnap  pinBoot, pinAfterI2s;
+  bool     pinTestValid = false;
+  float    pinOnes[5] = {-1, -1, -1, -1, -1};   // as found, pull-up, pull-down, SDP muted + pull-up, muted + pull-down
+  const char* pinVerdict = "na";
+  bool     chipValid = false;
+  uint8_t  chip[3] = {0, 0, 0};                 // regs 0xFD 0xFE 0xFF
+  bool     regsBeforeValid = false, regsAfterValid = false;
+  uint8_t  regsBefore[kNumCodecRegs] = {0};
+  uint8_t  regsAfter[kNumCodecRegs] = {0};
+  int      n = 0;
+  MicCfgRow cfg[kMaxMicCfgs];
+  int      rank[kMaxMicCfgs] = {0};             // config indices, best first
+  int      best = -1;                           // -1: no config works
+  bool     applied = false;                     // the sampler now runs the best config
+  float    secs = 0;
+};
+
+// The one-line verdict the page shows: "MIC WORKS (config N)" or "MIC DEAD IN ALL N CONFIGS".
+void micMatrixVerdict(const MicMatrixReport& r, char* out, size_t n);
+// Fills r.rank (by score, stable) and r.best (first that works, else -1).
+void rankMicMatrix(MicMatrixReport& r);
+
 // Each emits the whole block (BEGIN ... END) through sink, line by line.
 // Returns the number of lines written.
 int formatTiltReport(const TiltReport& r, LineSink sink, void* user);
 int formatSamplerReport(const SamplerReport& r, LineSink sink, void* user);
+int formatMicMatrixReport(const MicMatrixReport& r, LineSink sink, void* user);
 
 }  // namespace hws

@@ -31,8 +31,12 @@
 #include <Arduino.h>
 #include <M5Unified.h>
 
+#include <driver/gpio.h>
 #include <driver/i2s_std.h>
 #include <esp_cpu.h>
+#include <soc/gpio_reg.h>
+#include <soc/gpio_sig_map.h>
+#include <soc/io_mux_reg.h>
 #include <esp_rom_sys.h>
 #include <esp_timer.h>
 #include <freertos/FreeRTOS.h>
@@ -97,9 +101,40 @@ bool wr(uint8_t reg, uint8_t val) {
 bool rd(uint8_t reg, uint8_t* v) { return M5.In_I2C.readRegister(kCodecAddr, reg, v, 1, kCodecHz); }
 
 uint8_t s_pga = 10;        // reg 0x14 low nibble
+uint8_t s_reg14Hi = 0x10;  // reg 0x14 high bits: MIC1P/MIC1N, no DMIC
 int s_reg16 = -1;          // -1 = power-on value
 
+PinSnap s_pinBoot, s_pinI2s;
+bool s_pinBootTaken = false;
+
+PinSnap snapPin() {
+  constexpr int pin = kPinDin;
+  constexpr uint32_t bit = 1u << (pin - 32);
+  PinSnap p;
+  p.valid = true;
+  p.oe = (REG_READ(GPIO_ENABLE1_REG) & bit) ? 1 : 0;
+  p.out = (REG_READ(GPIO_OUT1_REG) & bit) ? 1 : 0;
+  p.level = (REG_READ(GPIO_IN1_REG) & bit) ? 1 : 0;
+  p.outSel = static_cast<uint16_t>(REG_READ(GPIO_FUNC0_OUT_SEL_CFG_REG + 4 * pin) & 0xFFF);
+  const uint32_t mux = REG_READ(IO_MUX_GPIO46_REG);
+  p.ie = (mux & FUN_IE) ? 1 : 0;
+  p.wpu = (mux & FUN_PU) ? 1 : 0;
+  p.wpd = (mux & FUN_PD) ? 1 : 0;
+  p.mcuSel = static_cast<uint8_t>((mux >> MCU_SEL_S) & MCU_SEL);
+  // I2S1 data-in signal: which GPIO feeds it (bit 7 = through the matrix)
+  const uint32_t in = REG_READ(GPIO_FUNC0_IN_SEL_CFG_REG + 4 * I2S1I_SD_IN_IDX);
+  p.inSel = static_cast<uint8_t>(in & 0xFF);
+  return p;
+}
+
 bool codecInit() {
+  if (s_cfg.codec) return s_cfg.codec(s_cfg.codecUser);
+  return defaultCodecInit();
+}
+
+}  // namespace
+
+bool defaultCodecInit() {
   if (!s_boot16Read) {
     uint8_t v = 0;
     if (rd(0x16, &v)) {
@@ -124,10 +159,12 @@ bool codecInit() {
   };
   bool ok = true;
   for (auto& r : seq) ok = wr(r[0], r[1]) && ok;
-  ok = wr(0x14, static_cast<uint8_t>(0x10 | (s_pga & 0x0F))) && ok;
+  ok = wr(0x14, static_cast<uint8_t>(s_reg14Hi | (s_pga & 0x0F))) && ok;
   ok = wr(0x16, s_reg16 < 0 ? s_boot16 : static_cast<uint8_t>(s_reg16)) && ok;
   return ok;
 }
+
+namespace {
 
 bool ramp(uint8_t from, uint8_t to) {
   int v = from;
@@ -208,6 +245,14 @@ bool begin(const Config& cfg, ProcessFn fn, void* user) {
   s_user = user;
   s_periodUs = static_cast<uint32_t>(1000000ull * kBlockFrames / s_cfg.sampleRate);
   if (M5.Speaker.isRunning()) M5.Speaker.end();
+  if (!s_pinBootTaken) {
+    s_pinBoot = snapPin();
+    s_pinBootTaken = true;
+  }
+  if (s_cfg.codecBeforeClock) {
+    s_codecOk = codecInit();   // no clock yet: the codec takes I2C without one (M5Unified's order)
+    delay(5);
+  }
 
   i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_1, I2S_ROLE_MASTER);
   chan.dma_desc_num = s_cfg.dmaDesc;
@@ -219,6 +264,13 @@ bool begin(const Config& cfg, ProcessFn fn, void* user) {
   i2s_std_config_t std = {};
   std.clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(s_cfg.sampleRate);
   std.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+  if (s_cfg.slotBits == 32) {
+    // 64 BCLK per frame; 16 data bits MSB first in each 32-bit slot, WS one slot wide
+    std.slot_cfg.slot_bit_width = I2S_SLOT_BIT_WIDTH_32BIT;
+    std.slot_cfg.ws_width = 32;
+  } else {
+    s_cfg.slotBits = 16;
+  }
   std.gpio_cfg.mclk = I2S_GPIO_UNUSED;
   std.gpio_cfg.bclk = static_cast<gpio_num_t>(kPinBclk);
   std.gpio_cfg.ws = static_cast<gpio_num_t>(kPinWs);
@@ -233,6 +285,8 @@ bool begin(const Config& cfg, ProcessFn fn, void* user) {
     s_tx = s_rx = nullptr;
     return false;
   }
+  s_pinI2s = snapPin();
+  applyDinMode(s_cfg.dinMode);
   i2s_event_callbacks_t rxcb = {};
   rxcb.on_recv_q_ovf = onRxOvf;
   i2s_channel_register_event_callback(s_rx, &rxcb, nullptr);
@@ -250,7 +304,7 @@ bool begin(const Config& cfg, ProcessFn fn, void* user) {
     return false;
   }
   delay(10);   // the codec is clocked from BCLK: clock first, then registers
-  s_codecOk = codecInit();
+  if (!s_cfg.codecBeforeClock) s_codecOk = codecInit();
   if (!s_codecOk) setErr("ES8311 did not ACK on I2C 0x18");
 
   if (!s_done) s_done = xSemaphoreCreateBinary();
@@ -297,12 +351,71 @@ uint8_t volumeReg() { return s_cfg.volumeReg; }
 bool setMicGain(uint8_t pgaNibble, int reg16) {
   s_pga = pgaNibble > 10 ? 10 : pgaNibble;
   s_reg16 = reg16;
-  bool ok = wr(0x14, static_cast<uint8_t>(0x10 | s_pga));
+  bool ok = wr(0x14, static_cast<uint8_t>(s_reg14Hi | s_pga));
   ok = wr(0x16, s_reg16 < 0 ? s_boot16 : static_cast<uint8_t>(s_reg16)) && ok;
   return ok;
 }
 uint8_t bootReg16() { return s_boot16; }
 bool codecRead(uint8_t reg, uint8_t* v) { return rd(reg, v); }
+bool codecWrite(uint8_t reg, uint8_t v) { return wr(reg, v); }
+void setReg14Hi(uint8_t hi) { s_reg14Hi = static_cast<uint8_t>(hi & 0xF0); }
+uint8_t micPga() { return s_pga; }
+int micReg16() { return s_reg16; }
+
+bool restart(const Config& cfg) {
+  ProcessFn fn = s_fn;
+  void* user = s_user;
+  if (!fn) {
+    setErr("restart before begin");
+    return false;
+  }
+  end();
+  return begin(cfg, fn, user);
+}
+
+PinSnap pinBoot() { return s_pinBoot; }
+PinSnap pinAfterI2s() { return s_pinI2s; }
+PinSnap readPin() { return snapPin(); }
+
+void applyDinMode(uint8_t mode) {
+  const gpio_num_t pin = static_cast<gpio_num_t>(kPinDin);
+  switch (mode) {
+    case kDinOutputOff:
+      // The call ESP-IDF 5.4's i2s_gpio_check_and_set made: input on, output
+      // driver off. The I2S data-in routing (GPIO matrix in_sel) is untouched.
+      gpio_set_direction(pin, GPIO_MODE_INPUT);
+      gpio_pullup_dis(pin);
+      gpio_pulldown_dis(pin);
+      break;
+    case kDinForcedHigh:
+      // what M5.begin() leaves: GPIO output, level 1, input still enabled for the I2S
+      REG_WRITE(GPIO_FUNC0_OUT_SEL_CFG_REG + 4 * kPinDin, SIG_GPIO_OUT_IDX);
+      gpio_set_level(pin, 1);
+      REG_WRITE(GPIO_ENABLE1_W1TS_REG, 1u << (kPinDin - 32));
+      break;
+    case kDinOffPulldown:
+      gpio_set_direction(pin, GPIO_MODE_INPUT);
+      gpio_pullup_dis(pin);
+      gpio_pulldown_en(pin);
+      break;
+    default:
+      break;
+  }
+}
+
+float sampleDinOnes(uint32_t reads) {
+  if (reads == 0) return -1.0f;
+  constexpr uint32_t bit = 1u << (kPinDin - 32);
+  uint32_t ones = 0;
+  for (uint32_t i = 0; i < reads; ++i) ones += (REG_READ(GPIO_IN1_REG) & bit) ? 1u : 0u;
+  return static_cast<float>(ones) / static_cast<float>(reads);
+}
+
+void setDinPulls(bool up, bool down) {
+  const gpio_num_t pin = static_cast<gpio_num_t>(kPinDin);
+  if (up) gpio_pullup_en(pin); else gpio_pullup_dis(pin);
+  if (down) gpio_pulldown_en(pin); else gpio_pulldown_dis(pin);
+}
 
 Stats stats() {
   Stats st;

@@ -468,6 +468,180 @@ void testReports() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Tone table / generator / detector / verdict (mic matrix)
+ToneResult detect(const ToneTable& t, const std::vector<int16_t>& x) {
+  ToneDetector d;
+  d.begin(&t);
+  for (int16_t v : x) d.add(v);
+  return d.result();
+}
+
+void testTone() {
+  ToneTable t;
+  check(t.init(1000, 44100) && t.len == 441, "tone: 1 kHz at 44.1 kHz repeats every 441 samples", t.len, 441);
+  check(t.init(1000, 16000) && t.len == 16, "tone: 1 kHz at 16 kHz repeats every 16 samples", t.len, 16);
+  check(t.init(1000, 32000) && t.len == 32, "tone: 1 kHz at 32 kHz repeats every 32 samples", t.len, 32);
+  check(!t.init(997, 44100) && t.len == 0, "tone: a table longer than kToneTableMax is refused");
+  check(!t.init(30000, 44100), "tone: above Nyquist refused");
+  check(t.init(1000, 44100), "tone: re-init");
+
+  // the generator's table is a sine at exactly 1 kHz
+  {
+    ToneGen g;
+    g.start(&t, 16384.0f);
+    double maxErr = 0;
+    for (int n = 0; n < 2000; ++n) {
+      const double want = 16384.0 * std::sin(2.0 * 3.14159265358979 * 1000.0 * n / 44100.0);
+      const double e = std::fabs(static_cast<double>(g.next()) - want);
+      if (e > maxErr) maxErr = e;
+    }
+    check(maxErr <= 1.0, "tone: generator = 16384 sin(2 pi 1000 n / 44100) within rounding", maxErr, 1.0);
+  }
+  const int N = 441 * 50;   // what the matrix captures: 0.5 s, whole periods
+  // pure tone, arbitrary phase and DC: amplitude exact, residual ~ 0
+  {
+    std::vector<int16_t> x(N);
+    for (int n = 0; n < N; ++n)
+      x[n] = static_cast<int16_t>(std::lrint(-37.0 + 1000.0 * std::sin(2.0 * 3.14159265358979 * 1000.0 * n / 44100.0 + 0.7)));
+    const ToneResult r = detect(t, x);
+    near(r.toneAmpLsb, 1000.0, 0.5, "tone: amplitude of a pure 1 kHz sine");
+    near(r.toneDb, 20.0 * std::log10(1000.0 / 32768.0), 0.01, "tone: level in dBFS");
+    near(r.dcLsb, -37.0, 0.05, "tone: DC");
+    check(r.snrDb > 40.0f, "tone: pure sine SNR > 40 dB (rounding only)", r.snrDb, 40);
+    const MicVerdict v = judgeMic(r);
+    check(v.alive && v.tone, "tone: pure sine judged alive + tone");
+  }
+  // tone 20 dB under white noise: found, SNR about right (bin is exact)
+  {
+    std::mt19937 rng(7);
+    std::normal_distribution<double> nd(0.0, 300.0);
+    std::vector<int16_t> x(N);
+    const double a = 300.0 * std::sqrt(2.0) * 0.1;   // tone power = noise power / 100 -> -20 dB
+    for (int n = 0; n < N; ++n)
+      x[n] = static_cast<int16_t>(std::lrint(nd(rng) + a * std::sin(2.0 * 3.14159265358979 * 1000.0 * n / 44100.0)));
+    const ToneResult r = detect(t, x);
+    near(r.snrDb, -20.0, 1.5, "tone: SNR of a tone 20 dB below white noise");
+    near(r.toneAmpLsb, a, a * 0.25, "tone: amplitude under noise");
+    const MicVerdict v = judgeMic(r);
+    check(v.alive && !v.tone, "tone: buried tone -> alive but no tone");
+  }
+  // tone 15 dB above noise at a low level (-60 dBFS): detected
+  {
+    std::mt19937 rng(11);
+    std::normal_distribution<double> nd(0.0, 5.0);
+    std::vector<int16_t> x(N);
+    const double a = 32.8 * std::sqrt(2.0);   // ~ -60 dBFS RMS
+    for (int n = 0; n < N; ++n)
+      x[n] = static_cast<int16_t>(std::lrint(nd(rng) + a * std::sin(2.0 * 3.14159265358979 * 1000.0 * n / 44100.0)));
+    const ToneResult r = detect(t, x);
+    check(r.snrDb > 10.0f && r.snrDb < 20.0f, "tone: quiet tone SNR ~16 dB", r.snrDb, 16);
+    const MicVerdict v = judgeMic(r);
+    check(v.alive && v.tone, "tone: quiet tone above noise is detected");
+  }
+  // other frequencies do not leak into the 1 kHz bin
+  for (double f : {500.0, 900.0, 1100.0, 3000.0}) {
+    std::vector<int16_t> x(N);
+    for (int n = 0; n < N; ++n)
+      x[n] = static_cast<int16_t>(std::lrint(8000.0 * std::sin(2.0 * 3.14159265358979 * f * n / 44100.0)));
+    const ToneResult r = detect(t, x);
+    check(r.toneDb < -60.0f && !judgeMic(r).tone, "tone: a sine at another frequency is not the tone", r.toneDb, -60);
+  }
+  // the device's failure: every sample -1 -> stuck, dead
+  {
+    std::vector<int16_t> x(N, -1);
+    const ToneResult r = detect(t, x);
+    check(r.stuck && r.mn == -1 && r.mx == -1, "tone: constant -1 is stuck");
+    near(r.dcLsb, -1.0, 1e-9, "tone: constant -1 DC");
+    check(r.acRmsDb <= -119.0f && r.toneDb <= -119.0f, "tone: constant has no AC and no tone");
+    const MicVerdict v = judgeMic(r);
+    check(!v.alive && !v.tone, "tone: constant judged dead");
+  }
+  // a powered-down modulator behind the DC filter: toggles -1 / 0 -> not alive
+  {
+    std::vector<int16_t> x(N);
+    for (int n = 0; n < N; ++n) x[n] = static_cast<int16_t>((n * 7919) % 3 == 0 ? 0 : -1);
+    const MicVerdict v = judgeMic(detect(t, x));
+    check(!v.alive, "tone: 1-LSB toggling judged dead");
+  }
+  // ranking order: tone > alive > dead, ties keep config order
+  {
+    MicMatrixReport r;
+    r.n = 4;
+    const float scores[4] = {judgeMic(detect(t, std::vector<int16_t>(N, -1))).score, 1000.0f, 1550.0f, 1000.0f};
+    for (int i = 0; i < 4; ++i) {
+      r.cfg[i].ran = true;
+      r.cfg[i].score = scores[i];
+      r.cfg[i].v[0].alive = i != 0;
+    }
+    rankMicMatrix(r);
+    check(r.rank[0] == 2 && r.rank[1] == 1 && r.rank[2] == 3 && r.rank[3] == 0, "matrix: rank by score, stable");
+    check(r.best == 2, "matrix: best = top working config", r.best, 2);
+    char buf[48];
+    micMatrixVerdict(r, buf, sizeof(buf));
+    check(std::string(buf) == "MIC WORKS (config 2)", "matrix: verdict text when one works");
+    for (int i = 0; i < 4; ++i) {
+      r.cfg[i].v[0].alive = false;
+      r.cfg[i].score = -5.0f;
+    }
+    r.cfg[3].ran = false;
+    rankMicMatrix(r);
+    check(r.best == -1, "matrix: no working config -> best -1");
+    micMatrixVerdict(r, buf, sizeof(buf));
+    check(std::string(buf) == "MIC DEAD IN ALL 3 CONFIGS", "matrix: dead verdict counts the configs that ran");
+  }
+}
+
+void testMatrixReport() {
+  MicMatrixReport r;
+  Collect c0;
+  const int n0 = formatMicMatrixReport(r, collect, &c0);
+  checkBlock(c0, "===== PG-HWSPIKE MICMATRIX BEGIN", "===== PG-HWSPIKE MICMATRIX END =====", "matrix report (empty)");
+  check(n0 == static_cast<int>(c0.lines.size()), "matrix report: returns its line count");
+  // full: every config ran, worst-case numbers everywhere
+  r.n = kMaxMicCfgs;
+  r.pinBoot.valid = r.pinAfterI2s.valid = true;
+  r.pinBoot.oe = r.pinBoot.out = r.pinBoot.ie = r.pinBoot.level = 1;
+  r.pinBoot.outSel = 0xFFF;
+  r.pinBoot.inSel = 0xFF;
+  r.pinTestValid = true;
+  for (float& o : r.pinOnes) o = 1.0f;
+  r.pinVerdict = "esp_drove_din_itself+codec_drives_line";
+  r.chipValid = true;
+  r.regsBeforeValid = r.regsAfterValid = true;
+  for (int i = 0; i < kNumCodecRegs; ++i) r.regsBefore[i] = r.regsAfter[i] = 0xFF;
+  for (int i = 0; i < kMaxMicCfgs; ++i) {
+    MicCfgRow& c = r.cfg[i];
+    c.name = "esp_codec_dev+dacref-and-a-long-name";
+    c.ran = true;
+    c.m5mic = (i % 5) == 4;
+    c.slotBits = 32;
+    c.din = 3;
+    c.rate = 44100;
+    c.regsValid = true;
+    c.score = -1234567.0f;
+    for (auto& s : c.res) {
+      s.stuck = true;
+      s.mn = -32768;
+      s.mx = 32767;
+      s.dcLsb = -32768.0f;
+      s.acRmsDb = s.peakDb = s.toneDb = s.residualDb = s.snrDb = -120.0f;
+    }
+  }
+  rankMicMatrix(r);
+  Collect c1;
+  formatMicMatrixReport(r, collect, &c1);
+  checkBlock(c1, "===== PG-HWSPIKE MICMATRIX BEGIN", "===== PG-HWSPIKE MICMATRIX END =====", "matrix report (full)");
+  bool sawDead = false, sawRank = false, sawPin = false;
+  for (auto& l : c1.lines) {
+    if (l.find("result: MIC DEAD IN ALL 28 CONFIGS") != std::string::npos) sawDead = true;
+    if (l.rfind("rank:", 0) == 0) sawRank = true;
+    if (l.find("pin_test: as_found=1.00") != std::string::npos) sawPin = true;
+  }
+  check(sawDead && sawRank && sawPin, "matrix report: verdict, rank and pin test lines present");
+  for (size_t i = 0; i < 14 && i < c1.lines.size(); ++i) std::printf("  %s\n", c1.lines[i].c_str());
+}
+
 }  // namespace
 
 int main() {
@@ -481,6 +655,8 @@ int main() {
   testSvf();
   testLevel();
   testReports();
+  testTone();
+  testMatrixReport();
   std::printf("test_hwspike: %d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }
