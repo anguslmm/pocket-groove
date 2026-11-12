@@ -827,9 +827,34 @@ Keys: `;`/`.` move, `enter` or `space` runs the item, `1`-`6` jump to an item an
 
 **Power switch.** It's a hard switch: see "Session resume" in chapter 14. On some units it reportedly cuts only the battery, so the device may stay on while USB is connected (unverified).
 
-**Mono output.** The codec has a single output channel, so everything you hear is mono. PAN (MIX), WID (lead) and DWID (delay) have no effect on the device; they're kept for desktop renders. Stereo tricks such as wide detuned stabs are rendered as their mono sum, which is how they were voiced. Whether the jack feeds both earpieces depends on the hardware wiring (unverified).
+**Mono output.** The codec has a single output channel, so everything you hear is mono. PAN (MIX), WID (lead) and DWID (delay) have no effect on the jack; they're kept for desktop renders and for the stereo USB output of section 16.1. Stereo tricks such as wide detuned stabs are rendered as their mono sum, which is how they were voiced. Whether the jack feeds both earpieces depends on the hardware wiring (unverified).
 
-**Serial port.** Over USB at 115200 baud the firmware prints a status line every 5 s; type `r` for a full report, `h` for help, `m` during boot for the boot menu. Lines starting with `~PGX` are the project transfer of `tools/pg` (chapter 15); close the monitor before using it.
+**Serial port.** Over USB at 115200 baud the firmware prints a status line every 5 s; type `r` for a full report, `h` for help, `m` during boot for the boot menu. Lines starting with `~PGX` are the project transfer of `tools/pg` (chapter 15); close the monitor before using it. The stereo USB firmware (16.1) has a few more commands.
+
+### 16.1 Stereo over USB
+
+A second firmware, `cardputer-adv-usb`, makes the Cardputer a USB audio interface as well: plugged into a Mac it shows up as a stereo microphone called **Pocket Groove**, carrying the full stereo mix (PAN, lead WID, ping-pong delay, stereo reverb) while you play. Record it in QuickTime or a DAW. The headphone jack keeps playing at the same time. Everything else (keys, projects, `tools/pg`, the serial port) works as in the normal firmware. It is a separate build for now so you can compare the two; it has not been tested on hardware yet.
+
+**Flash it** (from the repository root, device on USB, either firmware running): `pio run -e cardputer-adv-usb -t upload`. From the normal firmware it waits about 5 s for a new port, then flashes as usual.
+
+**Select the input.**
+- macOS: Audio MIDI Setup (Applications > Utilities) lists **Pocket Groove** with 2 inputs, 16-bit, at the device's sample rate (44.1 kHz, or 32 kHz if chosen in the boot menu). Nothing to install.
+- QuickTime Player: File > New Audio Recording, then in the menu next to the record button choose **Pocket Groove** and Quality Maximum.
+- A DAW (Logic, Ableton Live, Reaper, ...): choose **Pocket Groove** as the audio input device, or combine it with your output device in Audio MIDI Setup (+ > Create Aggregate Device, tick your interface and Pocket Groove, set the interface as clock source and tick Drift Correction for Pocket Groove). Record a stereo track from inputs 1-2. Set the project to the device's rate (44.1 or 32 kHz) or let the DAW convert.
+- The device keeps its own clock; it is not synced to the computer (no MIDI clock), so record it as audio.
+
+**What the jack plays.** The mono sum of the stereo mix, (L+R)/2. With centred tracks that is exactly what the normal firmware plays. A track panned hard to one side is up to 3 dB quieter on the jack than in the normal firmware (the stereo mix uses a constant-power pan law); it can never clip.
+
+**What you see.** The diagnostics strip (G0 double-tap) has a fourth line, e.g. `USB STREAMING 44.1K F1552/3104 U0 O0`: the state (`NO HOST`, `IDLE` = connected but nothing records, `OPENING`, `STREAMING`, `SUSPENDED` = the computer sleeps or the cable is out), the rate, the buffer level, and two counters that must stay 0: `U` underruns and `O` overruns (dropouts in the recording; the line turns red for 2 s when one moves). Saving to the internal flash interrupts the audio for a moment, in the recording as on the jack.
+
+**Differences in this firmware.**
+- The serial port appears a moment after switching on, as "Pocket Groove". The start-up messages are printed again when a terminal connects (`l` prints them again later). `m` during start-up no longer reaches the boot menu in time: type `m` and then `y` while running to restart into the boot menu.
+- A changed sample rate in the boot menu restarts the device once more after START, so that the computer sees the new rate.
+- The boot menu has an item `7 FLASH MODE` (press twice): reboots into the download mode for flashing. Serial `B` then `y` does the same.
+- Crash details are not printed when it crashes; after a crash, `r` shows a `[crash]` line (where it crashed) for bug reports.
+- It needs about 11 KB more memory; free memory on the strip is lower than in the normal firmware.
+
+**Back to the normal firmware.** `pio run -e cardputer-adv-usb -t flashmode`, then `pio run -e cardputer-adv -t upload`. (`flashmode` puts the device into download mode; the screen says DOWNLOAD MODE. The normal firmware's upload cannot do that step by itself here.) Boot menu item 7 or serial `B` + `y` instead of `flashmode` work too. If nothing connects: switch off, hold G0, plug in USB, release, upload.
 
 ---
 
@@ -838,7 +863,7 @@ Keys: `;`/`.` move, `enter` or `space` runs the item, `1`-`6` jump to an item an
 - Sound settings are per project, not per pattern. Use parameter locks for per-step changes.
 - One parameter lock per step. A track's locks can only be added from SOUND, MIX, FX (DUCK amounts) or STEP EDIT's LOCK field; there is no motion recording.
 - No MIDI, no sync to other gear, no audio input, no samples. Every sound is synthesised.
-- Mono output only (see chapter 16).
+- Mono output only (see chapter 16); the stereo USB firmware sends stereo to a computer (16.1).
 - Saving to internal flash while playing causes an audible dropout; saves aren't deferred until stop.
 - The session is saved only while stopped, and switching off doesn't save (chapter 14).
 - One level of undo, for pattern data only.
