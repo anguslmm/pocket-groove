@@ -10,6 +10,10 @@
 // Keys: ; / . (up/down) or 1..6, ENTER/SPACE to change/run, ` to start.
 // Without a working keyboard: G0 tap = next item, G0 hold 1 s = select;
 // serial: 1..6, j/k, Enter.
+// The USB audio build (PG_USB_AUDIO) has a 7th item, FLASH MODE (press twice):
+// reboot into the ROM download mode. In that build serial 'm' during boot
+// cannot reach the menu in time (its TinyUSB port enumerates after each
+// reset), so 'm' then 'y' while running restarts into it.
 // Runs on the UI thread before audio and the UI start. Portable.
 #pragma once
 #include <cstdint>

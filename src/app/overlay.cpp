@@ -62,9 +62,9 @@ void Overlays::render(uint16_t* px, int y0, int rows) const {
     const int xa = b.x < 0 ? 0 : b.x;
     const int xz = (b.x + b.w > W) ? W : b.x + b.w;
     const uint16_t bg = bswap(b.bg), border = bswap(b.border);
-    const int lines = b.lines > 3 ? 3 : b.lines;   // text[] / fg[] hold 3
-    int len[3];
-    for (int i = 0; i < 3; ++i) len[i] = static_cast<int>(strnlen(b.text[i], kOvCols));
+    const int lines = b.lines > kOvLines ? kOvLines : b.lines;   // text[] / fg[] hold kOvLines
+    int len[kOvLines];
+    for (int i = 0; i < kOvLines; ++i) len[i] = static_cast<int>(strnlen(b.text[i], kOvCols));
     for (int y = top; y < bot; ++y) {
       uint16_t* row = px + (y - y0) * W;
       const int ry = y - b.y;

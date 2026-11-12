@@ -13,12 +13,31 @@
 #include <cstring>
 #include <new>
 
+#if PG_USB_AUDIO
+#include <esp_attr.h>
+#include <esp_core_dump.h>
+#include <esp32-hal-tinyusb.h>
+
+#include "usb_cdc.h"
+#endif
+
 namespace plat {
 namespace sys {
 
 namespace {
 BootInfo s_boot = {false, false, 0, "?"};
 uint32_t s_serialMuteUntilMs = 0;   // after a stalled write, drop output until then
+
+#if PG_USB_AUDIO
+// Boot log: RTC slow memory is not part of the heap (and survives a
+// software reset, which nothing here relies on: begin() empties it).
+constexpr size_t kBootLogCap = 3072;
+RTC_NOINIT_ATTR char s_bootLog[kBootLogCap];
+size_t s_bootLogLen = 0;
+bool s_bootLogOn = false;
+constexpr uint32_t kMenuMagic = 0x504D454Eu;   // "PMEN"
+RTC_NOINIT_ATTR uint32_t s_menuReq;
+#endif
 
 const char* boardName(m5::board_t b) {
   switch (b) {
@@ -31,6 +50,15 @@ const char* boardName(m5::board_t b) {
 }  // namespace
 
 BootInfo begin(uint32_t serialBaud) {
+#if PG_USB_AUDIO
+  // The TinyUSB CDC port: plat::usbaudio::begin() starts it with the USB
+  // stack. No TX ring (TinyUSB's own 64-byte FIFO); the timeout bounds a
+  // stalled host as below. Output until then only goes to the boot log.
+  (void)serialBaud;
+  PgSerial.setTxTimeoutMs(10);
+  s_bootLogLen = 0;
+  s_bootLogOn = true;
+#else
   // Serial is the native USB-Serial/JTAG CDC (ARDUINO_USB_MODE=1 + CDC_ON_BOOT=1).
   // A bigger TX ring lets a whole report page go out without waiting; a short
   // TX timeout bounds how long a stalled host can hold the UI loop (see
@@ -38,6 +66,7 @@ BootInfo begin(uint32_t serialBaud) {
   Serial.setTxBufferSize(4096);
   Serial.begin(serialBaud);
   Serial.setTxTimeoutMs(10);
+#endif
 
   auto cfg = M5.config();
   cfg.serial_baudrate = 0;       // we own Serial
@@ -97,6 +126,75 @@ bool runTask(void (*fn)(void*), void* user, const char* name, uint32_t stackByte
   return true;
 }
 
+#if PG_USB_AUDIO
+void serialWrite(const char* data, size_t len) {
+  if (!data || !len) return;
+  if (s_bootLogOn && s_bootLogLen < kBootLogCap) {
+    const size_t n = (len < kBootLogCap - s_bootLogLen) ? len : kBootLogCap - s_bootLogLen;
+    memcpy(s_bootLog + s_bootLogLen, data, n);
+    s_bootLogLen += n;
+  }
+  // DTR set = a terminal has the port open (false before the stack runs):
+  // nothing else is worth the TX lock.
+  if (!tud_cdc_n_connected(0)) return;
+  const uint32_t now = ::millis();
+  if (s_serialMuteUntilMs && static_cast<int32_t>(now - s_serialMuteUntilMs) < 0) return;
+  s_serialMuteUntilMs = 0;
+  // USBCDC::write gives up after the TX timeout when the host holds the port
+  // open but does not read; the mute window then keeps a long report from
+  // freezing the UI.
+  const size_t done = PgSerial.write(reinterpret_cast<const uint8_t*>(data), len);
+  if (done < len) s_serialMuteUntilMs = (::millis() + 1500) | 1u;
+}
+void serialWrite(const char* text) { if (text) serialWrite(text, strlen(text)); }
+int  serialRead() { return PgSerial.available() > 0 ? PgSerial.read() : -1; }
+bool serialHostListening() { return tud_cdc_n_connected(0); }
+
+void bootLogEnd() { s_bootLogOn = false; }
+void bootLogReplay() {
+  const bool was = s_bootLogOn;
+  s_bootLogOn = false;
+  serialWrite("[boot] ---- boot log (printed before this terminal connected) ----\n");
+  for (size_t o = 0; o < s_bootLogLen; o += 256) serialWrite(s_bootLog + o, (s_bootLogLen - o < 256) ? s_bootLogLen - o : 256);
+  if (s_bootLogLen >= kBootLogCap) serialWrite("\n[boot] (boot log truncated at 3 KB)\n");
+  serialWrite("[boot] ---- end of boot log ----\n");
+  s_bootLogOn = was;
+}
+
+int crashSummary(char* buf, size_t cap) {
+  if (!buf || cap < 2) return 0;
+  buf[0] = 0;
+  if (esp_core_dump_image_check() != ESP_OK) return 0;
+  auto* sm = static_cast<esp_core_dump_summary_t*>(heap_caps_malloc(sizeof(esp_core_dump_summary_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  if (!sm) return 0;
+  int n = 0;
+  if (esp_core_dump_get_summary(sm) == ESP_OK) {
+    char reason[48] = "";
+    if (esp_core_dump_get_panic_reason(reason, sizeof(reason)) != ESP_OK) reason[0] = 0;
+    sm->exc_task[sizeof(sm->exc_task) - 1] = 0;
+    n = snprintf(buf, cap, "[crash] core dump in flash: task \"%s\", PC 0x%08lx, cause %lu, \"%s\"; backtrace%s:",
+                 sm->exc_task, static_cast<unsigned long>(sm->exc_pc),
+                 static_cast<unsigned long>(sm->ex_info.exc_cause), reason, sm->exc_bt_info.corrupted ? " (corrupt)" : "");
+    const uint32_t depth = sm->exc_bt_info.depth < 16 ? sm->exc_bt_info.depth : 16;
+    for (uint32_t i = 0; i < depth && n > 0 && static_cast<size_t>(n) < cap - 12; ++i)
+      n += snprintf(buf + n, cap - static_cast<size_t>(n), " 0x%08lx", static_cast<unsigned long>(sm->exc_bt_info.bt[i]));
+    if (n > 0 && static_cast<size_t>(n) < cap - 2) n += snprintf(buf + n, cap - static_cast<size_t>(n), "\n");
+  }
+  heap_caps_free(sm);
+  return n > 0 ? n : 0;
+}
+
+void restartIntoBootMenu() {
+  s_menuReq = kMenuMagic;
+  ::delay(50);
+  esp_restart();
+}
+bool bootMenuRequested() {
+  const bool r = (s_menuReq == kMenuMagic);
+  s_menuReq = 0;
+  return r;
+}
+#else
 void serialWrite(const char* data, size_t len) {
   if (!data || !len) return;
   const uint32_t now = ::millis();
@@ -111,6 +209,7 @@ void serialWrite(const char* data, size_t len) {
 void serialWrite(const char* text) { if (text) serialWrite(text, strlen(text)); }
 int  serialRead() { return Serial.available() > 0 ? Serial.read() : -1; }
 bool serialHostListening() { return HWCDC::isConnected(); }
+#endif
 
 void chipInfo(ChipInfo* out) {
   if (!out) return;

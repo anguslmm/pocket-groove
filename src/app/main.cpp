@@ -20,6 +20,14 @@
 // Project transfer on the same port (tools/pg ls / pull / push): lines that
 // start with "~PGX ", handled by pg::io::Xfer (protocol in pg/io/xfer.h).
 //
+// USB audio build (env:cardputer-adv-usb, PG_USB_AUDIO): the engine renders
+// STEREO; the audio callback hands the frames to plat::usbaudio (the
+// "Pocket Groove" USB input) and the jack plays (L+R)/2. The serial port is
+// the TinyUSB CDC port, started in setup() once the sample rate is known.
+// Extra serial commands there: 'l' boot log again, 'u' USB descriptors,
+// 'm' then 'y' restart into the boot menu, 'B' then 'y' download mode; the
+// 1200-baud touch of `pio run -t upload` also reboots into download mode.
+//
 // This file includes only platform and pg headers: no Arduino / M5 / ESP-IDF.
 #include <cstdarg>
 #include <cstddef>
@@ -31,6 +39,12 @@
 #include "../platform/keys.h"
 #include "../platform/storage.h"
 #include "../platform/system.h"
+#if PG_USB_AUDIO
+#include <atomic>
+
+#include "../platform/usb_audio.h"
+#include "../platform/usb_desc_check.h"
+#endif
 #include "app_settings.h"
 #include "boot_menu.h"
 #include "overlay.h"
@@ -104,6 +118,23 @@ float g_frameUs = 0, g_frameMaxUs = 0;
 uint32_t g_lastDiagMs = 0, g_lastStatsMs = 0, g_lastBattMs = 0;
 int g_battPct = -1, g_battMv = -1;
 uint32_t g_loopStackFree = 0;
+#if PG_USB_AUDIO
+namespace usb = plat::usbaudio;
+uint32_t g_usbRate = 0;               // the rate in the USB descriptor (fixed for this boot)
+bool g_usbOk = false;
+int g_usbDescErrors = -1;             // descriptor self-check at boot (-1: not run)
+bool g_hostWasListening = false, g_bootLogReplayed = false;
+std::atomic<bool> g_dlReq{false};     // 1200-baud touch (USB event task) -> loop
+char g_pending = 0;                   // 'm' or 'B' waiting for 'y'
+uint32_t g_pendingMs = 0;
+// Heap minimum-ever as boot went on, to find what takes the heap at its low
+// point: [0] after sys::begin, [1] storage, [2] USB, [3] boot menu + SD,
+// [4] UI boot (session load), [5] audio. Runtime drops are logged.
+uint32_t g_minAt[6] = {};
+uint32_t g_minSeen = 0, g_minDropMs = 0;
+// For the strip: counters one second ago, so the colour shows what is happening now.
+uint32_t g_usbPrevBad = 0, g_usbBadMs = 0;
+#endif
 
 void sp(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void sp(const char* fmt, ...) {
@@ -116,7 +147,15 @@ void sp(const char* fmt, ...) {
 }
 
 // ---- audio -------------------------------------------------------------------------
+#if PG_USB_AUDIO
+// Stereo for USB, (L+R)/2 for the codec (it plays the left slot).
+void render(int16_t* out, int frames, void*) {
+  g_inst.process(out, frames);
+  plat::usbaudio::pushAndFoldToMono(out, frames);
+}
+#else
 void render(int16_t* out, int frames, void*) { g_inst.process(out, frames); }
+#endif
 
 uint32_t sampleRate() { return app::sampleRateHz(g_set.rate); }
 
@@ -215,6 +254,86 @@ void handleKey(const keys::Event& e, uint32_t now) {
 }
 
 // ---- diagnostics -------------------------------------------------------------------------
+#if PG_USB_AUDIO
+const char* phaseName(const usb::Stats& u) {
+  if (!u.started) return "OFF";
+  if (!u.mounted) return "NO HOST";
+  if (u.suspended) return "SUSPENDED";
+  if (!u.streaming) return "IDLE";
+  return u.phase == usb::Phase::Running ? "STREAMING" : "OPENING";
+}
+
+void descLine(const char* line, void*) { sp("[desc] %s\n", line); }
+
+int checkUsbDescriptors(bool verbose, bool dump) {
+  size_t devLen = 0, cfgLen = 0;
+  const uint8_t* dev = usb::deviceDescriptor(&devLen);
+  const uint8_t* cfg = usb::configDescriptor(&cfgLen);
+  if (!cfg) {
+    sp("[desc] USB stack not running: nothing to check\n");
+    return -1;
+  }
+  if (dump) {
+    // The format host/usbspike/run_checks.sh --dump reads.
+    sp("[usb] rate %lu\n", static_cast<unsigned long>(g_usbRate));
+    const struct { const char* tag; const uint8_t* d; size_t n; } parts[] = {{"dev", dev, dev ? devLen : 0}, {"cfg", cfg, cfgLen}};
+    for (const auto& part : parts) {
+      for (size_t o = 0; o < part.n; o += 16) {
+        char line[80];
+        int n = snprintf(line, sizeof(line), "[usb] %s %04x:", part.tag, static_cast<unsigned>(o));
+        for (size_t i = o; i < part.n && i < o + 16 && n < static_cast<int>(sizeof(line)) - 4; ++i)
+          n += snprintf(line + n, sizeof(line) - static_cast<size_t>(n), " %02x", part.d[i]);
+        sp("%s\n", line);
+      }
+    }
+  }
+  pgusb::CheckResult r;
+  const int errors = pgusb::checkConfiguration(cfg, cfgLen, g_usbRate, &r, descLine, nullptr, verbose);
+  sp("[desc] self-check of the %u-byte configuration the host receives: %s (%d errors, %d warnings); "
+     "AC itf %u, EP 0x%02x, max packet %u B, %lu Hz, %u ch x %u bit\n",
+     static_cast<unsigned>(cfgLen), errors ? "FAIL" : "PASS", errors, r.warnings, r.audioItfAc, r.audioEpIn,
+     r.audioMaxPacket, static_cast<unsigned long>(r.audioRate), r.audioChannels, r.audioBits);
+  return errors;
+}
+
+void printUsbReport() {
+  const usb::Stats u = usb::stats();
+  sp("[usb] %s, audio %s, rate %lu Hz (host set %lu), stream opens %lu, serial port %s, "
+     "descriptor self-check %s\n",
+     u.started ? (u.mounted ? (u.suspended ? "SUSPENDED" : "ENUMERATED") : "NOT ENUMERATED") : "NOT STARTED",
+     phaseName(u), static_cast<unsigned long>(u.rate), static_cast<unsigned long>(u.hostSetRate),
+     static_cast<unsigned long>(u.streamOpens), u.cdcOpen ? "open" : "closed",
+     g_usbDescErrors == 0 ? "PASS" : (g_usbDescErrors < 0 ? "n/a" : "FAIL"));
+  sp("[usb] packets %lu (x%u %lu, x%u %lu, x%u %lu, other %lu), frames sent %lu pushed %lu | FIFO %u/%u B target %u | "
+     "underruns (empty packets) %lu, overruns %lu frames, start discards %lu frames\n",
+     static_cast<unsigned long>(u.packets), static_cast<unsigned>(u.rate / 1000u), static_cast<unsigned long>(u.pktNominal),
+     static_cast<unsigned>(u.rate / 1000u + 1u), static_cast<unsigned long>(u.pktLarge),
+     static_cast<unsigned>(u.rate / 1000u - 1u), static_cast<unsigned long>(u.pktSmall),
+     static_cast<unsigned long>(u.pktOther), static_cast<unsigned long>(u.framesSent),
+     static_cast<unsigned long>(u.framesPushed), u.fifoLevel, u.fifoDepth, u.fifoTarget,
+     static_cast<unsigned long>(u.pktZero), static_cast<unsigned long>(u.overrunFrames),
+     static_cast<unsigned long>(u.openingDiscards));
+  char cs[300];
+  if (sys::crashSummary(cs, sizeof(cs)) > 0) {
+    sp("%s", cs);
+    sp("[crash] decode: xtensa-esp32s3-elf-addr2line -pfiaC -e .pio/build/cardputer-adv-usb/firmware.elf <the addresses>\n");
+  } else {
+    sp("[crash] no core dump in flash\n");
+  }
+}
+
+void enterDownloadMode(const char* why) {
+  sp("[usb] rebooting into the ROM download mode (%s): flash now with any env; power-cycle to leave\n", why);
+  if (g_audioOk) audio::end();   // ramps the codec down: no click in the headphones
+  app::drawMessage(g_fb, "DOWNLOAD MODE", "FLASH NOW FROM THE COMPUTER:", "PIO RUN -E <ENV> -T UPLOAD",
+                   "POWER OFF AND ON TO LEAVE");
+  sys::delayMs(100);
+  usb::rebootToDownloadMode();
+}
+
+void onDownloadRequest(void*) { g_dlReq.store(true); }
+#endif
+
 void printReport() {
   const audio::Stats as = audio::stats();
   const sys::HeapInfo h = sys::heap();
@@ -235,6 +354,14 @@ void printReport() {
      static_cast<unsigned long>(h.freeBytes), static_cast<unsigned long>(h.minEverFree),
      static_cast<unsigned long>(h.largestBlock), static_cast<unsigned long>(g_heapBoot.freeBytes),
      static_cast<unsigned long>(g_heapReady.freeBytes));
+#if PG_USB_AUDIO
+  sp("[ram] min-ever free during boot: begin %lu, storage %lu, usb %lu, menu+sd %lu, ui %lu, audio %lu; "
+     "last runtime drop at t=%lus\n",
+     static_cast<unsigned long>(g_minAt[0]), static_cast<unsigned long>(g_minAt[1]),
+     static_cast<unsigned long>(g_minAt[2]), static_cast<unsigned long>(g_minAt[3]),
+     static_cast<unsigned long>(g_minAt[4]), static_cast<unsigned long>(g_minAt[5]),
+     static_cast<unsigned long>(g_minDropMs / 1000));
+#endif
   sp("[stack] free min: audio %lu, keys %lu, loop %lu (of 6144 / 4096 / 12288)\n",
      static_cast<unsigned long>(as.stackFreeMin), static_cast<unsigned long>(keys::taskStackFree()),
      static_cast<unsigned long>(g_loopStackFree));
@@ -283,6 +410,9 @@ void printReport() {
        static_cast<unsigned long>(xs.badCrc), static_cast<unsigned long>(xs.badLines),
        static_cast<unsigned long>(xs.overflows));
   }
+#if PG_USB_AUDIO
+  printUsbReport();
+#endif
   sp("===== END REPORT =====\n");
 }
 
@@ -290,12 +420,24 @@ void printStatsLine() {
   const audio::Stats as = audio::stats();
   const float winMaxUs = audio::takeMaxUs();   // max since the previous stats line, not since boot
   const sys::HeapInfo h = sys::heap();
+#if PG_USB_AUDIO
+  const usb::Stats u = usb::stats();
+  sp("[stats] t=%lus cpu %d.%d%% avg %dus max %dus/%dus und %lu late %lu heap %luk min %luk key %s ui %dus%s | "
+     "usb %s fifo %u und %lu ovr %lu\n",
+     static_cast<unsigned long>(sys::millis() / 1000), tenths(as.cpuPercent) / 10, tenths(as.cpuPercent) % 10,
+     static_cast<int>(as.avgUs), static_cast<int>(winMaxUs), static_cast<int>(as.blockPeriodUs),
+     static_cast<unsigned long>(as.underruns), static_cast<unsigned long>(as.lateBlocks),
+     static_cast<unsigned long>(h.freeBytes / 1024), static_cast<unsigned long>(h.minEverFree / 1024), keyMode(),
+     static_cast<int>(g_frameUs), g_overloadWarn ? " OVERLOAD" : "", phaseName(u), u.fifoLevel,
+     static_cast<unsigned long>(u.pktZero), static_cast<unsigned long>(u.overrunFrames));
+#else
   sp("[stats] t=%lus cpu %d.%d%% avg %dus max %dus/%dus und %lu late %lu heap %luk min %luk key %s ui %dus%s\n",
      static_cast<unsigned long>(sys::millis() / 1000), tenths(as.cpuPercent) / 10, tenths(as.cpuPercent) % 10,
      static_cast<int>(as.avgUs), static_cast<int>(winMaxUs), static_cast<int>(as.blockPeriodUs),
      static_cast<unsigned long>(as.underruns), static_cast<unsigned long>(as.lateBlocks),
      static_cast<unsigned long>(h.freeBytes / 1024), static_cast<unsigned long>(h.minEverFree / 1024), keyMode(),
      static_cast<int>(g_frameUs), g_overloadWarn ? " OVERLOAD" : "");
+#endif
 }
 
 struct SerialLines final : pg::io::XferOut {
@@ -331,10 +473,40 @@ void pollSerial() {
       if (g_xfer.lineReady()) serviceXfer();
       continue;
     }
+#if PG_USB_AUDIO
+    // Commands that restart the instrument need a confirmation within 3 s.
+    if (g_pending && sys::millis() - g_pendingMs > 3000) g_pending = 0;
+    if (g_pending && (ch == 'y' || ch == 'Y')) {
+      const char what = g_pending;
+      g_pending = 0;
+      if (what == 'B') enterDownloadMode("serial B + y");
+      sp("[boot] restarting into the boot menu\n");
+      if (g_audioOk) audio::end();
+      sys::restartIntoBootMenu();
+    } else if (ch == 'B' || ch == 'm' || ch == 'M') {
+      g_pending = (ch == 'B') ? 'B' : 'm';
+      g_pendingMs = sys::millis();
+      sp("[usb] %s: send y within 3 s to confirm (anything else cancels)\n",
+         g_pending == 'B' ? "reboot into the ROM download mode (for flashing)" : "restart into the boot menu (unsaved changes are lost)");
+    } else {
+      if (g_pending && ch != '\r' && ch != '\n') {
+        g_pending = 0;
+        sp("[usb] cancelled\n");
+      }
+      if (ch == 'r' || ch == 'R') printReport();
+      else if (ch == 'l' || ch == 'L') sys::bootLogReplay();
+      else if (ch == 'u' || ch == 'U') checkUsbDescriptors(true, true);
+      else if (ch == 'h' || ch == '?')
+        sp("Pocket Groove %s (USB audio build) serial: r = full report, h = help, l = boot log, u = USB descriptors, "
+           "m + y = boot menu, B + y = download mode. Stats line every 5 s. Project transfer: tools/pg on the computer.\n",
+           PG_VERSION);
+    }
+#else
     if (ch == 'r' || ch == 'R') printReport();
     else if (ch == 'h' || ch == '?')
       sp("Pocket Groove %s serial: r = full report, h = help. Stats line every 5 s. "
          "Project transfer: tools/pg on the computer.\n", PG_VERSION);
+#endif
     if (++letters >= 16) break;
   }
   serviceXfer();   // session and line timeouts
@@ -368,9 +540,29 @@ void updateOverlays(uint32_t now) {
     g_lastDiagMs = now | 1u;
     const audio::Stats as = audio::stats();
     const sys::HeapInfo h = sys::heap();
+#if PG_USB_AUDIO
+    d.x = 0; d.y = pg::kScreenH - 35; d.w = pg::kScreenW; d.h = 35;
+    d.bg = app::kRgbBlack; d.border = app::kRgbBlack;
+    d.lines = 4;
+    {
+      // USB: state, FIFO level, underruns (empty packets) and overruns. Red
+      // for 2 s after either counter moved, green while streaming cleanly.
+      const usb::Stats u = usb::stats();
+      const uint32_t bad = u.pktZero + u.overrunFrames;
+      if (bad != g_usbPrevBad) { g_usbPrevBad = bad; g_usbBadMs = now | 1u; }
+      const bool recent = g_usbBadMs && now - g_usbBadMs < 2000;
+      snprintf(d.text[3], sizeof(d.text[3]), "USB %s %s F%u/%u U%lu O%lu", phaseName(u),
+               g_usbRate == 32000u ? "32K" : "44.1K", u.fifoLevel, u.fifoDepth, static_cast<unsigned long>(u.pktZero),
+               static_cast<unsigned long>(u.overrunFrames));
+      d.fg[3] = recent ? app::kRgbRed
+              : (!u.started || !u.mounted) ? app::kRgbAmber
+              : (u.streaming && u.phase == usb::Phase::Running) ? app::kRgbGreen : app::kRgbCyan;
+    }
+#else
     d.x = 0; d.y = pg::kScreenH - 27; d.w = pg::kScreenW; d.h = 27;
     d.bg = app::kRgbBlack; d.border = app::kRgbBlack;
     d.lines = 3;
+#endif
     d.barPct = -1;
     const int cpu = tenths(as.cpuPercent);
     if (g_audioOk) {
@@ -508,12 +700,31 @@ void setup() {
   const bool setOk = app::loadSettings(fs, &g_set);
   sp("[boot] firmware settings: %s (%lu Hz, %s, vol 0x%02X)\n", setOk ? "loaded" : "defaults",
      static_cast<unsigned long>(sampleRate()), app::backendName(g_set.backend), g_set.volReg);
+#if PG_USB_AUDIO
+  g_minAt[1] = sys::heap().minEverFree;
+  // The USB stack, now that the rate for the audio descriptor is known. The
+  // interrupt lands on this core (1), away from the audio task.
+  g_usbRate = sampleRate();
+  usb::onDownloadRequest(onDownloadRequest, nullptr);
+  g_usbOk = usb::begin(g_usbRate);
+  g_usbDescErrors = checkUsbDescriptors(false, false);
+  sp("[boot] USB: %s, \"Pocket Groove\" stereo input %lu Hz + serial port (TinyUSB)\n", g_usbOk ? "started" : "FAILED",
+     static_cast<unsigned long>(g_usbRate));
+  {
+    char cs[300];
+    if (sys::crashSummary(cs, sizeof(cs)) > 0) sp("%s", cs);
+  }
+  g_minAt[2] = sys::heap().minEverFree;
+#endif
 
   // Boot menu: a key held at power-on (give the controller ~300 ms to report
   // it), 'm' on serial, or automatically after a crash / watchdog / brownout.
   // The window is at least 60 ms even when the /int mount (a first-boot
   // format) already used up the 300 ms; a key still held at its end counts too.
   bool menu = g_abnormal;
+#if PG_USB_AUDIO
+  if (sys::bootMenuRequested()) menu = true;   // serial 'm' + 'y' before the restart
+#endif
   const uint32_t tWin = sys::millis();
   while (sys::millis() - tKeys < 300 || sys::millis() - tWin < 60) {
     keys::Event e;
@@ -537,12 +748,29 @@ void setup() {
   while (storage::sdState() == storage::SdState::Mounting && sys::millis() - tSd < 1500) sys::delayMs(10);
   sp("[boot] /sd: %s\n", storage::sdStateName(storage::sdState()));
 
+#if PG_USB_AUDIO
+  g_minAt[3] = sys::heap().minEverFree;
+  if (sampleRate() != g_usbRate) {
+    // The boot menu changed the rate: the USB descriptor carries the old one.
+    sp("[boot] sample rate changed in the boot menu: restarting so that USB audio uses %lu Hz\n",
+       static_cast<unsigned long>(sampleRate()));
+    app::drawMessage(g_fb, "POCKET GROOVE", "RESTARTING FOR THE NEW", "SAMPLE RATE (USB AUDIO)", nullptr, pg::ui::WHITE);
+    sys::delayMs(300);
+    sys::restart();
+  }
+  // Stereo for USB; the jack gets (L+R)/2 in render().
+  g_inst.init(static_cast<float>(sampleRate()), /*monoOutput=*/false);
+#else
   g_inst.init(static_cast<float>(sampleRate()), /*monoOutput=*/true);
+#endif
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_xfer.init(&fs, PG_VERSION);
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards
   g_ui.boot(sys::millis());
   sp("[boot] UI up, project \"%s\"\n", g_ui.projectName());
+#if PG_USB_AUDIO
+  g_minAt[4] = sys::heap().minEverFree;
+#endif
 
   // Audio last: the session is loaded, so the first block is already the real thing.
   startAudio();
@@ -556,6 +784,12 @@ void setup() {
   g_lastKeyMs = sys::millis();
   g_lastBattMs = g_lastKeyMs;
   g_loopStackFree = sys::stackFreeMinSelf();
+#if PG_USB_AUDIO
+  g_minAt[0] = g_heapBoot.minEverFree;
+  g_minAt[5] = g_heapReady.minEverFree;
+  g_minSeen = g_heapReady.minEverFree;
+  sys::bootLogEnd();
+#endif
 }
 
 void loop() {
@@ -641,7 +875,28 @@ void loop() {
     g_battPct = b.percent;
     g_battMv = b.millivolts;
     g_loopStackFree = sys::stackFreeMinSelf();
+#if PG_USB_AUDIO
+    const uint32_t m = sys::heap().minEverFree;
+    if (m < g_minSeen) {
+      g_minSeen = m;
+      g_minDropMs = now;
+      sp("[ram] heap min-ever fell to %lu B at t=%lus\n", static_cast<unsigned long>(m),
+         static_cast<unsigned long>(now / 1000));
+    }
+#endif
   }
+#if PG_USB_AUDIO
+  if (g_dlReq.load()) enterDownloadMode("1200-baud touch from the computer");
+  {
+    // A terminal just opened the port: show it what it missed, once per boot.
+    const bool listening = sys::serialHostListening();
+    if (listening && !g_hostWasListening && !g_bootLogReplayed) {
+      g_bootLogReplayed = true;
+      sys::bootLogReplay();
+    }
+    g_hostWasListening = listening;
+  }
+#endif
   if (now - g_lastStatsMs >= kStatsEveryMs) {
     g_lastStatsMs = now;
     if (sys::serialHostListening()) printStatsLine();
