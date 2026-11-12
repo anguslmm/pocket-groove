@@ -409,6 +409,7 @@ void Ui::keyEvent(const KeyEvent& e, uint32_t nowMs) {
         transport(isHeld(kKShift));
       } else {
         explainKey_ = int8_t(k);
+        explainTable_ = uint8_t(helpTable());   // FN+pad explains the mute, not the pad
       }
       return;
     }

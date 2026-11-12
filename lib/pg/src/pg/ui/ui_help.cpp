@@ -208,14 +208,15 @@ bool Ui::helpVisible() const {
   return explain_ || (isHeld(kKSlash) && rec_[kKSlash].act == kActHelp && int32_t(now_ - (helpDownMs_ + 400)) >= 0);
 }
 
-int Ui::helpTable() const {
+int Ui::helpTable(bool layers) const {
   if (dialog_ == Dialog::Name) return kTText;
-  if (isHeld(kKFn)) return kTFn;
-  if (isHeld(kKCtrl)) return kTCtrl;
-  if (isHeld(kKOpt)) return kTOpt;
-  if (isHeld(kKAlt)) return kTAlt;
-  if (isHeld(kKTab)) return kTTab;
-  if (isHeld(kKShift)) return kTShift;
+  // the order in which keyDown() lets the modifiers win
+  if (layers && isHeld(kKFn)) return kTFn;
+  if (layers && isHeld(kKOpt)) return kTOpt;
+  if (layers && isHeld(kKAlt)) return kTAlt;
+  if (layers && isHeld(kKCtrl)) return kTCtrl;
+  if (layers && isHeld(kKTab)) return kTTab;
+  if (layers && isHeld(kKShift)) return kTShift;
   if (heldStep_ >= 0 && view_ == View::Groove) return kTStep;
   switch (view_) {
     case View::Sound: return kTSound;
@@ -225,6 +226,129 @@ int Ui::helpTable() const {
     case View::Project: return kTProject;
     default: return stepWriteActive() ? kTWrite : kTGroove;
   }
+}
+
+static char* catStep(char* o, int n) {   // "07", "12"
+  if (n < 10) *o++ = '0';
+  return o + itoa10(n, o);
+}
+
+// A key pressed with a modifier held (MANUAL 4.9): the combo's text. False when
+// the modifier leaves the key alone; it then explains itself as without it.
+static bool explainLayer(const Ui& ui, int table, int k, char* title, const char** l1, const char** l2) {
+  const int step = stepKeyIndex(k), pad = padKeyIndex(k), note = noteKeyIndex(k);
+  const View v = ui.view();
+  const bool perf = v == View::Groove;   // notes play here (SOUND, MIX, FX: they focus columns)
+  if (isModifierKey(k) || k == kKTab) return false;
+  switch (table) {
+    case kTFn:
+      if (pad >= 0) {
+        cat(cat(title, "FN+PAD: MUTE "), kTrackNames[pad]);
+        *l1 = "MUTES / UNMUTES THE TRACK AT ONCE.";
+        *l2 = "ENDS A SOLO, KEEPS THE MUTES.";
+        return true;
+      }
+      if (note >= 0) {
+        cat(cat(title, "FN+NOTE: SOLO "), kTrackNames[note]);
+        *l1 = "MUTES EVERY OTHER TRACK.";
+        *l2 = "SAME KEY AGAIN: MUTES COME BACK.";
+        return true;
+      }
+      break;
+    case kTOpt:
+      if (step >= 0) {
+        catStep(cat(title, "OPT+STEP: QUEUE P"), step + 1);
+        *l1 = "STARTS WHEN THIS PATTERN ENDS.";
+        *l2 = "+SHIFT: COPY THIS PATTERN THERE.";
+        return true;
+      }
+      break;
+    case kTAlt:
+      if (pad >= 0) {
+        cat(cat(title, "ALT+PAD: ROLL "), kTrackNames[pad]);
+        *l1 = "RETRIGGERS THE TRACK WHILE HELD.";
+        *l2 = "ON THE BEAT GRID, NOT RECORDED.";
+        return true;
+      }
+      if (k == kKSemicolon || k == kKDot) {
+        cat(title, k == kKSemicolon ? "ALT+UP: ROLL FASTER" : "ALT+DOWN: ROLL SLOWER");
+        *l1 = "ROLL RATE 1/8 1/16 1/16T 1/32.";
+        return true;
+      }
+      break;
+    case kTCtrl: {
+      struct C { uint8_t k; const char* t; const char* a; const char* b; };
+      static const C kCtrl[] = {
+          {kKNote0, "CTRL+Z: UNDO", "UNDOES THE LAST EDIT.", "AGAIN: REDO."},
+          {kKNote0 + 1, "CTRL+X: CUT TRACK", "CUTS THE SELECTED TRACK.", "+SHIFT: THE WHOLE PATTERN."},
+          {kKNote0 + 2, "CTRL+C: COPY TRACK", "COPIES THE SELECTED TRACK.", "+SHIFT: THE WHOLE PATTERN."},
+          {kKNote0 + 3, "CTRL+V: PASTE", "PASTES THE CLIP: A TRACK ONTO THE", "SELECTED TRACK, OR A PATTERN."},
+          {kKPad0 + 1, "CTRL+S: SAVE", "SAVES TO THE OPEN FILE. A DEMO OR", "UNNAMED PROJECT OPENS SAVE AS."},
+          {kKNote0 + 5, "CTRL+N: NEW PROJECT", "ASKS FIRST IF THERE ARE", "UNSAVED CHANGES."},
+          {kKSemicolon, "CTRL+UP: NOTE +12", "WITH A STEP HELD: ITS NOTE", "AN OCTAVE UP."},
+          {kKDot, "CTRL+DOWN: NOTE -12", "WITH A STEP HELD: ITS NOTE", "AN OCTAVE DOWN."},
+      };
+      for (const C& c : kCtrl)
+        if (c.k == k) {
+          cat(title, c.t);
+          *l1 = c.a;
+          *l2 = c.b;
+          return true;
+        }
+      if (step >= 0 && v != View::Song && v != View::Project) {
+        itoa10(ui.shownPage() * 16 + step + 1, cat(title, "CTRL+SHIFT+STEP: LENGTH "));
+        *l1 = "LENGTH OF THE SELECTED TRACK";
+        *l2 = "ONLY (POLYMETER). UNDOABLE.";
+        return true;
+      }
+      break;
+    }
+    case kTTab:
+      if (k == kKMinus || k == kKEquals) {
+        cat(title, k == kKMinus ? "TAB+-: TEMPO -1 BPM" : "TAB+=: TEMPO +1 BPM");
+        *l1 = "SHIFT: 10 BPM.";
+        return true;
+      }
+      if (k == kKSemicolon || k == kKDot) {
+        cat(title, k == kKSemicolon ? "TAB+UP: SWING UP" : "TAB+DOWN: SWING DOWN");
+        return true;
+      }
+      return false;   // TAB leaves every other key alone
+    case kTShift:
+      if (step >= 0 && v == View::Song) {
+        catStep(cat(title, "SHIFT+STEP: INSERT P"), step + 1);
+        *l1 = "INSERTS THE PATTERN BEFORE THE";
+        *l2 = "CURSOR SLOT.";
+        return true;
+      }
+      if (step >= 0 && v != View::Project) {
+        itoa10(ui.shownPage() * 16 + step + 1, cat(title, "SHIFT+STEP: LENGTH "));
+        *l1 = "PATTERN LENGTH = THIS STEP,";
+        *l2 = "EVERY TRACK. UNDOABLE.";
+        return true;
+      }
+      if (note >= 0 && perf) {
+        itoa10(note + 1, cat(title, "SHIFT+NOTE "));
+        cat(title + std::strlen(title), ": ACCENT");
+        *l1 = ui.stepWriteActive() ? "WRITES THE NOTE ACCENTED." : "PLAYS THE NOTE ACCENTED.";
+        *l2 = "LIVE RECORD: RECORDS THE ACCENT.";
+        return true;
+      }
+      return false;   // the other SHIFT combos are in the key's own text
+    default: return false;
+  }
+  // FN, OPT, ALT, CTRL take every key but the global ones (keyDown)
+  switch (k) {
+    case kKBacktick: case kKSpace: case kK9: case kK0: case kKO: case kKP: case kKBackslash: case kKSlash:
+    case kKLBracket: case kKRBracket: case kKMinus: case kKEquals: case kKG0:
+      return false;
+    default: break;
+  }
+  cat(title, "NOTHING WITH ");
+  cat(title + std::strlen(title), table == kTFn ? "FN" : table == kTOpt ? "OPT" : table == kTAlt ? "ALT" : "CTRL");
+  *l1 = "RELEASE THE MODIFIER TO SEE WHAT";
+  *l2 = "THIS KEY DOES ON ITS OWN.";
+  return true;
 }
 
 // Explain texts: title (<= 30), two lines (<= 38). Dynamic for steps, pads,
@@ -348,6 +472,16 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
   cat(title, "NOT USED");
 }
 
+void Ui::explainText(char* title, const char** l1, const char** l2) const {
+  title[0] = 0;
+  *l1 = *l2 = "";
+  if (!explain_ || explainKey_ < 0) return;
+  if (explainLayer(*this, explainTable_, explainKey_, title, l1, l2)) return;
+  title[0] = 0;
+  // the key on its own, in the view underneath the modifier's layer
+  explain(*this, explainTable_ >= kTFn ? helpTable(false) : explainTable_, explainKey_, title, l1, l2);
+}
+
 void Ui::drawHelp(Framebuffer& fb) {
   Gfx g(fb);
   const int table = helpTable();
@@ -410,7 +544,7 @@ void Ui::drawHelp(Framebuffer& fb) {
     const int xx = g.chip(7, 97, cap, WHITE);
     char title[40];
     const char *l1, *l2;
-    explain(*this, helpTable(), explainKey_, title, &l1, &l2);
+    explainText(title, &l1, &l2);
     title[30] = 0;
     g.text(xx + 5, 98, title, WHITE);
     g.text(7, 109, l1, TEXT);

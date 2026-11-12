@@ -96,6 +96,10 @@ class Ui {
   int nameMount() const { return nameMount_; }
   bool helpVisible() const;
   bool explainMode() const { return explain_; }
+  int explainKey() const { return explainKey_; }      // the key explain mode describes, or -1
+  // Explain mode's text for that key, as pressed (with the modifier held then):
+  // title (title[40], shown up to 30 chars) and two lines. Empty when no key.
+  void explainText(char* title, const char** l1, const char** l2) const;
   bool bannerVisible() const { return banner_; }
   bool dirty() const { return dirty_; }               // unsaved changes to the named project
   bool playing() const { return playing_; }          // transport, as of the last status seen
@@ -221,7 +225,7 @@ class Ui {
 
   // HELP (ui_help.cpp)
   void drawHelp(Framebuffer& fb);
-  int helpTable() const;
+  int helpTable(bool layers = true) const;   // layers: a held modifier shows its layer
 
   // value editing
   enum class Target : uint8_t { None, Focus, Tempo, Field, Lock, Song, Inert };
@@ -421,6 +425,7 @@ class Ui {
   // help / banner
   bool explain_ = false, banner_ = false;
   int8_t explainKey_ = -1;
+  uint8_t explainTable_ = 0;      // helpTable() when explainKey_ went down
   uint32_t helpDownMs_ = 0;
 
   // redraw bookkeeping
