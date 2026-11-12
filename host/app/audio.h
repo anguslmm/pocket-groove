@@ -3,10 +3,12 @@
 // single-writer contract in docs/ARCHITECTURE.md). The callback never locks,
 // allocates or does I/O; it copies what it rendered into a lock-free ring that
 // the main thread drains (live recording) and publishes its load in atomics.
+// With Listen on it also mixes in the device's input (listen_buffer.h).
 #pragma once
 #include <atomic>
 #include <cstdint>
 
+#include "listen_buffer.h"
 #include "pg/config.h"
 
 namespace pg { class Instrument; }
@@ -55,6 +57,12 @@ class AudioOut {
 
   AudioStats stats();   // main thread
   FrameRing& ring() { return ring_; }
+  // Listen: while `on`, the callback adds buf's resampled input to every
+  // rendered block (before the recording ring: Cmd+R records what is heard).
+  void setListen(DriftBuffer* buf, bool on) {
+    if (buf) listen_.store(buf, std::memory_order_release);
+    listening_.store(on, std::memory_order_release);
+  }
   uint64_t framesRendered() const { return rendered_.load(std::memory_order_relaxed); }
 
  private:
@@ -75,6 +83,8 @@ class AudioOut {
   std::atomic<float> load_{0.0f}, peak_{0.0f};
   std::atomic<uint32_t> late_{0}, gaps_{0}, calls_{0};
   std::atomic<int> obtainedFrames_{0};
+  std::atomic<DriftBuffer*> listen_{nullptr};
+  std::atomic<bool> listening_{false};
 };
 
 }  // namespace desk

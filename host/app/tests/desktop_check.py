@@ -18,6 +18,19 @@ screen or sound card) and checks it against the rest of the host build:
   4. a session the desktop saved goes through the device's transfer protocol
      (host/tools/xfer_sim + tools/pg.py) unchanged both ways (skipped without
      pyserial, as test_pg_client).
+  5. the strip under the screen (desktop_strip_keys.txt): the device screen is
+     still pixel-identical to ui_shot, also in the window screenshot; the
+     modifier chips light exactly while the key mapper holds the key; the
+     strip's clicks, Cmd+I/L/B and keys typed into the Stems list deliver no
+     key to the instrument (the app's count equals the script's).
+  6. Listen against a simulated device (--listen-sim: a 1 kHz tone on a clock
+     500 ppm fast): it plays, Cmd+R records it, unplug and re-plug recover,
+     Cmd+L stops it.
+  7. Stems end to end against xfer_sim (tools/pg --json as a subprocess): the
+     device's list, a bounce of a device project to bounces/NAME/ with every
+     stem file, the folder "revealed"; and the error paths in plain words:
+     device not found, port busy, project that does not load, pyserial missing.
+     (Skipped without pyserial.)
 
     python3 host/app/tests/desktop_check.py --bin build/host --work build/host/desktop_test
 """
@@ -25,8 +38,13 @@ import argparse
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
+import tempfile
+import time
+import wave
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
@@ -73,7 +91,7 @@ def ui_shot_script(body):
             out += ["up %s" % LEGENDS[k] for k in sorted(held)]
             held.clear()
             continue
-        elif w[0] in ("expect-released", "quit"):
+        elif w[0] in ("expect-released", "quit", "app"):
             continue
         elif w[0] == "sdl":   # app-level keys (Command shortcuts, G0): no Ui event, same time
             if w[1] == "tap":
@@ -83,12 +101,12 @@ def ui_shot_script(body):
     return "\n".join(out) + "\n"
 
 
-def run_app(args, cwd, script_text, name, timeout=60):
+def run_app(args, cwd, script_text, name, timeout=60, env=None):
     script = os.path.join(cwd, name + ".txt")
     with open(script, "w") as f:
         f.write(script_text)
     cmd = [APP, "--script", script, "--out", os.path.join(cwd, "shots-" + name)] + args
-    p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+    p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout, env=env)
     log = p.stdout.decode(errors="replace")
     sys.stdout.write("".join("    | " + l + "\n" for l in log.splitlines()))
     return p.returncode, log
@@ -207,6 +225,235 @@ def part_xfer():
         proc.wait()
 
 
+def png_rgb(path):
+    """(width, height, rows of RGB bytes) of a PNG written by host/common/ui_harness.h (filter 0)."""
+    d = read(path)
+    pos, idat, w, h = 8, b"", 0, 0
+    while pos < len(d):
+        n = int.from_bytes(d[pos:pos + 4], "big")
+        t, body = d[pos + 4:pos + 8], d[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if t == b"IHDR":
+            w, h = int.from_bytes(body[0:4], "big"), int.from_bytes(body[4:8], "big")
+        elif t == b"IDAT":
+            idat += body
+    raw = zlib.decompress(idat)
+    stride = w * 3 + 1
+    return w, h, [raw[y * stride + 1:(y + 1) * stride] for y in range(h)]
+
+
+def px(rows, x, y):
+    return tuple(rows[y][x * 3:x * 3 + 3])
+
+
+AMBER = (255, 182, 0)       # the palette's AMBER as RGB565 expands it
+RAISED = (33, 36, 49)
+STRIP_MODS = ["SHIFT", "FN", "CTRL", "OPT", "ALT", "TAB", "G0"]
+
+
+def chip_fill(rows, i):
+    """Fill colour of modifier chip i in a 1x window shot (strip.cpp's layout)."""
+    card = STRIP_MODS[i]
+    cx = 1 + i * 34 + 17
+    wd = len(card) * 6 - 1 + 4
+    return px(rows, cx - wd // 2 + 1, 135 + 11 + 4)
+
+
+def instrument_key_events(body):
+    """Key events the script sends to the Ui: down/up 1 each, tap 2 (sdl/app lines: none)."""
+    n = 0
+    for raw in body.splitlines():
+        w = raw.split("#", 1)[0].split()
+        if w and w[0] in ("down", "up"):
+            n += 1
+        elif w and w[0] == "tap":
+            n += 2
+    return n
+
+
+def part_strip():
+    print("5. the strip: device screen unchanged, modifier lights, controls never reach the instrument")
+    body = read(os.path.join(HERE, "desktop_strip_keys.txt")).decode()
+    ref = fresh(os.path.join(WORK, "ui_shot-strip"))
+    with open(os.path.join(ref, "keys.txt"), "w") as f:
+        f.write(ui_shot_script(body))
+    p = subprocess.run([UI_SHOT, os.path.join(ref, "keys.txt"), ref], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    check(p.returncode == 0, "ui_shot ran the instrument keys alone")
+    cwd = fresh(os.path.join(WORK, "strip"))
+    env = dict(os.environ, PG_TOOL="false", PG_REVEAL="")   # no device work in this part
+    rc, log = run_app([], cwd, body, "strip", env=env)
+    check(rc == 0, "app exited 0")
+    shots = os.path.join(cwd, "shots-strip")
+    a, b = os.path.join(shots, "keys.png"), os.path.join(ref, "keys.png")
+    check(os.path.exists(a) and os.path.exists(b) and read(a) == read(b), "keys.png pixel-identical to ui_shot")
+    m = re.search(r"\[keys\] (\d+) key events reached the instrument", log)
+    want = instrument_key_events(body)
+    check(m is not None and int(m.group(1)) == want,
+          "exactly the script's %d instrument key events reached the Ui (app: %s)" % (want, m and m.group(1)))
+    lit = re.findall(r"\[strip\] lit: (.*)", log)
+    want_lit = ["-", "SHIFT", "-", "FN", "-", "CTRL", "-", "OPT", "-", "ALT", "-", "TAB", "-", "G0", "-",
+                "SHIFT", "SHIFT OPT", "SHIFT", "-"]
+    check(lit == want_lit, "modifier lights followed the keys: %s" % " | ".join(lit))
+    # the window screenshot: 240 x (135 + strip), the device part identical to the shot
+    w, h, win = png_rgb(os.path.join(shots, "window.png"))
+    w2, h2, dev = png_rgb(b)
+    check(w == 240 and h > 135 + 30, "window shot is 240 x %d (screen + strip)" % h)
+    check(win[:135] == dev, "the window's device screen is the ui_shot screenshot, pixel for pixel")
+    _, _, one = png_rgb(os.path.join(shots, "lit-shift.png"))
+    _, _, two = png_rgb(os.path.join(shots, "lit-two.png"))
+    check(chip_fill(one, 0) == AMBER and all(chip_fill(one, i) == RAISED for i in range(1, 7)),
+          "SHIFT held: its chip lit, the others not")
+    check([chip_fill(two, i) == AMBER for i in range(7)] == [True, False, False, True, False, False, False],
+          "SHIFT + OPT held: both lit")
+    check(all(chip_fill(win, i) == RAISED for i in range(7)), "nothing lit at the end")
+    check("[strip] click stats" in log and "[strip] click listen" in log and "[strip] click stems" in log,
+          "clicks on STATS, LISTEN and STEMS reached their buttons")
+    check(log.count("[listen] on") == 2 and "[listen] playing" not in log,
+          "Listen without a device: switched on twice (click, Cmd+L), nothing played, no crash")
+    check(log.count("[stems] open") == 2 and log.count("[stems] closed") == 2, "Stems list opened and closed twice")
+
+
+def wav_frames(path):
+    with wave.open(path, "rb") as f:
+        n, ch, sw, sr = f.getnframes(), f.getnchannels(), f.getsampwidth(), f.getframerate()
+        data = f.readframes(n)
+    v = struct.unpack("<%dh" % (n * ch), data)
+    return sr, v[0::2], v[1::2]
+
+
+def part_listen():
+    print("6. Listen against a simulated device (clock +500 ppm)")
+    script = """wait 400
+app click-button listen
+app wait-listening 8000
+sdl down Left GUI
+sdl tap R
+sdl up Left GUI
+wait 1500
+app print-listen
+app winshot listening
+app listen-sim unplug
+wait 2500
+app winshot unplugged
+app listen-sim plug
+app wait-listening 8000
+wait 1000
+sdl down Left GUI
+sdl tap R
+sdl tap L
+sdl up Left GUI
+wait 300
+app winshot off
+app print-listen
+quit
+"""
+    cwd = fresh(os.path.join(WORK, "listen"))
+    rc, log = run_app(["--listen-sim", "500"], cwd, script, "listen", env=dict(os.environ, PG_TOOL="false"))
+    check(rc == 0, "app exited 0")
+    check(log.count("[listen] playing") == 2, "played, and played again after the re-plug")
+    check("[listen] closed (device gone)" in log, "unplug while listening: input closed, no crash")
+    check("[listen] closed (switched off)" in log, "Cmd+L switched it off")
+    st = re.findall(r"\[listen\] stats: primed (\d), fill (\d+) fr, target (\d+), clock ([-+\d.]+) ppm, "
+                    r"underruns (\d+), overflows (\d+), resyncs (\d+), primes (\d+)", log)
+    check(len(st) == 2 and st[0][0] == "1", "primed and playing after the start (%s)" % (st[:1],))
+    if st:
+        u, o, r = int(st[-1][4]), int(st[-1][5]), int(st[-1][6])
+        check(o == 0 and r == 0 and u <= 1, "no overflow or resync, at most the unplug's underrun "
+              "(underruns %d, overflows %d, resyncs %d)" % (u, o, r))
+    m = re.search(r"\[keys\] (\d+) key events", log)
+    check(m is not None and m.group(1) == "0", "no key reached the instrument")
+    m = re.search(r"\[rec\] started: (\S+)", log)
+    check(m is not None, "Cmd+R recorded while listening")
+    if m:
+        sr, L, R = wav_frames(os.path.join(cwd, m.group(1)))
+        seg = slice(int(0.3 * sr), int(1.3 * sr))   # the engine is stopped: only the device is heard
+        l, r = L[seg], R[seg]
+        rms = (sum(x * x for x in l) / max(len(l), 1)) ** 0.5
+        cross = sum(1 for i in range(1, len(l)) if (l[i - 1] < 0) != (l[i] < 0))
+        freq = cross / 2.0 / (len(l) / sr) if l else 0
+        anti = max((abs(a + b) for a, b in zip(l, r)), default=99)
+        check(rms > 3000 and 980 < freq < 1020 and anti <= 2,
+              "the recording carries the device's tone (rms %.0f, %.1f Hz, L = -R within %d)" % (rms, freq, anti))
+    for n in ("listening", "unplugged", "off"):
+        check(os.path.exists(os.path.join(cwd, "shots-listen", n + "_4x.png")), "window shot %s" % n)
+
+
+def stems_script(*middle):
+    return "wait 400\nsdl down Left GUI\nsdl tap B\nsdl up Left GUI\napp wait-stems 30000\n" + \
+        "\n".join(middle) + "\nsdl tap Escape\nwait 100\nquit\n"
+
+
+def part_stems():
+    print("7. Stems against the simulated device")
+    try:
+        import serial  # noqa: F401
+    except ImportError:
+        print("  skipped: pyserial not installed")
+        return
+    base_env = dict(os.environ, PG_REVEAL="echo")
+    base_env.pop("PG_PORT", None)
+    base_env.pop("PG_TOOL", None)
+    sim_root = fresh(os.path.join(WORK, "stems-sim"))
+    proc = subprocess.Popen([XFER_SIM, "--root", sim_root, "--demos"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        port = proc.stdout.readline().decode().strip()
+        check(port.startswith("/dev/"), "xfer_sim up on %s" % port)
+        # a. the list, then bounce ACIDJAM (second on the device's list: the session comes first)
+        cwd = fresh(os.path.join(WORK, "stems"))
+        rc, log = run_app(["--pg-port", port], cwd, stems_script(
+            "app winshot list", "sdl tap Down", "sdl tap Return", "wait 300", "app winshot working",
+            "app wait-stems 240000", "app winshot done", "app print-keys"), "stems", timeout=300, env=base_env)
+        check(rc == 0, "app exited 0")
+        check("[stems] device: 3 project(s), firmware sim-1.0" in log, "the device's projects listed")
+        m = re.search(r"\[stems\] done: (\S+) \((\d+) files\)", log)
+        check(m is not None, "bounce finished")
+        if m:
+            d = m.group(1)
+            check(os.path.realpath(d) == os.path.realpath(os.path.join(cwd, "bounces", "ACIDJAM")),
+                  "stems in ./bounces/ACIDJAM")
+            files = sorted(os.listdir(d))
+            stems = ["ACIDJAM_124bpm_%02d_%s.wav" % (i + 1, n) for i, n in enumerate(
+                ["kick", "snare", "clap", "closedhat", "openhat", "perc", "bass", "lead", "delay", "reverb"])]
+            want = set(stems + ["ACIDJAM_124bpm_mix.wav", "ACIDJAM_124bpm_info.txt"])
+            check(want <= set(files) and m.group(2) == "12", "the 10 stems, the mix and info.txt (%s)" % files)
+            pulled = os.path.join(d, "ACIDJAM.pgv")
+            check(os.path.exists(pulled) and read(pulled) == read(os.path.join(sim_root, "int", "pg", "ACIDJAM.pgv")),
+                  "the pulled project sits next to its stems, identical to the device's")
+            check(not os.path.exists(os.path.join(cwd, "projects", "ACIDJAM.pgv")), "./projects untouched")
+            check("[reveal] %s" % d in log, "the folder was opened (PG_REVEAL)")
+        check("[keys] 0 key events" in log, "no key reached the instrument")
+        # c. port busy: a serial monitor holds the port
+        with pg.Link(port, timeout=0.3):
+            cwd = fresh(os.path.join(WORK, "stems-busy"))
+            rc, log = run_app(["--pg-port", port], cwd, stems_script("app winshot busy"), "busy", env=base_env)
+        check(re.search(r"\[stems\] device: error: .* is busy: close the serial monitor", log) is not None,
+              "port busy: says so")
+    finally:
+        proc.kill()
+        proc.wait()
+    # b. no device (no port named, none found) and a project that does not load
+    cwd = fresh(os.path.join(WORK, "stems-none"))
+    os.makedirs(os.path.join(cwd, "projects"))
+    with open(os.path.join(cwd, "projects", "BROKEN.pgv"), "wb") as f:
+        f.write(b"not a project " * 20)
+    rc, log = run_app([], cwd, stems_script("sdl tap Return", "app wait-stems 120000", "app winshot failed"), "none",
+                      timeout=180, env=base_env)
+    check("[stems] device: error: Pocket Groove not found on USB" in log, "no device: says so")
+    check(re.search(r"\[stems\] failed: BROKEN.pgv did not load: ", log) is not None,
+          "a project that does not load: says so")
+    # d. pyserial missing: a python3 without site-packages first on PATH, no PlatformIO Python
+    cwd = fresh(os.path.join(WORK, "stems-nopyserial"))
+    fake = os.path.join(cwd, "fakebin")
+    os.makedirs(fake)
+    with open(os.path.join(fake, "python3"), "w") as f:
+        f.write("#!/bin/sh\nexec %s -S \"$@\"\n" % sys.executable)
+    os.chmod(os.path.join(fake, "python3"), 0o755)
+    env = dict(base_env, PATH=fake + os.pathsep + os.environ.get("PATH", ""), HOME=cwd)
+    env.pop("PG_PYTHON", None)
+    rc, log = run_app([], cwd, stems_script("app winshot nopyserial"), "nopyserial", env=env)
+    check("[stems] device: error: pyserial is missing" in log, "pyserial missing: says so")
+
+
 def main():
     global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK
     ap = argparse.ArgumentParser()
@@ -223,6 +470,9 @@ def main():
     part_session()
     part_audio()
     part_xfer()
+    part_strip()
+    part_listen()
+    part_stems()
     print("FAILED: %d check(s)" % len(failures) if failures else "OK")
     return 1 if failures else 0
 

@@ -60,6 +60,8 @@ void testDefaultMap() {
   CHECK(m.scancodeFor(kKG0) == SDL_SCANCODE_F1);
   CHECK(m.lookupCmd(SDL_SCANCODE_R) == desk::kActRecord);
   CHECK(m.lookupCmd(SDL_SCANCODE_I) == desk::kActStats);
+  CHECK(m.lookupCmd(SDL_SCANCODE_L) == desk::kActListen);
+  CHECK(m.lookupCmd(SDL_SCANCODE_B) == desk::kActStems);
   CHECK(m.lookupCmd(SDL_SCANCODE_Q) == desk::kUnbound);
   for (int sc = 0; sc < desk::KeyMap::kScancodes; ++sc)   // no Command shortcut is an instrument key
     CHECK(m.lookupCmd(sc) == desk::kUnbound || m.lookupCmd(sc) >= desk::kActRecord);

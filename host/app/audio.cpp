@@ -89,6 +89,7 @@ AudioStats AudioOut::stats() {
 
 void AudioOut::render(int16_t* out, int frames) {
   inst_->process(out, frames);
+  if (listening_.load(std::memory_order_acquire)) listen_.load(std::memory_order_acquire)->mixInto(out, frames, rate_);
   ring_.push(out, uint32_t(frames));
   rendered_.store(rendered_.load(std::memory_order_relaxed) + uint64_t(frames), std::memory_order_relaxed);
 }

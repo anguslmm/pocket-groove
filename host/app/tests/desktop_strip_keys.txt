@@ -1,0 +1,73 @@
+# Key script for test_desktop_app part 5 (the strip). Instrument keys, with
+# the desktop's own controls in between: the modifier legend, Cmd+I / Cmd+L /
+# Cmd+B, clicks on the strip and on the screen, and the Stems list, which takes
+# the keyboard while it is open. None of those may reach the instrument:
+# desktop_check.py runs the instrument keys alone through ui_shot and the
+# shot must be pixel-identical, and the app's count of key events that
+# reached the Ui must equal the script's.
+wait 400
+tap 9              # SOUND view
+wait 150
+down sft           # each modifier alone: its chip lights, then goes out
+wait 60
+app winshot lit-shift
+up sft
+down fn
+wait 60
+up fn
+down ctl
+wait 60
+up ctl
+down opt
+wait 60
+up opt
+down alt
+wait 60
+up alt
+down tab
+wait 60
+up tab
+sdl down Escape    # G0: the key mapper has it down (lit), the Ui never sees it
+wait 60
+sdl up Escape
+down sft           # two at once
+down opt
+wait 60
+app winshot lit-two
+up opt
+up sft
+app click-button stats      # the strip's buttons by mouse
+wait 300
+app winshot stats
+app click-button stats
+app click-button listen     # no "Pocket Groove" input here: a hint, nothing else
+wait 300
+app winshot no-device
+app click-button listen
+app click 120 60            # a click on the device screen does nothing
+sdl down Left GUI
+sdl tap I
+sdl tap I
+sdl tap L
+sdl tap L
+sdl tap B                   # the Stems list takes the keyboard ...
+sdl up Left GUI
+wait 300
+sdl tap Down
+sdl tap Q                   # ... so none of these is an instrument key
+sdl tap Space
+sdl down Left Shift         # held across the close: its up must not reach the Ui either
+sdl tap Up
+sdl tap Escape              # closes the list
+sdl up Left Shift
+wait 100
+app click-button stems      # and by mouse
+wait 300
+sdl tap Escape
+wait 100
+expect-released
+tap 3
+wait 3000
+shot keys
+app winshot window
+quit

@@ -26,8 +26,13 @@ Stem bounce via tools/pg confirmed working on hardware (2026-11-12).
 
 Desktop app (tools/pg-desktop, host/app, docs/DESKTOP.md): SDL2 window + audio + Mac keyboard
 around the unchanged core and UI; host-verified headless (test_desktop_app: screenshots identical
-to ui_shot, F9 recording bit-identical to the offline engine, session saved at quit). Not yet run
-on macOS: waiting for the owner's checklist (Retina, right Shift/Option, focus, latency, Cmd+Q).
+to ui_shot, F9 recording bit-identical to the offline engine, session saved at quit). Run on the
+owner's Mac: works and sounds right. Fast follows a + b below are built (2026-11-12, branch of the
+desktop-strip worktree): the strip under the screen (modifier lights, LISTEN / STEMS / REC / STATS),
+Listen (Cmd+L, the "Pocket Groove" USB input mixed in, PI rate match: test_desktop_listen, an hour
+at +-500 ppm with no underrun) and Stems (Cmd+B, tools/pg --json as a subprocess). Host-verified
+headless only (simulated device, xfer_sim); not yet run on macOS (mic permission prompt, real
+device clock, Finder reveal).
 
 Agreed order of work (2026-11-12, set by the owner):
 1. Owner tests on hardware what is on main: backlight/ghost fixes, tools/pg ls/pull/bounce,
@@ -42,9 +47,9 @@ Agreed order of work (2026-11-12, set by the owner):
    Fast follows, the only desktop-specific features for the foreseeable future (owner,
    2026-11-12), keep them simple:
    a. Listen to the device from the desktop app: play the "Pocket Groove" USB audio input
-      through the Mac's output, so no external monitoring setup is needed.
+      through the Mac's output, so no external monitoring setup is needed. (Built, see above.)
    b. Pull stems with one click: browse the projects on the connected device in the app and
-      bounce the chosen one (what tools/pg ls + bounce do today).
+      bounce the chosen one (what tools/pg ls + bounce do today). (Built, see above.)
 3. Full functionality assessment: the owner tests every instrument and setting (on the
    desktop build, faster) and gives feedback.
 

@@ -111,6 +111,37 @@ class TransferTest(unittest.TestCase):
             self.assertEqual(pg.pgv_header(s.read("int", "ACIDJAM.pgv"))["tempo"], 126)
             self.assertFalse(os.path.exists(s.path("int", "_xfer.tmp")))
 
+    def test_json(self):
+        # --json (the desktop app's Stems list): stdout is JSON lines only.
+        import contextlib
+        import io
+        import json
+        s = self.sim()
+
+        def run(argv):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+                rc = pg.main(argv)
+            pg.JSON = False
+            return rc, [json.loads(l) for l in out.getvalue().splitlines()]
+
+        rc, lines = run(["--json", "--port", s.port, "ls"])
+        self.assertEqual(rc, 0)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0]["type"], "ls")
+        names = [(p["mount"], p["name"], p["bpm"]) for p in lines[0]["projects"]]
+        self.assertIn(("int", "ACIDJAM", 124), names)
+        self.assertIn(("int", "_last", 133), names)
+        rc, lines = run(["--json", "--port", s.port, "pull", "NOPE", "--out", os.path.join(self.tmp, "n.pgv")])
+        self.assertEqual(rc, 1)
+        self.assertEqual(lines[-1]["type"], "error")
+        self.assertIn("no project NOPE", lines[-1]["message"])
+        out = os.path.join(self.tmp, "j", "A.pgv")
+        rc, lines = run(["--json", "--port", s.port, "pull", "acidjam", "--out", out])
+        self.assertEqual(rc, 0)
+        self.assertTrue(lines and all(l["type"] == "progress" and l["stage"] == "pull" for l in lines))
+        self.assertEqual(lines[-1]["done"], lines[-1]["total"])
+
     def test_cli(self):
         s = self.sim()
         out = os.path.join(self.tmp, "x", "A.pgv")
