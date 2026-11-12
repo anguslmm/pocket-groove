@@ -123,25 +123,50 @@ AUDIO_OBJS = ("/pg/drums/", "/pg/bass/bass.cpp", "/pg/lead/lead.cpp", "/pg/engin
 _hot = [re.compile(p) for p in HOT + (STEP if TIER >= 2 else [])]
 
 
-TOOL_TIMEOUT_S = 120
+TOOL_TIMEOUT_S = 60
 
 
-def _run(cmd, **kw):
-    # Every toolchain call goes through here: stdin is never inherited (a tool
-    # waiting on the terminal would look like a hung build) and a tool that
-    # does not finish fails the build with its name instead of stalling it.
-    kw.setdefault("stdin", subprocess.DEVNULL)
-    if "input" in kw:
-        kw.pop("stdin")
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S, **kw)
-    except subprocess.TimeoutExpired:
-        raise RuntimeError("[audio-ram] %s did not finish within %d s (arguments: %s)"
-                           % (cmd[0], TOOL_TIMEOUT_S, " ".join(cmd[-2:])))
+def _run(cmd, input=None):
+    # Every toolchain call goes through here. Nothing is connected by a pipe:
+    # the tool reads its input from a file and writes stdout / stderr to files,
+    # so no reader, buffer size or inherited terminal can make it block. A tool
+    # that does not finish is killed and the build fails naming it and its
+    # last arguments, instead of the build sitting silent.
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="pg-audio-ram-") as tmp:
+        fin = None
+        if input is not None:
+            with open(tmp + "/in", "w") as f:
+                f.write(input)
+            fin = open(tmp + "/in", "r")
+        try:
+            with open(tmp + "/out", "w") as fo, open(tmp + "/err", "w") as fe:
+                p = subprocess.Popen(cmd, stdin=fin if fin else subprocess.DEVNULL, stdout=fo, stderr=fe)
+                try:
+                    rc = p.wait(timeout=TOOL_TIMEOUT_S)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    try:
+                        p.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    raise RuntimeError("[audio-ram] %s did not finish within %d s (last arguments: %s)"
+                                       % (cmd[0], TOOL_TIMEOUT_S, " ".join(cmd[-2:])))
+        finally:
+            if fin:
+                fin.close()
+        with open(tmp + "/out", "r", errors="replace") as f:
+            out = f.read()
+        with open(tmp + "/err", "r", errors="replace") as f:
+            err = f.read()
+    return subprocess.CompletedProcess(cmd, rc, out, err)
 
 
 def _sections(objcopy, path):
+    import os
     readelf = objcopy.replace("objcopy", "readelf")
+    if os.environ.get("PG_AUDIO_RAM_FAKE_HANG") and path.endswith(os.environ["PG_AUDIO_RAM_FAKE_HANG"]):
+        _run(["sleep", "600"])   # self-test of the stall reporting: see docs/BRINGUP.md
     out = _run([readelf, "-S", "-W", path]).stdout
     return re.findall(r"\]\s+(\S+)\s+(?:PROGBITS|NOBITS)", out)
 
@@ -160,6 +185,7 @@ def _demangle(cxxfilt, names):
 
 
 _moved = []
+_step = ["starting"]   # what the placement step is doing right now (for the watchdog)
 
 
 def _relocate(target, source, env):
@@ -169,13 +195,17 @@ def _relocate(target, source, env):
     for t in target:
         path = str(t)
         rel = path.replace("\\", "/")
+        short = rel.split("/pg/")[-1]
+        _step[0] = "readelf " + short
         secs = _sections(objcopy, path)
         if not secs:
             raise RuntimeError("[audio-ram] could not read sections of " + path)
         args = []
         if any(o in rel for o in AUDIO_OBJS):
+            _step[0] = "c++filt " + short
             fns = sorted({s.split(".", 2)[2] for s in secs if s.startswith((".text.", ".literal."))})
             dm = _demangle(cxxfilt, fns)
+            _step[0] = "matching " + short
             pick = {f for f in fns if any(h.search(dm.get(f, f)) or h.search(f) for h in _hot)}
             for s in secs:
                 if s.startswith(".text.") and s[6:] in pick:
@@ -190,6 +220,7 @@ def _relocate(target, source, env):
                 if s.startswith(".rodata"):
                     args += ["--rename-section", "%s=.dram1.pg%s" % (s, s[7:])]
         if args:
+            _step[0] = "objcopy " + short
             r = _run([objcopy] + args + [path])
             if r.returncode != 0:
                 raise RuntimeError("[audio-ram] objcopy failed on %s: %s" % (path, r.stderr.strip()))
@@ -209,8 +240,35 @@ def _relocate_all(target, source, env):
     # (idempotent: renamed sections no longer match .text.* / .literal.*).
     # A post-action on each object would be neater, but PlatformIO does not run
     # post-actions attached inside a build middleware.
+    import faulthandler
     import glob
     import os
+    import sys
+    # If this step stalls, print where (the Python stack of every thread)
+    # every 20 s instead of sitting silent.
+    import threading
+    done = threading.Event()
+
+    def _watch():
+        waited = 0
+        while not done.wait(10):
+            waited += 10
+            sys.__stderr__.write("[audio-ram] still working after %d s: %s\n" % (waited, _step[0]))
+            sys.__stderr__.flush()
+
+    threading.Thread(target=_watch, daemon=True).start()
+    faulthandler.dump_traceback_later(30, repeat=True, file=sys.__stderr__)
+    try:
+        return _relocate_all_body(target, source, env)
+    finally:
+        done.set()
+        faulthandler.cancel_dump_traceback_later()
+
+
+def _relocate_all_body(target, source, env):
+    import glob
+    import os
+    _step[0] = "listing the objects under " + env.subst("$BUILD_DIR")
     objs = [o for o in glob.glob(os.path.join(env.subst("$BUILD_DIR"), "**", "*.o"), recursive=True)
             if "/pg/pg/" in o.replace("\\", "/")]
     _relocate([type("N", (), {"__str__": lambda self, o=o: o})() for o in objs], None, env)
