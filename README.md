@@ -45,6 +45,14 @@ esptool --chip esp32s3 --port /dev/ttyACM0 --baud 460800 write-flash 0x0 .pio/bu
 
 A prebuilt merged image may also be in `build/firmware/pocket-groove.bin` (BRINGUP section 8). If the upload can't connect: switch the device off, hold the G0 button while plugging in USB, release it, upload again. In the cloud sandbox, `source tools/sandbox-pio-setup.sh` first (it routes PlatformIO around the blocked package registry; not needed on a normal machine).
 
+## The instrument on your computer
+
+`tools/pg-desktop` runs the same instrument in a window on a Mac (or Linux PC): the device's engine and UI, the Mac keyboard as the Cardputer keyboard, stereo sound, projects in `./projects` that `tools/pg push` / `pull` move to and from the device, F9 to record. It needs SDL2 (`brew install sdl2 cmake`). Key map, options and the differences from the device: [`docs/DESKTOP.md`](docs/DESKTOP.md).
+
+```bash
+tools/pg-desktop
+```
+
 ## Desktop build and tests
 
 The host build compiles every component of `lib/pg` as a static library, the tests, the system tests and the tools.
@@ -134,8 +142,9 @@ src/platform/           ESP32-S3 layer: I2S audio + ES8311, TCA8418 keyboard, di
 src/app/                the instrument firmware: tasks, boot menu, volume, diagnostics overlay
 src/smoke/              hardware smoke test (env:smoke)
 host/                   desktop build: tests/ (unit), itests/ (system), tools/ (renderers, ui_shot,
-                        param_reference, bench), common/ (UI harness, in-memory FS, WAV), ui_scripts/
-tools/                  pg + pg.py (USB transfer and stem bounce), ears.py (WAV analysis), gen/ (lookup-table
+                        param_reference, bench), common/ (UI harness, in-memory FS, WAV), ui_scripts/,
+                        app/ (the desktop app pocket-groove, SDL2; docs/DESKTOP.md)
+tools/                  pg + pg.py (USB transfer and stem bounce), pg-desktop (build + run the desktop app), ears.py (WAV analysis), gen/ (lookup-table
                         generator), ux_mock/ (UX mockups)
 docs/                   MANUAL, UX spec, ARCHITECTURE, BRINGUP, hardware-notes; ux/ mockups; manual/ images
 ```

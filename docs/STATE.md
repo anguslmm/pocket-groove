@@ -14,6 +14,11 @@ USB audio (stereo input over USB, UAC1 + CDC): feasible with the prebuilt TinyUS
 env:usb-audio-spike (src/usbspike, build/firmware/pocket-groove-usbspike.bin) built and
 checked offline only, waiting for the hardware test in docs/usb-audio.md section 8.
 
+Desktop app (tools/pg-desktop, host/app, docs/DESKTOP.md): SDL2 window + audio + Mac keyboard
+around the unchanged core and UI; host-verified headless (test_desktop_app: screenshots identical
+to ui_shot, F9 recording bit-identical to the offline engine, session saved at quit). Not yet run
+on macOS: waiting for the owner's checklist (Retina, right Shift/Option, focus, latency, Cmd+Q).
+
 Agreed order of work (2026-11-12, set by the owner):
 1. Owner tests on hardware what is on main: backlight/ghost fixes, tools/pg ls/pull/bounce,
    env:usb-audio-spike (docs/usb-audio.md section 8). Fix what that turns up.
