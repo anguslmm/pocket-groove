@@ -34,24 +34,19 @@ at +-500 ppm with no underrun) and Stems (Cmd+B, tools/pg --json as a subprocess
 headless only (simulated device, xfer_sim); not yet run on macOS (mic permission prompt, real
 device clock, Finder reveal).
 
-Agreed order of work (2026-11-12, set by the owner):
-1. Owner tests on hardware what is on main: backlight/ghost fixes, tools/pg ls/pull/bounce,
-   env:usb-audio-spike (done), env:cardputer-adv-usb (docs/usb-audio.md section 10). Fix what
-   that turns up.
-2. Desktop build of the instrument for macOS: same core and UI in a window (SDL2), Mac
-   keyboard as the Cardputer keys, stereo audio out, projects as files, push/pull to the device.
-   Faithful to the device first; desktop-only extras only where the owner feels the pinch.
-   Nice to have: MIDI controller input for playing notes. Open design question: what a MIDI
-   key does on the lead in a chord mode, and how played chords fit the one-note-plus-chord-type
-   Step without changing the project format.
-   Fast follows, the only desktop-specific features for the foreseeable future (owner,
-   2026-11-12), keep them simple:
-   a. Listen to the device from the desktop app: play the "Pocket Groove" USB audio input
-      through the Mac's output, so no external monitoring setup is needed. (Built, see above.)
-   b. Pull stems with one click: browse the projects on the connected device in the app and
-      bounce the chosen one (what tools/pg ls + bounce do today). (Built, see above.)
-3. Full functionality assessment: the owner tests every instrument and setting (on the
-   desktop build, faster) and gives feedback.
+Order of work (owner, updated 2026-11-12):
+1. DONE and confirmed on hardware: real-time performance (IRAM placement), stereo USB audio as
+   the default firmware, stems via tools/pg, desktop app with strip / Listen / Stems, backlight
+   noise gone, ghost filter (pad k + SHIFT + n harmless), explain-mode text.
+2. NOW: the owner's full pass through every instrument and setting on the desktop build, using
+   docs/ASSESSMENT.md. In parallel: env:hw-spike (tilt sensor and mic sampling to/from flash)
+   to learn what the hardware can do before designing around it.
+3. THEN: the macro redesign (see Design direction). The owner will make a song only AFTER the
+   redesign: the goal is a fun experience that is not hindered by the tiny device.
+4. LATER: a design sprint on the flow between desktop and device, giving each its own UX.
+ON HOLD, do not build: MIDI controller input. The owner is not convinced they want it (it
+distracts from the intended flow) and it needs more design than a quick proposal.
+No further desktop-specific features for now beyond the strip, Listen and Stems.
 
 Design direction (owner, 2026-11-12; brainstorm only, nothing built yet): capture the
 playfulness of the OP-1 without its feature set. Sounds are shaped through a few designed
