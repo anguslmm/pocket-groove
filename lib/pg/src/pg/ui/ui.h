@@ -96,6 +96,8 @@ class Ui {
   int nameMount() const { return nameMount_; }
   bool helpVisible() const;
   bool explainMode() const { return explain_; }
+  // The key-map label of key k in the table the help would show now (out[3], "" for none).
+  void helpKeyLabel(int k, char* out) const;
   int explainKey() const { return explainKey_; }      // the key explain mode describes, or -1
   // Explain mode's text for that key, as pressed (with the modifier held then):
   // title (title[40], shown up to 30 chars) and two lines. Empty when no key.

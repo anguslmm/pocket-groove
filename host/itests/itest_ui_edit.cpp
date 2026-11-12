@@ -283,6 +283,29 @@ static void testHelp() {
     R->ui.explainText(title, &l1, &l2);         // still the gesture that was pressed
     CHECK(std::strcmp(title, c.title) == 0);
   }
+  tap("/");
+  // SHIFT+step inserts in SONG: the key map says so there, LENGTH elsewhere
+  char lab[3];
+  tap("p");
+  down("sft");
+  R->ui.helpKeyLabel(K("1"), lab);
+  CHECK(std::strcmp(lab, "IN") == 0);
+  R->ui.helpKeyLabel(K("'"), lab);           // SHIFT+' adds no page in SONG
+  CHECK(lab[0] == 0);
+  up("sft");
+  tap("/");
+  down("sft");
+  tap("3");
+  R->ui.explainText(title, &l1, &l2);
+  CHECK(std::strcmp(title, "SHIFT+STEP: INSERT P03") == 0);
+  up("sft");
+  tap("/");
+  tap("`");
+  down("sft");
+  R->ui.helpKeyLabel(K("1"), lab);
+  CHECK(std::strcmp(lab, "LN") == 0);
+  up("sft");
+  tap("/");
   tap("a");
   R->ui.explainText(title, &l1, &l2);
   CHECK(std::strcmp(title, "PAD A: KICK") == 0);

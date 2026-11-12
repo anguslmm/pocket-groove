@@ -1044,7 +1044,7 @@ def help_overlay(fb, keys, title="KEYS", sub="GROOVE", legend=None):
     fb.rect(0, 0, W, 11, WHITE)
     x = fb.text(3, 2, title, BG)
     fb.text(x + 4, 2, sub, LINE)
-    fb.text_r(236, 2, "+FN/SHIFT/CTRL/OPT/ALT", LINE)
+    fb.text_r(236, 2, "FN/SFT/CTL/OPT/ALT/TAB", LINE)
     for r in range(4):
         for c in range(14):
             lab, ink, fill = keys[r][c]

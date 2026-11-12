@@ -71,6 +71,9 @@ constexpr KeyTable kTables[] = {
      "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "B-" "B+" "  " "TB" "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "S+" "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "S-" "  " "  ",
      "oooooooooooaaomooooooooooooooooooooooooroooooooooooooroo"},
 
+    {"SHIFT SONG",
+     "  " "IN" "IN" "IN" "IN" "IN" "IN" "IN" "IN" "  " "  " "x8" "x8" "  " "  " "IN" "IN" "IN" "IN" "IN" "IN" "IN" "IN" "  " "  " "BC" "BC" "  " "  " "SH" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "  " "  " "  " "  " "  " "  " "  " "AC" "AC" "AC" "AC" "AC" "AC" "AC" "AC" "  " "  " "RS",
+     "ossssssssooaaoossssssssooccoomppppppppooooooonnnnnnnnooG"},
 };
 constexpr bool tablesOk() {
   for (const KeyTable& t : kTables) {
@@ -83,8 +86,18 @@ constexpr bool tablesOk() {
 }
 static_assert(tablesOk(), "help tables must have 56 keys");
 
+// Header: "KEYS <name>" (the name from x=31), the modifier hint right-aligned at 236 (6 px a character).
+constexpr const char* kHelpHint = "FN/SFT/CTL/OPT/ALT/TAB";
+constexpr int slen(const char* s) { return *s ? 1 + slen(s + 1) : 0; }
+constexpr bool headerFits() {
+  for (const KeyTable& t : kTables)
+    if (31 + 6 * slen(t.name) + 6 > 236 - 6 * slen(kHelpHint)) return false;   // a space between
+  return true;
+}
+static_assert(headerFits(), "help header: the table name runs into the modifier hint");
+
 enum TableId { kTGroove, kTStep, kTWrite, kTSound, kTMix, kTFx, kTSong, kTProject, kTText,
-               kTFn, kTShift, kTCtrl, kTOpt, kTAlt, kTTab };
+               kTFn, kTShift, kTCtrl, kTOpt, kTAlt, kTTab, kTShiftSong };
 
 // Legend colour switches inside strings
 #define UP_ICON_TXT "\x84\x85"
@@ -162,6 +175,10 @@ const char* const kLegends[][5] = {
     {CA "B- B+" CD " TEMPO (SHIFT: 10 BPM)",
      CT "S+ S-" CD " SWING",
      CD "TAP TAB 3X: TAP TEMPO", "", ""},
+    {CW "IN" CD " INSERT PATTERN BEFORE THE CURSOR",
+     CA "x8" CD " REPEATS BY 8  " CW "SL" CD " SILENT SELECT",
+     CC "BC" CD " BASS CUTOFF SWEEP  " CG "RS" CD " RESTART",
+     CW "AC" CD " ACCENT", ""},
 };
 #undef CW
 #undef CD
@@ -208,6 +225,14 @@ bool Ui::helpVisible() const {
   return explain_ || (isHeld(kKSlash) && rec_[kKSlash].act == kActHelp && int32_t(now_ - (helpDownMs_ + 400)) >= 0);
 }
 
+void Ui::helpKeyLabel(int k, char* out) const {
+  const char* l = kTables[helpTable()].labels;
+  out[0] = out[1] = out[2] = 0;
+  if (k < 0 || k >= kNumKeys) return;
+  if (l[2 * k] != ' ') out[0] = l[2 * k];
+  if (l[2 * k + 1] != ' ') out[1] = l[2 * k + 1];
+}
+
 int Ui::helpTable(bool layers) const {
   if (dialog_ == Dialog::Name) return kTText;
   // the order in which keyDown() lets the modifiers win
@@ -216,7 +241,7 @@ int Ui::helpTable(bool layers) const {
   if (layers && isHeld(kKAlt)) return kTAlt;
   if (layers && isHeld(kKCtrl)) return kTCtrl;
   if (layers && isHeld(kKTab)) return kTTab;
-  if (layers && isHeld(kKShift)) return kTShift;
+  if (layers && isHeld(kKShift)) return view_ == View::Song ? kTShiftSong : kTShift;
   if (heldStep_ >= 0 && view_ == View::Groove) return kTStep;
   switch (view_) {
     case View::Sound: return kTSound;
@@ -315,6 +340,7 @@ static bool explainLayer(const Ui& ui, int table, int k, char* title, const char
       }
       return false;   // TAB leaves every other key alone
     case kTShift:
+    case kTShiftSong:
       if (step >= 0 && v == View::Song) {
         catStep(cat(title, "SHIFT+STEP: INSERT P"), step + 1);
         *l1 = "INSERTS THE PATTERN BEFORE THE";
@@ -490,7 +516,7 @@ void Ui::drawHelp(Framebuffer& fb) {
   g.rect(0, 0, kScreenW, 11, WHITE);
   const int x = g.text(3, 2, "KEYS", BG);
   g.text(x + 4, 2, T.name, LINE);
-  g.textR(236, 2, "+FN/SHIFT/CTRL/OPT/ALT", LINE);
+  g.textR(236, 2, kHelpHint, LINE);
   const uint8_t noteCol = tc(sel_, kMid);
   for (int r = 0; r < 4; ++r)
     for (int c = 0; c < 14; ++c) {
