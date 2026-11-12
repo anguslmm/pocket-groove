@@ -41,13 +41,32 @@ int      currentCore();     // core the caller runs on
 bool runTask(void (*fn)(void*), void* user, const char* name,
              uint32_t stackBytes = 6144, int priority = 1, int core = 1);
 
-// ---- USB serial (native USB-Serial/JTAG CDC) ------------------------------
+// ---- USB serial ---------------------------------------------------------------
+// The chip's USB-Serial/JTAG CDC port, or in the USB audio build (PG_USB_AUDIO)
+// the TinyUSB CDC port of plat::usbaudio (which starts it).
 // write() never stalls the caller for long: with no host listening the data is
 // dropped (and writes are skipped for a while) instead of blocking.
 void serialWrite(const char* text);
 void serialWrite(const char* data, size_t len);
 int  serialRead();          // -1 when nothing is waiting
 bool serialHostListening();
+
+// ---- USB audio build only (PG_USB_AUDIO; not defined in the other envs) ------
+// The TinyUSB port disappears at every reset and the host re-enumerates it, so
+// a terminal always connects after the boot log was printed. Everything
+// serialWrite() sends from begin() until bootLogEnd() is kept (up to 3 KB, in
+// RTC slow memory: no heap) and bootLogReplay() prints it again.
+void bootLogEnd();
+void bootLogReplay();
+// A crash backtrace goes to UART0 / the USB-Serial/JTAG console, neither of
+// which reaches the computer in this build, but the core dump is saved to
+// flash. Writes a one-line summary of it ("[crash] ...": task, PC, cause,
+// backtrace for addr2line) into buf; returns 0 if there is none.
+int crashSummary(char* buf, size_t cap);
+// Restart and open the boot menu (the serial 'm' of the other builds only
+// works in the first 300 ms after a reset, before a host can reconnect).
+void restartIntoBootMenu();
+bool bootMenuRequested();   // true once after such a restart
 
 // ---- chip / memory ---------------------------------------------------------
 struct ChipInfo {

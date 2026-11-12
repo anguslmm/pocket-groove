@@ -10,14 +10,25 @@
 namespace app {
 
 constexpr int kOvCols = 40;   // 6 px cells: 240 px
+// Text lines per box: the USB audio build's diagnostics strip has a fourth
+// (USB) line.
+#if PG_USB_AUDIO
+constexpr int kOvLines = 4;
+#else
+constexpr int kOvLines = 3;
+#endif
 
 struct OverlayBox {
   bool     on = false;
   int16_t  x = 0, y = 0, w = 0, h = 0;
   uint16_t bg = 0, border = 0;          // RGB565 (normal byte order); border == bg: none
-  uint8_t  lines = 0;                   // 0..3 text lines, 8 px apart from y + 2
-  char     text[3][kOvCols + 1] = {};
-  uint16_t fg[3] = {0xFFFF, 0xFFFF, 0xFFFF};
+  uint8_t  lines = 0;                   // 0..kOvLines text lines, 8 px apart from y + 2
+  char     text[kOvLines][kOvCols + 1] = {};
+#if PG_USB_AUDIO
+  uint16_t fg[kOvLines] = {0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF};
+#else
+  uint16_t fg[kOvLines] = {0xFFFF, 0xFFFF, 0xFFFF};
+#endif
   int8_t   barPct = -1;                 // -1: no bar
   int16_t  barY = 0, barH = 0;          // bar spans x + 4 .. x + w - 4
   uint16_t barFg = 0xFFFF, barBg = 0;

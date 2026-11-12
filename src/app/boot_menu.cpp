@@ -7,6 +7,9 @@
 #include "../platform/keys.h"
 #include "../platform/storage.h"
 #include "../platform/system.h"
+#if PG_USB_AUDIO
+#include "../platform/usb_audio.h"
+#endif
 #include "pg/io/project_io.h"
 #include "pg/ui/gfx.h"
 
@@ -18,7 +21,13 @@ using pg::ui::Gfx;
 
 namespace {
 
+#if PG_USB_AUDIO
+// 7: the USB audio build's way into the ROM download mode without buttons
+// (its USB port is TinyUSB, which esptool cannot reset by itself).
+enum Item : int { kRate = 0, kBackend, kVolume, kResetSession, kFormat, kStart, kFlash, kNumItems };
+#else
 enum Item : int { kRate = 0, kBackend, kVolume, kResetSession, kFormat, kStart, kNumItems };
+#endif
 
 // Key ids (pg/platform.h layout)
 constexpr uint8_t kKBacktick = 0, kKEnter = 41, kKSemicolon = 39, kKDot = 53, kKSpace = 55;
@@ -53,6 +62,11 @@ void itemText(const BootMenuEnv& env, int i, char* out, size_t cap, const MenuSt
       snprintf(out, cap, "%s", m.confirm == i ? "5 FORMAT /INT? AGAIN = YES" : "5 FORMAT INTERNAL STORAGE");
       break;
     case kStart: snprintf(out, cap, "6 START"); break;
+#if PG_USB_AUDIO
+    case kFlash:
+      snprintf(out, cap, "%s", m.confirm == i ? "7 FLASH MODE? AGAIN = YES" : "7 FLASH MODE (FOR UPLOADING)");
+      break;
+#endif
     default: out[0] = 0; break;
   }
 }
@@ -104,7 +118,11 @@ void setMsg(MenuState& m, const char* text, uint8_t col) {
 void activate(const BootMenuEnv& env, MenuState& m, int i) {
   Settings& s = *env.settings;
   pg::FileSystem& fs = *env.fs;
+#if PG_USB_AUDIO
+  if (i != m.confirm && (i == kResetSession || i == kFormat || i == kFlash)) {
+#else
   if (i != m.confirm && (i == kResetSession || i == kFormat)) {
+#endif
     m.confirm = i;
     setMsg(m, "PRESS AGAIN TO CONFIRM", pg::ui::AMBER);
     return;
@@ -151,6 +169,17 @@ void activate(const BootMenuEnv& env, MenuState& m, int i) {
       break;
     }
     case kStart: m.done = true; break;
+#if PG_USB_AUDIO
+    case kFlash: {
+      if (was != kFlash) break;
+      drawMessage(*env.fb, "DOWNLOAD MODE", "FLASH NOW FROM THE COMPUTER:", "PIO RUN -E <ENV> -T UPLOAD",
+                  "POWER OFF AND ON TO LEAVE");
+      sys::serialWrite("[boot] rebooting into the ROM download mode (boot menu): flash now\n");
+      sys::delayMs(150);
+      plat::usbaudio::rebootToDownloadMode();
+      break;
+    }
+#endif
     default: break;
   }
 }

@@ -1,4 +1,4 @@
-// USB audio spike -- "linker diet" for the prebuilt TinyUSB of arduino-esp32 3.3.12.
+// Platform layer, USB builds (PG_USB_AUDIO) -- "linker diet" for the prebuilt TinyUSB of arduino-esp32 3.3.12.
 //
 // libarduino_tinyusb.a is built with nearly every class enabled. usbd.c's
 // driver table references every device class driver, and usbh.c (pulled in by
@@ -20,14 +20,18 @@
 // or endpoint is bound to them. The host-side stubs are never called at all
 // (the stack is initialised in device mode only).
 //
-// Off with -DUSBSPIKE_TRIM=0 (e.g. PLATFORMIO_BUILD_FLAGS=-DUSBSPIKE_TRIM=0).
+// Off with -DPG_USB_TRIM=0 (e.g. PLATFORMIO_BUILD_FLAGS=-DPG_USB_TRIM=0). Empty in
+// every env without PG_USB_AUDIO.
 // Prototypes come from the installed class headers via tusb.h, so the compiler
 // checks every signature against the library.
-#ifndef USBSPIKE_TRIM
-#define USBSPIKE_TRIM 1
+#ifndef PG_USB_TRIM
+#define PG_USB_TRIM 1
+#endif
+#ifndef PG_USB_TRIM_HOST   // also the host stack's core (below); -DPG_USB_TRIM_HOST=0 keeps it
+#define PG_USB_TRIM_HOST 1
 #endif
 
-#if USBSPIKE_TRIM && !USBSPIKE_NO_USB
+#if PG_USB_AUDIO && PG_USB_TRIM
 #include "tusb.h"
 
 #define UNUSED_ARGS4(a, b, c, d) ((void)(a), (void)(b), (void)(c), (void)(d))
@@ -114,6 +118,37 @@ HOST_DRIVER_STUB(msch)
 #if CFG_TUH_MIDI         // 528 B .bss
 HOST_DRIVER_STUB(midih)
 #endif
+
+// ---- the host stack's core (usbh.c, hub.c, hcd_dwc2.c: 2416 B .bss) --------
+// tusb.c references these few symbols of usbh.c.obj (tusb_inited,
+// tusb_rhport_init / tusb_deinit for a host-role port, the endpoint claim /
+// xfer helpers it wraps for both roles) and tusb.c / dcd_dwc2.c reference
+// hcd_int_handler (the DWC2 interrupt dispatch for the host role). This
+// firmware initialises port 0 as a DEVICE only (tinyusb_init ->
+// tusb_rhport_init(0, device)), so the host side is "not initialised": the
+// stubs answer exactly that, and the three members are never linked. If
+// anything else ever needs a symbol of usbh.c.obj, the link fails with
+// "multiple definition". (Without these stubs the host class stubs above are
+// what keeps usbh.c's driver table from pulling the class drivers in.)
+#if PG_USB_TRIM_HOST
+#include "host/hcd.h"
+#include "host/usbh_pvt.h"
+
+bool tuh_inited(void) { return false; }
+bool tuh_deinit(uint8_t rhport) { (void)rhport; return true; }
+bool tuh_rhport_init(uint8_t rhport, const tusb_rhport_init_t* rh_init) {
+  (void)rhport; (void)rh_init;
+  return false;
+}
+bool usbh_edpt_claim(uint8_t dev_addr, uint8_t ep_addr) { (void)dev_addr; (void)ep_addr; return false; }
+bool usbh_edpt_release(uint8_t dev_addr, uint8_t ep_addr) { (void)dev_addr; (void)ep_addr; return false; }
+bool usbh_edpt_xfer_with_callback(uint8_t dev_addr, uint8_t ep_addr, uint8_t* buffer, uint16_t total_bytes,
+                                  tuh_xfer_cb_t complete_cb, uintptr_t user_data) {
+  (void)dev_addr; (void)ep_addr; (void)buffer; (void)total_bytes; (void)complete_cb; (void)user_data;
+  return false;
+}
+void hcd_int_handler(uint8_t rhport, bool in_isr) { (void)rhport; (void)in_isr; }
+#endif  // PG_USB_TRIM_HOST
 #endif  // CFG_TUH_ENABLED
 
-#endif  // USBSPIKE_TRIM && !USBSPIKE_NO_USB
+#endif  // PG_USB_AUDIO && PG_USB_TRIM

@@ -21,7 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace usbspike {
+namespace pgusb {
 
 struct Uac1Params {
   uint8_t  itfAc       = 0;     // AudioControl interface number; AudioStreaming is itfAc + 1
@@ -110,4 +110,4 @@ inline size_t buildUac1(uint8_t* dst, size_t cap, const Uac1Params& p) {
   return n;
 }
 
-}  // namespace usbspike
+}  // namespace pgusb

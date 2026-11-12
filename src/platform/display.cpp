@@ -22,7 +22,16 @@ namespace display {
 namespace {
 
 constexpr int kW = pg::kScreenW, kH = pg::kScreenH;
+#if PG_USB_AUDIO
+// The USB audio build is short of RAM (docs/usb-audio.md, RAM budget): 45
+// strips of 3 rows, 1440 bytes each, 5760 bytes less for the pair. Still
+// double-buffered, so the DMA of one strip overlaps the fill of the next
+// (filling 720 pixels is far quicker than sending them); the cost is 30 more
+// DMA set-ups per full frame, on the UI core only.
+constexpr int kStripRows = 3;                    // 135 = 45 strips of 3 rows; 1440 bytes per strip
+#else
 constexpr int kStripRows = 9;                    // 135 = 15 strips of 9 rows; 4320 bytes per strip
+#endif
 constexpr int kStripPx = kW * kStripRows;
 
 uint16_t s_strip[2][kStripPx];                   // DMA source, internal RAM

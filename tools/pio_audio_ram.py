@@ -18,10 +18,25 @@
 # Which functions: the demangled name is matched against HOT (per-quantum work:
 # render loops, mixer, FX, master, sequencer tick) and, with tier >= 2, STEP
 # (per-step work: noteOn, fireTrackStep, ...). Everything else (init, sanitize,
-# commands, the stereo-only template variants that device mode never runs, the
-# 16 bass loop variants of which one is active) stays in flash.
+# commands, the template variants of the output layout this build does not
+# run, the 16 bass loop variants of which one is active) stays in flash.
+#
+# Output layout: the engine renders MONO (device mode, one bus, L == R) in
+# every env except the USB audio one (-DPG_USB_AUDIO=1), where it renders
+# STEREO for the computer and the jack gets (L+R)/2. Each layout has its own
+# template variants of the delay, reverb, master bus and lead voice loop
+# (run<true> = mono, run<false> = stereo; LeadVoice::renderVoiceT<true> =
+# stereo). Only the variants of this build's layout are moved, never both:
+# every byte of IRAM is a byte of heap.
 #
 # Selected by -DPG_AUDIO_RAM=<tier> in build_flags (0/absent = off).
+#
+# Checks (a wrong placement fails the build instead of shipping an image
+# that overloads): before the link, every function of MUST_COMMON + the
+# layout's MUST list has been renamed; after the link, the toolchain's nm
+# reads the final ELF and requires those at IRAM addresses and the other
+# layout's variants in flash. The ELF check also runs on a re-link that did
+# not recompile anything.
 # Also gives lib/pg the same warning set as src/ (what src/app/pio_pg_flags.py
 # does for the stock env; an env can only have one such middleware).
 import re
@@ -43,18 +58,29 @@ def _tier():
     return 0
 
 
-TIER = _tier()
-print("[audio-ram] PG_AUDIO_RAM tier %d" % TIER)
+def _define(name):
+    for d in env.get("CPPDEFINES", []):  # noqa: F821
+        if isinstance(d, (list, tuple)) and d[0] == name:
+            return str(d[1])
+        if d == name:
+            return "1"
+    for f in env.get("BUILD_FLAGS", []):  # noqa: F821
+        m = re.match(r"-D%s(?:=(\S+))?$" % name, str(f))
+        if m:
+            return m.group(1) or "1"
+    return None
 
-# Per-quantum hot set (device = mono mode). Regexes on demangled names.
-HOT = [
+
+TIER = _tier()
+STEREO = (_define("PG_USB_AUDIO") or "0") not in ("0", "")
+print("[audio-ram] PG_AUDIO_RAM tier %d, %s output layout" % (TIER, "STEREO (USB audio)" if STEREO else "mono (device)"))
+
+# Per-quantum hot set. Regexes on demangled names.
+HOT_COMMON = [
     r"^pg::Engine::process\(",
     r"^pg::engine_detail::State::(render|quantum|drainCommands|ensureParams|publishStatus|sequencerTick|rollTick)\(",
     r"^pg::Voice::mono\(\) const",
-    r"^pg::engine_detail::Delay::(run<true>|readTap)",
-    r"^void pg::engine_detail::Delay::run<true>",
-    r"^void pg::engine_detail::Reverb::run<true>",
-    r"^void pg::engine_detail::MasterBus::run<true>",
+    r"^pg::engine_detail::Delay::readTap\(",
     r"^pg::engine_detail::MasterBus::setParams\(",
     r"^_ZN2pg13engine_detail9MasterBus6rumble",
     r"^pg::lead::LeadVoice::(render|globalQuantum|active|mono|setParams|shapeFor)\(",
@@ -63,6 +89,23 @@ HOT = [
     r"^pg::bass::BassVoice::(render|setParams|active|mono)\(",
     r"^pg::drums::\w+Voice::(render|renderTonal|renderCowbell|renderShaker|updateCoefs|endBlock|setParams|active|mono)\(",
 ]
+# The variants only one output layout runs.
+HOT_MONO = [
+    r"^void pg::engine_detail::Delay::run<true>",
+    r"^void pg::engine_detail::Reverb::run<true>",
+    r"^void pg::engine_detail::MasterBus::run<true>",
+]
+HOT_STEREO = [
+    r"^void pg::engine_detail::Delay::run<false>",
+    r"^void pg::engine_detail::Reverb::run<false>",
+    r"^void pg::engine_detail::MasterBus::run<false>",
+    r"^void pg::lead::LeadVoice::renderVoiceT<true>",
+]
+HOT = HOT_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
+# Placement checks (regexes on demangled names, see the header).
+MUST_COMMON = [r"^pg::Engine::process\(", r"^pg::lead::LeadVoice::render\(", r"^pg::bass::BassVoice::render\("]
+MUST = MUST_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
+MUST_NOT = HOT_MONO if STEREO else HOT_STEREO
 # Per-step / per-note paths (tier 2).
 STEP = [
     r"^pg::engine_detail::State::(fireTrackStep|fireMasterStep|hit|afterNoteOn|buildEff)\(",
@@ -156,15 +199,54 @@ def _relocate_all(target, source, env):
     # (On a re-link without recompiling, the sections are already renamed and
     # nothing is moved now: only check when this run did the renaming.)
     if _moved:
-        for must in ("pg::Engine::process(", "pg::lead::LeadVoice::render(", "pg::bass::BassVoice::render("):
-            if not any(m.startswith(must) for m in _moved):
+        for must in MUST:
+            if not any(re.search(must, m) for m in _moved):
                 raise RuntimeError("[audio-ram] %s was not moved to IRAM (%d functions matched)" % (must, len(_moved)))
+        for nope in MUST_NOT:
+            if any(re.search(nope, m) for m in _moved):
+                raise RuntimeError("[audio-ram] %s was moved to IRAM, but this build does not run it" % nope)
         print("[audio-ram] total: %d functions -> IRAM" % len(_moved))
     elif not objs:
         raise RuntimeError("[audio-ram] found no lib/pg objects under " + env.subst("$BUILD_DIR"))
     return 0
 
 
+IRAM_LO, IRAM_HI = 0x40370000, 0x403E0000   # ESP32-S3 internal SRAM, instruction bus
+
+
+def _verify_elf(target, source, env):
+    # The final image, read with the toolchain's nm (never the host's: macOS
+    # nm/c++filt read these names differently, see _demangle).
+    elf = str(target[0])
+    nm = env.WhereIs(env.subst("$CC").replace("gcc", "nm")) or env.subst("$CC").replace("gcc", "nm")
+    r = subprocess.run([nm, "-C", elf], capture_output=True, text=True)
+    if r.returncode != 0 or not r.stdout:
+        raise RuntimeError("[audio-ram] %s -C %s failed: %s" % (nm, elf, r.stderr.strip()))
+    syms = []
+    for line in r.stdout.splitlines():
+        p = line.split(None, 2)
+        if len(p) == 3 and p[1] in "tTwW":
+            try:
+                syms.append((int(p[0], 16), p[2]))
+            except ValueError:
+                pass
+    bad = []
+    for must in MUST:
+        hits = [(a, n) for a, n in syms if re.search(must, n)]
+        if not hits:
+            bad.append("%s: not in the image" % must)
+        bad += ["%s at 0x%08x: not in IRAM" % (n, a) for a, n in hits if not IRAM_LO <= a < IRAM_HI]
+    for nope in MUST_NOT:
+        bad += ["%s at 0x%08x: in IRAM, but this build does not run it" % (n, a)
+                for a, n in syms if re.search(nope, n) and IRAM_LO <= a < IRAM_HI]
+    if bad:
+        raise RuntimeError("[audio-ram] placement check of %s FAILED:\n  %s" % (elf, "\n  ".join(bad)))
+    print("[audio-ram] placement check of the ELF: %d hot-path functions in IRAM, %d variants of the other "
+          "layout in flash: OK" % (len(MUST), len(MUST_NOT)))
+    return 0
+
+
 env.AddBuildMiddleware(_pg_flags)  # noqa: F821
 if TIER > 0:
     env.AddPreAction("$BUILD_DIR/${PROGNAME}.elf", env.Action(_relocate_all, "[audio-ram] moving the audio hot path to IRAM"))  # noqa: F821
+    env.AddPostAction("$BUILD_DIR/${PROGNAME}.elf", env.Action(_verify_elf, "[audio-ram] checking the placement in the ELF"))  # noqa: F821

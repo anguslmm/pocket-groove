@@ -32,7 +32,7 @@
 #include <cstdint>
 #include <cstdio>
 
-namespace usbspike {
+namespace pgusb {
 
 struct CheckResult {
   int errors = 0;
@@ -373,4 +373,4 @@ inline int checkConfiguration(const uint8_t* d, size_t len, uint32_t expectRate,
   return R.errors;
 }
 
-}  // namespace usbspike
+}  // namespace pgusb

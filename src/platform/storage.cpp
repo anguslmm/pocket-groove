@@ -62,7 +62,15 @@ void sdMountTask(void*) {
     s_spiStarted = true;
   }
   SD.end();
+#if PG_USB_AUDIO
+  // FatFs here keeps a 4 KB sector buffer in every file object, and the VFS
+  // allocates max_files of them at mount: 3 (= kMaxHandles, the most this
+  // module ever has open) instead of 5 saves 8.2 KB of heap while a card is
+  // mounted (the USB audio build is short of RAM).
+  bool ok = SD.begin(kSdCs, SPI, kSdHz, "/sd", 3, false);   // >= kMaxHandles (checked below)
+#else
   bool ok = SD.begin(kSdCs, SPI, kSdHz, "/sd", 5, false);
+#endif
   SdState st;
   if (!ok) st = SdState::Failed;
   else if (SD.cardType() == CARD_NONE) { SD.end(); st = SdState::NoCard; }
@@ -107,6 +115,9 @@ void sdMountTask(void*) {
 //  * list(dir): base names of regular files only, with sizes.
 //  * freeBytes(mount): -1 if unknown.
 constexpr int kMaxHandles = 3;      // pg::io needs one; settings + a listing leave headroom
+#if PG_USB_AUDIO
+static_assert(kMaxHandles <= 3, "sdMountTask: SD.begin max_files must cover kMaxHandles");
+#endif
 constexpr size_t kVfsPathMax = 96;
 
 struct Handle {

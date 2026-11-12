@@ -16,11 +16,19 @@ byte costs a retry, never a wrong file. Whole files are checked with CRC32 at
 both ends; the device installs a pushed file with the same verify-and-rename
 as its own saves.
 
-Opening the port: the Cardputer-Adv's ESP32-S3 uses its built-in
-USB-Serial/JTAG. It resets the chip when the host sets RTS while DTR is clear
-(that is how esptool enters the bootloader). The operating system raises DTR
-and RTS together when the port is opened and pyserial keeps both raised, so
-opening the port does NOT reset the device; this tool never touches DTR/RTS.
+Opening the port. Two firmware builds, two kinds of port, both found
+automatically (Espressif VID 0x303A; product "Pocket Groove" preferred):
+  * env:cardputer-adv: the ESP32-S3's built-in USB-Serial/JTAG. It resets the
+    chip when the host sets RTS while DTR is clear (that is how esptool enters
+    the bootloader). The operating system raises DTR and RTS together when the
+    port is opened and pyserial keeps both raised, so opening the port does NOT
+    reset the device.
+  * env:cardputer-adv-usb (stereo USB audio): a TinyUSB CDC port of the
+    composite device "Pocket Groove". The firmware ignores DTR/RTS entirely;
+    the only thing that restarts it is the port being opened at 1200 baud
+    (PlatformIO's upload "touch", which reboots it into the bootloader).
+This tool never touches DTR/RTS and always opens at BAUD (115200), never 1200
+(test_pg.py checks both).
 """
 import argparse
 import base64
@@ -40,6 +48,10 @@ except ImportError:  # pragma: no cover - the launcher prints the fix
     serial = None
 
 ESPRESSIF_VID = 0x303A
+USJ_PID = 0x1001                  # the chip's USB-Serial/JTAG (and the variant's TinyUSB PID, same number)
+PRODUCT = "Pocket Groove"         # USB product string of the USB audio build
+BAUD = 115200                     # NEVER 1200: that reboots the USB audio build into its bootloader
+assert BAUD != 1200
 PREFIX = b"~PGX "
 PROTO_VERSION = 1
 CHUNK = 128
@@ -87,10 +99,19 @@ def parse_line(line):
 
 # ---- the link --------------------------------------------------------------
 
-def find_port():
-    if serial is None:
-        raise PgError("pyserial is missing")
-    ports = [p for p in serial.tools.list_ports.comports() if p.vid == ESPRESSIF_VID]
+def is_pocket_groove(p):
+    """The USB audio build's CDC port: its USB product string (pyserial: product, or on some
+    systems only the description) is "Pocket Groove"."""
+    return p.vid == ESPRESSIF_VID and any(PRODUCT in (x or "") for x in (p.product, p.description))
+
+
+def find_port(ports=None):
+    """The device's serial port. `ports`: pyserial ListPortInfo-like objects (default: the system's)."""
+    if ports is None:
+        if serial is None:
+            raise PgError("pyserial is missing")
+        ports = serial.tools.list_ports.comports()
+    ports = [p for p in ports if p.vid == ESPRESSIF_VID]
     # macOS lists each device twice (/dev/cu.* and /dev/tty.*): use cu.*, which does not wait for carrier.
     ports.sort(key=lambda p: (not p.device.startswith("/dev/cu."), p.device))
     seen, uniq = set(), []
@@ -103,6 +124,11 @@ def find_port():
         raise PgError("Pocket Groove not found on USB. Plug it in with a data cable (USB-C) and switch it on, "
                       "or name the port with --port")
     if len(uniq) > 1:
+        # The USB audio build names itself; the USB-Serial/JTAG of the normal build does not
+        # (any ESP32-S3 board shows the same 303a:1001 "USB JTAG/serial debug unit").
+        named = [p for p in uniq if is_pocket_groove(p)]
+        if len(named) == 1:
+            return named[0].device
         raise PgError("several Espressif devices found (%s): choose one with --port" %
                       ", ".join(p.device for p in uniq))
     return uniq[0].device
@@ -119,7 +145,8 @@ class Link:
         self.retried = 0
         try:
             # DTR/RTS stay as the OS raised them on open (both set): no reset, see the module doc.
-            self.ser = serial.Serial(port, 115200, timeout=0.02, write_timeout=2, exclusive=True)
+            # Always BAUD, never 1200 (the USB audio build reboots into its bootloader at 1200).
+            self.ser = serial.Serial(port, BAUD, timeout=0.02, write_timeout=2, exclusive=True)
         except (serial.SerialException, OSError) as e:
             msg = str(e)
             if "busy" in msg.lower() or "lock" in msg.lower() or getattr(e, "errno", None) == 16:
