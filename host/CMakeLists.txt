@@ -95,6 +95,9 @@ if(Python3_Interpreter_FOUND AND TARGET xfer_sim AND NOT WIN32)
   set_tests_properties(test_pg_client PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()
 
+# The hardware spike's portable parts (src/hwspike, env:hw-spike, docs/hw-spike.md).
+add_subdirectory(hwspike)
+
 # The desktop app (host/app, docs/DESKTOP.md): built only when SDL2 is found.
 option(PG_DESKTOP "Build the desktop app pocket-groove (needs SDL2)" ON)
 if(PG_DESKTOP)
