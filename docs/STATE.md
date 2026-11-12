@@ -17,8 +17,11 @@ the instrument renders stereo, sends it to the Mac as the "Pocket Groove" input 
 (L+R)/2 on the jack; serial is TinyUSB CDC (boot log replayed, tools/pg finds both ports).
 Built and checked offline only (all envs warning-free, host tests, run_checks.sh with the new
 stream-start model); env:cardputer-adv is byte-identical apart from build timestamps.
-Projected RAM: free 55 KB, minimum-ever 27 KB (default 66 / 38 KB). Waiting for the hardware
-checklist in docs/usb-audio.md section 10; then decide whether it becomes the default.
+Run on the owner's hardware and Mac (2026-11-12, no SD card): AUD mid-40s % with spikes just
+over 50 (jack-only build: about 30), heap 54 KB free / 34 KB minimum-ever (jack-only: 66 / 38),
+0 USB under/overruns, recording free of clicks. It is now the default env (default_envs);
+env:cardputer-adv stays as the jack-only build. Not yet checked on hardware: 32 kHz, unplug and
+sleep, flashing back to the jack-only build, heap with an SD card mounted (expect about 17 KB less).
 Stem bounce via tools/pg confirmed working on hardware (2026-11-12).
 
 Desktop app (tools/pg-desktop, host/app, docs/DESKTOP.md): SDL2 window + audio + Mac keyboard

@@ -11,19 +11,21 @@ Everything in `lib/pg` is portable C++17 and runs the same on the desktop, so th
 
 ## Build and flash the firmware
 
-You need PlatformIO Core 6.2.0 or newer and `git` on the `PATH` (the M5Stack libraries are fetched from GitHub). [`docs/BRINGUP.md`](docs/BRINGUP.md) has the installation steps per OS, serial-port permissions, the download-mode procedure and how to return to the factory firmware. It walks through the `smoke` hardware test; the instrument is flashed the same way with the `cardputer-adv` environment.
+You need PlatformIO Core 6.2.0 or newer and `git` on the `PATH` (the M5Stack libraries are fetched from GitHub). [`docs/BRINGUP.md`](docs/BRINGUP.md) has the installation steps per OS, serial-port permissions, the download-mode procedure and how to return to the factory firmware. It walks through the `smoke` hardware test; the instrument is flashed the same way with the `cardputer-adv-usb` environment.
 
-Build the instrument (the default environment):
+Build the instrument (the default environment). This is the standard firmware: the headphone jack plays in mono and the computer also receives the mix in stereo as a USB audio input named "Pocket Groove" (see [`docs/usb-audio.md`](docs/usb-audio.md)):
 
 ```bash
-pio run -e cardputer-adv
+pio run -e cardputer-adv-usb
 ```
 
 Build and flash it over USB-C:
 
 ```bash
-pio run -e cardputer-adv -t upload
+pio run -e cardputer-adv-usb -t upload
 ```
+
+`cardputer-adv` is the same instrument without USB audio (jack only, lower CPU load). To go from the USB build to it, run `pio run -e cardputer-adv-usb -t flashmode` first, then `pio run -e cardputer-adv -t upload`.
 
 Serial monitor (115200 baud; `r` prints a full report, `h` help, `m` during boot opens the boot menu; close it before using `tools/pg`):
 

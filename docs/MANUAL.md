@@ -912,7 +912,7 @@ A second firmware, `cardputer-adv-usb`, makes the Cardputer a USB audio interfac
 
 **`NO SD CARD`**: insert a FAT32 card before switching on (cards inserted later may not be detected; this part of the firmware may change).
 
-**Re-flashing.** See the README and `docs/BRINGUP.md`. In short: connect USB-C (a data cable), run `pio run -e cardputer-adv -t upload` from the repository. If the upload can't connect: switch off, hold G0 while plugging in the USB cable, release, upload again, then switch off and on. A normal upload rewrites only the firmware, so projects in internal storage should survive it; erasing the whole chip (`esptool ... erase-flash`) or flashing another firmware that formats the data partition deletes them. Copy anything precious to SD first.
+**Re-flashing.** See the README and `docs/BRINGUP.md`. In short: connect USB-C (a data cable), run `pio run -e cardputer-adv-usb -t upload` from the repository (the standard firmware, with stereo audio over USB; `cardputer-adv` is the jack-only build). If the upload can't connect: switch off, hold G0 while plugging in the USB cable, release, upload again, then switch off and on. A normal upload rewrites only the firmware, so projects in internal storage should survive it; erasing the whole chip (`esptool ... erase-flash`) or flashing another firmware that formats the data partition deletes them. Copy anything precious to SD first.
 
 ---
 
