@@ -45,6 +45,14 @@ Agreed order of work (2026-11-12, set by the owner):
 3. Full functionality assessment: the owner tests every instrument and setting (on the
    desktop build, faster) and gives feedback.
 
+Design direction (owner, 2026-11-12; brainstorm only, nothing built yet): capture the
+playfulness of the OP-1 without its feature set. Sounds are shaped through a few designed
+macro controls with a reactive picture, not through bare parameters; the bare parameters are
+NOT exposed to the player ("be bold and confident in our choices"). Tilt (the IMU) as a
+control appeals. Candidates: characters per voice, dice/mutate/morph, punch-in effects,
+mic sampling (try samples in flash on the Cardputer before considering a bigger device).
+The macros get designed from the owner's full pass through every sound on the desktop build.
+
 Known follow-ups:
 - USB audio build: what takes the 28 KB between free and minimum-ever heap (its `r` report
   prints the minimum by boot phase); if a mounted SD card was not part of the 66 / 38 KB
