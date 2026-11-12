@@ -3,7 +3,7 @@
 //
 //   bounce FILE.pgv | --demo N   [--out DIR] [--name NAME]
 //          [--pattern P] [--loops N] [--tail S] [--wet-stems] [--no-duck]
-//          [--sr 44100|32000] [--bits 16|24|32f] [--seed N]
+//          [--sr 44100|32000] [--bits 16|24|32f] [--seed N] [--progress]
 //
 // Renders the project's song chain (from slot 1 to the first END) if it has
 // one, otherwise pattern 1; --pattern P (1..16) renders pattern P --loops
@@ -22,6 +22,8 @@
 //
 // Loads .pgv files exactly as the device saved them (pg::io: header and
 // version checks, CRCs, PGLZ), including the autosaved session _last.pgv.
+// --progress prints "progress K N" after each of the N render passes (for
+// tools/pg --json and the desktop app's Stems list).
 #include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -121,6 +123,7 @@ int main(int argc, char** argv) {
   bounce::Request rq;
   std::string file, outDir, name;
   int demo = -1, patternArg = 0;
+  bool progress = false;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
     auto next = [&]() -> const char* {
@@ -135,6 +138,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(a, "--tail")) rq.opt.tailSec = float(std::atof(next()));
     else if (!std::strcmp(a, "--wet-stems")) rq.wet = true;
     else if (!std::strcmp(a, "--no-duck")) rq.noDuck = true;
+    else if (!std::strcmp(a, "--progress")) progress = true;
     else if (!std::strcmp(a, "--sr")) rq.opt.sampleRate = float(std::atof(next()));
     else if (!std::strcmp(a, "--seed")) rq.opt.seed = uint32_t(std::strtoul(next(), nullptr, 0));
     else if (!std::strcmp(a, "--bits")) {
@@ -221,6 +225,7 @@ int main(int argc, char** argv) {
       return 1;
     }
     faults += res1[p].faults;
+    if (progress) { std::printf("progress %zu %zu\n", p + 1, 2 * passes.size()); std::fflush(stdout); }
   }
   long len = endFrame;
   for (long ll : lastLoud) len = std::max(len, ll + 1);
@@ -273,6 +278,7 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "bounce: internal error: pass %zu is not deterministic\n", p);
       return 1;
     }
+    if (progress) { std::printf("progress %zu %zu\n", passes.size() + p + 1, 2 * passes.size()); std::fflush(stdout); }
   }
   for (size_t k = 0; k < nOut; ++k)
     if (!w[k]->close()) { std::fprintf(stderr, "bounce: write error on %s\n", paths[k].c_str()); return 1; }

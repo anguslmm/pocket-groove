@@ -9,6 +9,14 @@ Run it through the launcher, from the repository root:
     tools/pg bounce path/to/file.pgv  # render a file already on disk
     tools/pg push path/to/file.pgv    # copy a project to the device (--name, --sd, --force)
 
+--json (before the command) is for programs (the desktop app's Stems list):
+stdout carries one JSON object per line and nothing else, human messages go
+to stderr. {"type": "ls", "firmware", "playing", "sd", "truncated",
+"projects": [{"mount", "name", "size", "bpm", "valid"}]} for ls;
+{"type": "progress", "stage": "connect"|"pull"|"build"|"render", "done", "total"}
+while working; {"type": "done", "dir", "files": [...]} when a bounce has
+written its files; {"type": "error", "message"} on failure (exit code 1).
+
 Needs only pyserial. The protocol (pg/io/xfer.h on the device): every line is
 "~PGX <body> <crc32 hex>"; the host sends one request and waits for its reply,
 resending on a timeout (every request is idempotent), so a lost or corrupted
@@ -32,6 +40,7 @@ This tool never touches DTR/RTS and always opens at BAUD (115200), never 1200
 """
 import argparse
 import base64
+import json
 import os
 import random
 import re
@@ -72,6 +81,19 @@ ERRORS = {
 
 class PgError(Exception):
     pass
+
+
+JSON = False   # --json: machine-readable lines on stdout (see the module doc)
+
+
+def emit(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+def say(msg):
+    """A human message: stdout normally, stderr in --json mode (stdout is for the JSON lines)."""
+    print(msg, file=sys.stderr if JSON else sys.stdout)
 
 
 def frame(body):
@@ -384,6 +406,9 @@ def resolve(link, name, want_mount=None):
 
 
 def bar(done, total):
+    if JSON:
+        emit({"type": "progress", "stage": "pull", "done": done, "total": total})
+        return
     if sys.stderr.isatty():
         w = 30
         k = w * done // max(total, 1)
@@ -401,6 +426,10 @@ def cmd_ls(args):
     link, info = open_link(args)
     with link:
         ents, sd, trunc = list_projects(link)
+    if JSON:
+        emit({"type": "ls", "firmware": info["firmware"], "playing": info["playing"], "sd": sd, "truncated": trunc,
+              "projects": ents})
+        return 0
     print("Pocket Groove (firmware %s)%s" % (info["firmware"], ", PLAYING" if info["playing"] else ""))
     print("  %-10s %-6s %5s %8s" % ("NAME", "WHERE", "BPM", "BYTES"))
     for e in ents:
@@ -429,7 +458,7 @@ def pull(args, name, out=None, out_dir="projects"):
     with open(tmp, "wb") as f:
         f.write(data)
     os.replace(tmp, path)
-    print("pulled %s (%s, %d bytes) -> %s" % (local, "SD" if mount == "sd" else "flash", len(data), path))
+    say("pulled %s (%s, %d bytes) -> %s" % (local, "SD" if mount == "sd" else "flash", len(data), path))
     return path
 
 
@@ -483,11 +512,14 @@ def ensure_bounce_tool():
     if not shutil.which("cmake"):
         raise PgError("cmake is needed to build the renderer (macOS: brew install cmake)")
     print("building the renderer (build/host/bounce)...", file=sys.stderr)
+    if JSON:
+        emit({"type": "progress", "stage": "build", "done": 0, "total": 1})
     if not os.path.exists(os.path.join(build, "CMakeCache.txt")):
         subprocess.run(["cmake", "-S", os.path.join(ROOT, "host"), "-B", build], check=True,
                        stdout=subprocess.DEVNULL)
     jobs = str(max(2, os.cpu_count() or 2))
-    r = subprocess.run(["cmake", "--build", build, "--target", "bounce", "-j", jobs])
+    r = subprocess.run(["cmake", "--build", build, "--target", "bounce", "-j", jobs],
+                       stdout=sys.stderr if JSON else None)
     if r.returncode != 0 or not os.path.exists(exe):
         raise PgError("building build/host/bounce failed (see above)")
     return exe
@@ -500,7 +532,9 @@ def cmd_bounce(args):
             raise PgError("%s: no such file" % src)
         path = src
     else:
-        path = pull(args, src)
+        if JSON:
+            emit({"type": "progress", "stage": "connect", "done": 0, "total": 1})
+        path = pull(args, src, out_dir=args.pull_dir or "projects")
     exe = ensure_bounce_tool()
     cmd = [exe, path]
     if args.out:
@@ -513,7 +547,38 @@ def cmd_bounce(args):
         cmd.append("--wet-stems")
     if args.no_duck:
         cmd.append("--no-duck")
-    return subprocess.run(cmd).returncode
+    if not JSON:
+        return subprocess.run(cmd).returncode
+    return bounce_json(cmd)
+
+
+def bounce_json(cmd):
+    """Runs the renderer with --progress and reports it as JSON lines."""
+    emit({"type": "progress", "stage": "render", "done": 0, "total": 1})
+    p = subprocess.Popen(cmd + ["--progress"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out_dir, last_err = None, None
+    for raw in p.stdout:
+        line = raw.decode("utf-8", "replace").rstrip("\n")
+        m = re.match(r"^progress (\d+) (\d+)$", line)
+        if m:
+            emit({"type": "progress", "stage": "render", "done": int(m.group(1)), "total": int(m.group(2))})
+            continue
+        sys.stderr.write(line + "\n")
+        m = re.match(r"^bounce: .* -> (.*)/$", line)
+        if m:
+            out_dir = m.group(1)
+        elif line.startswith("bounce: "):
+            last_err = line[len("bounce: "):]
+    rc = p.wait()
+    if rc != 0 or not out_dir:
+        src = cmd[1]
+        if last_err and last_err.startswith(src + ": "):   # the renderer could not load the file
+            raise PgError("%s did not load: %s" % (os.path.basename(src), last_err[len(src) + 2:]))
+        raise PgError("could not render the stems: %s" % (last_err or "the renderer failed (exit %d)" % rc))
+    out_dir = os.path.abspath(out_dir)
+    files = sorted(f for f in os.listdir(out_dir) if f.endswith((".wav", "_info.txt")))
+    emit({"type": "done", "dir": out_dir, "files": files})
+    return 0
 
 
 def main(argv=None):
@@ -521,6 +586,7 @@ def main(argv=None):
     ap.add_argument("--port", help="serial port (default: auto-detect Espressif USB, or $PG_PORT)")
     ap.add_argument("--timeout", type=float, default=0.6, help=argparse.SUPPRESS)
     ap.add_argument("-v", "--verbose", action="store_true", help="show the device's log lines")
+    ap.add_argument("--json", action="store_true", help="machine-readable output, one JSON object per line")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("ls", help="list the projects on the device")
     p = sub.add_parser("pull", help="copy a project from the device to ./projects/NAME.pgv")
@@ -545,20 +611,27 @@ def main(argv=None):
     p.add_argument("--bits", choices=("16", "24", "32f"), help="default 32f")
     p.add_argument("--wet-stems", action="store_true", help="each stem with its own delay/reverb")
     p.add_argument("--no-duck", action="store_true", help="stems without sidechain ducking")
+    p.add_argument("--pull-dir", help="where a project pulled from the device goes (default projects)")
     g = p.add_mutually_exclusive_group()
     g.add_argument("--sd", action="store_true", help=argparse.SUPPRESS)
     g.add_argument("--int", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    global JSON
+    JSON = args.json
     try:
         return {"ls": cmd_ls, "pull": cmd_pull, "push": cmd_push, "bounce": cmd_bounce}[args.cmd](args)
     except PgError as e:
         print("pg: %s" % e, file=sys.stderr)
+        if JSON:
+            emit({"type": "error", "message": str(e)})
         return 1
     except KeyboardInterrupt:
         print("pg: interrupted (the device drops the half transfer after 5 s)", file=sys.stderr)
         return 130
     except OSError as e:
         print("pg: %s" % e, file=sys.stderr)
+        if JSON:
+            emit({"type": "error", "message": str(e)})
         return 1
 
 
