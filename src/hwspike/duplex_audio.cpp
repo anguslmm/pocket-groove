@@ -1,6 +1,14 @@
 // Full-duplex ES8311 audio for the hardware spike. See duplex_audio.h.
 //
-// Register sources (docs/hardware-notes.md cites them; read in this session):
+// Boot default (docs/hardware-notes.md 11.7): esp_codec_dev's es8311_open +
+// set_fs + start (espCodecDevInit), exactly the sequence the device recorded
+// with as mic-matrix config 6 on 2026-11-12, then the gain preset (0x14 /
+// 0x16), with GPIO46's output driver switched off after the RX channel is set
+// up (kDinOutputOff: the confirmed root cause of the constant -1). Loopback
+// off (0x44 = 0x08, both slots carry the ADC; the page records the left one).
+//
+// spikeCodecInit(), the first default, is kept for the matrix. Its sources
+// (docs/hardware-notes.md cites them; read in an earlier session):
 //  * DAC: M5Unified 0.2.29 _speaker_enabled_cb_cardputer_adv, as
 //    src/platform/audio_out.cpp uses it (the instrument's proven sequence,
 //    including reg 0x09 = 0x00 and the volume ramp).
@@ -100,9 +108,6 @@ bool wr(uint8_t reg, uint8_t val) {
 }
 bool rd(uint8_t reg, uint8_t* v) { return M5.In_I2C.readRegister(kCodecAddr, reg, v, 1, kCodecHz); }
 
-uint8_t s_pga = 10;        // reg 0x14 low nibble
-uint8_t s_reg14Hi = 0x10;  // reg 0x14 high bits: MIC1P/MIC1N, no DMIC
-int s_reg16 = -1;          // -1 = power-on value
 
 PinSnap s_pinBoot, s_pinI2s;
 bool s_pinBootTaken = false;
@@ -127,6 +132,25 @@ PinSnap snapPin() {
   return p;
 }
 
+uint8_t s_pga = 10;        // reg 0x14 low nibble
+uint8_t s_reg14Hi = 0x10;  // reg 0x14 high bits: MIC1P/MIC1N, no DMIC
+int s_reg16 = 0x24;        // esp_codec_dev's value; < 0 = the value read before the first init
+
+void readBoot16() {
+  if (s_boot16Read) return;
+  uint8_t v = 0;
+  if (rd(0x16, &v)) {
+    s_boot16 = v;
+    s_boot16Read = true;
+  }
+}
+
+bool writeGainRegs() {
+  bool ok = wr(0x14, static_cast<uint8_t>(s_reg14Hi | (s_pga & 0x0F)));
+  ok = wr(0x16, s_reg16 < 0 ? s_boot16 : static_cast<uint8_t>(s_reg16)) && ok;
+  return ok;
+}
+
 bool codecInit() {
   if (s_cfg.codec) return s_cfg.codec(s_cfg.codecUser);
   return defaultCodecInit();
@@ -134,14 +158,8 @@ bool codecInit() {
 
 }  // namespace
 
-bool defaultCodecInit() {
-  if (!s_boot16Read) {
-    uint8_t v = 0;
-    if (rd(0x16, &v)) {
-      s_boot16 = v;
-      s_boot16Read = true;
-    }
-  }
+bool spikeCodecInit() {
+  readBoot16();
   static const uint8_t seq[][2] = {
       {0x00, 0x80},   // reset released, chip state machine on
       {0x01, 0xBF},   // clock manager: MCLK from BCLK, DAC and ADC clocks on
@@ -159,9 +177,61 @@ bool defaultCodecInit() {
   };
   bool ok = true;
   for (auto& r : seq) ok = wr(r[0], r[1]) && ok;
-  ok = wr(0x14, static_cast<uint8_t>(s_reg14Hi | (s_pga & 0x0F))) && ok;
-  ok = wr(0x16, s_reg16 < 0 ? s_boot16 : static_cast<uint8_t>(s_reg16)) && ok;
+  return writeGainRegs() && ok;
+}
+
+bool espCodecDevInit(bool dacRef) {
+  readBoot16();
+  uint8_t v = 0;
+  auto R = [&v](uint8_t reg) -> uint8_t {
+    v = 0;
+    rd(reg, &v);
+    return v;
+  };
+  bool ok = true;
+  // es8311_open (slave, use_mclk = false, no inversion)
+  if (R(0x0D) != 0xFA) ok = wr(0x0D, 0xFA) && ok;
+  ok = wr(0x44, 0x08) && ok;   // "enhance I2C noise immunity", written twice by the driver
+  ok = wr(0x44, 0x08) && ok;
+  static const uint8_t open1[][2] = {{0x01, 0x30}, {0x02, 0x00}, {0x03, 0x10}, {0x16, 0x24}, {0x04, 0x10}, {0x05, 0x00},
+                                     {0x0B, 0x00}, {0x0C, 0x00}, {0x10, 0x1F}, {0x11, 0x7F}, {0x00, 0x80}};
+  for (auto& r : open1) ok = wr(r[0], r[1]) && ok;
+  ok = wr(0x00, static_cast<uint8_t>(R(0x00) & 0xBF)) && ok;             // slave
+  ok = wr(0x01, 0xBF) && ok;                                             // 0x3F | MCLK from SCLK
+  ok = wr(0x06, static_cast<uint8_t>(R(0x06) & ~0x20)) && ok;            // SCLK not inverted
+  ok = wr(0x13, 0x10) && ok;
+  ok = wr(0x1B, 0x0A) && ok;
+  ok = wr(0x1C, 0x6A) && ok;
+  ok = wr(0x44, dacRef ? 0x58 : 0x08) && ok;                             // 0x58: R slot = DAC reference
+  // es8311_set_fs: 16 bit, I2S normal, 44.1 kHz with MCLK = 256 fs
+  const uint8_t d = static_cast<uint8_t>(R(0x09) | 0x0C), a = static_cast<uint8_t>(R(0x0A) | 0x0C);
+  ok = wr(0x09, d) && ok;
+  ok = wr(0x0A, a) && ok;
+  ok = wr(0x09, static_cast<uint8_t>(R(0x09) & 0xFC)) && ok;
+  ok = wr(0x0A, static_cast<uint8_t>(R(0x0A) & 0xFC)) && ok;
+  ok = wr(0x02, static_cast<uint8_t>((R(0x02) & 0x07) | (0 << 5) | (3 << 3))) && ok;
+  ok = wr(0x05, 0x00) && ok;
+  ok = wr(0x03, static_cast<uint8_t>((R(0x03) & 0x80) | (0 << 6) | 0x10)) && ok;
+  ok = wr(0x04, static_cast<uint8_t>((R(0x04) & 0x80) | 0x10)) && ok;
+  ok = wr(0x07, static_cast<uint8_t>((R(0x07) & 0xC0) | 0x00)) && ok;
+  ok = wr(0x08, 0xFF) && ok;
+  ok = wr(0x06, static_cast<uint8_t>((R(0x06) & 0xE0) | (4 - 1))) && ok;
+  // es8311_start (BOTH, analog mic)
+  ok = wr(0x00, 0x80) && ok;
+  ok = wr(0x01, 0xBF) && ok;
+  ok = wr(0x09, static_cast<uint8_t>(R(0x09) & 0xBF)) && ok;
+  ok = wr(0x0A, static_cast<uint8_t>(R(0x0A) & 0xBF)) && ok;
+  static const uint8_t start[][2] = {{0x17, 0xBF}, {0x0E, 0x02}, {0x12, 0x00}, {0x14, 0x1A}};
+  for (auto& r : start) ok = wr(r[0], r[1]) && ok;
+  ok = wr(0x14, static_cast<uint8_t>(R(0x14) & ~0x40)) && ok;
+  static const uint8_t start2[][2] = {{0x0D, 0x01}, {0x15, 0x40}, {0x37, 0x08}, {0x45, 0x00}};
+  for (auto& r : start2) ok = wr(r[0], r[1]) && ok;
   return ok;
+}
+
+bool defaultCodecInit() {
+  const bool ok = espCodecDevInit(false);
+  return writeGainRegs() && ok;
 }
 
 namespace {
@@ -351,9 +421,7 @@ uint8_t volumeReg() { return s_cfg.volumeReg; }
 bool setMicGain(uint8_t pgaNibble, int reg16) {
   s_pga = pgaNibble > 10 ? 10 : pgaNibble;
   s_reg16 = reg16;
-  bool ok = wr(0x14, static_cast<uint8_t>(s_reg14Hi | s_pga));
-  ok = wr(0x16, s_reg16 < 0 ? s_boot16 : static_cast<uint8_t>(s_reg16)) && ok;
-  return ok;
+  return writeGainRegs();
 }
 uint8_t bootReg16() { return s_boot16; }
 bool codecRead(uint8_t reg, uint8_t* v) { return rd(reg, v); }

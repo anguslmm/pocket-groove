@@ -25,6 +25,7 @@
 #include "app.h"
 #include "duplex_audio.h"
 #include "mic_matrix.h"
+#include "mic_quality.h"
 #include "pg/platform.h"
 
 namespace sys = plat::sys;
@@ -92,6 +93,7 @@ uint32_t g_lastDraw = 0;
 void process(const int16_t* in, int16_t* out, int frames, void*) {
   sampler::input(in, frames);
   if (micmatrix::running()) micmatrix::process(in, out, frames);   // test tone + capture
+  else if (quality::running()) quality::process(in, out, frames);  // silence / test tone + capture
   else if (g_page == kTilt) tilt::render(out, frames);
   else sampler::render(out, frames);
 }
@@ -119,7 +121,7 @@ void handleKey(const keys::Event& e) {
       return;
     }
     if (k == kMinus || k == kEquals) {
-      if (micmatrix::running()) { app::msg("mic matrix running"); return; }
+      if (micmatrix::running() || quality::running()) { app::msg("measurement running"); return; }
       int v = duplex::volumeReg() + (k == kEquals ? 4 : -4);
       if (v > 0xBF) v = 0xBF;
       if (v < 0x40) v = 0x40;
@@ -146,8 +148,12 @@ void pollSerial() {
         sampler::startMatrix();
         break;
       case 'Q': micmatrix::report(); break;
+      case 'N':
+        setPage(kSampler);
+        sampler::startQuality();
+        break;
       case '?':
-        app::sp("[hwspike] serial: T tilt report, S sampler report, A all, > next page, M mic matrix, Q matrix report\n");
+        app::sp("[hwspike] serial: T tilt report, S sampler report, A all, > next page, M mic matrix, Q matrix report, N mic quality\n");
         break;
       default: break;
     }
@@ -175,11 +181,21 @@ void setup() {
   cfg.sampleRate = app::g_sampleRate;
   const bool aok = duplex::begin(cfg, process, nullptr);
   app::sp("[boot] audio full duplex: %s %s\n", aok ? "OK" : "FAILED", duplex::lastError());
+  {
+    uint8_t r14 = 0, r15 = 0, r44 = 0;
+    duplex::codecRead(0x14, &r14);
+    duplex::codecRead(0x15, &r15);
+    duplex::codecRead(0x44, &r44);
+    const PinSnap pin = duplex::readPin();
+    app::sp("[boot] mic: esp_codec_dev init (matrix cfg 6), r14=%02X r15=%02X r44=%02X, GPIO46 oe=%u (0 = DIN fix on), "
+            "recording the LEFT slot\n",
+            r14, r15, r44, pin.oe);
+  }
 
   tilt::begin();
   sampler::begin();
   tilt::enter();
-  app::sp("[boot] done. Tab/G0 page, Enter report, SAMPLER m = mic matrix. Serial: T S A M Q > ?\n");
+  app::sp("[boot] done. Tab/G0 page, Enter report, SAMPLER r record, n mic quality, m mic matrix. Serial: T S A M Q N > ?\n");
 }
 
 void loop() {

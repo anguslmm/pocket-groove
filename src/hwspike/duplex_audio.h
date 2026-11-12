@@ -49,7 +49,7 @@ struct Config {
   uint8_t  dmaDesc = 6;       // DMA buffers of kBlockFrames each direction (6 x 128 = 17.4 ms at 44.1 kHz)
   uint8_t  volumeReg = 0x80;  // ES8311 reg 0x32 (0xBF = 0 dB, 0.5 dB/step); 0x80 = -31.5 dB, safe for earbuds
   uint8_t  slotBits = 16;     // 16: 32 BCLK per frame (32 fs); 32: 64 fs (data stays 16-bit, MSB first)
-  uint8_t  dinMode = kDinAsFound;
+  uint8_t  dinMode = kDinOutputOff;   // the fix (docs/hardware-notes.md 11.6 / 11.7)
   CodecFn  codec = nullptr;
   void*    codecUser = nullptr;
   bool     codecBeforeClock = false;   // write the codec before the I2S clocks start (M5Unified's order)
@@ -79,14 +79,22 @@ bool    codecPresent();
 bool    setVolumeReg(uint8_t reg);
 uint8_t volumeReg();
 // Microphone path. pgaNibble 0..10 = 0..30 dB analog PGA (reg 0x14 = 0x10 | n);
-// reg16 < 0 restores the value read at begin() (the references never write it).
+// reg16 < 0 writes the value read before the first codec init (power-on 0x04).
 bool    setMicGain(uint8_t pgaNibble, int reg16);
 uint8_t bootReg16();
 bool    codecRead(uint8_t reg, uint8_t* v);
 bool    codecWrite(uint8_t reg, uint8_t v);
-// The spike's own sequence (DAC: the instrument's; ADC: the Rust BSP's), with
-// reg 0x14 = reg14Hi | PGA. Usable as a building block by other CodecFns.
+// Codec sequences (also building blocks for other CodecFns):
+//  defaultCodecInit(): espCodecDevInit(false) + the gain registers. The boot default.
+//  espCodecDevInit(dacRef): esp-adf esp_codec_dev es8311_open + set_fs + start
+//    (slave, MCLK from BCLK, 16-bit, analog mic, PGA 30 dB, 0x16 = 0x24, 0x15 = 0x40);
+//    dacRef = true puts the DAC reference in the R slot (0x44 = 0x58).
+//  spikeCodecInit(): the spike's first sequence (DAC: the instrument's; ADC:
+//    the Rust BSP's) + the gain registers.
+// The gain registers: 0x14 = reg14Hi | PGA, 0x16 = reg16.
 bool    defaultCodecInit();
+bool    espCodecDevInit(bool dacRef);
+bool    spikeCodecInit();
 void    setReg14Hi(uint8_t hi);    // input select / DMIC bits kept by setMicGain (default 0x10)
 uint8_t micPga();
 int     micReg16();                // -1 = power-on value

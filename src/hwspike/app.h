@@ -52,6 +52,7 @@ void draw();
 void tick();
 void report();          // the SAMPLER block, then the MICMATRIX block if a run finished
 bool startMatrix();     // key m: the self-diagnosing mic matrix (mic_matrix.h)
+bool startQuality();    // key n: noise floor per gain + tone THD (mic_quality.h)
 }  // namespace sampler
 
 }  // namespace hws
