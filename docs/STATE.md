@@ -14,6 +14,18 @@ USB audio (stereo input over USB, UAC1 + CDC): feasible with the prebuilt TinyUS
 env:usb-audio-spike (src/usbspike, build/firmware/pocket-groove-usbspike.bin) built and
 checked offline only, waiting for the hardware test in docs/usb-audio.md section 8.
 
+Agreed order of work (2026-11-12, set by the owner):
+1. Owner tests on hardware what is on main: backlight/ghost fixes, tools/pg ls/pull/bounce,
+   env:usb-audio-spike (docs/usb-audio.md section 8). Fix what that turns up.
+2. Desktop build of the instrument for macOS: same core and UI in a window (SDL2), Mac
+   keyboard as the Cardputer keys, stereo audio out, projects as files, push/pull to the device.
+   Faithful to the device first; desktop-only extras only where the owner feels the pinch.
+   Nice to have: MIDI controller input for playing notes. Open design question: what a MIDI
+   key does on the lead in a chord mode, and how played chords fit the one-note-plus-chord-type
+   Step without changing the project format.
+3. Full functionality assessment: the owner tests every instrument and setting (on the
+   desktop build, faster) and gives feedback.
+
 Known follow-ups:
 - pg::io: FAT (SD) save-replace has a power-cut window inside FatFs rename; make it safe.
 - Per-pattern sound settings and a second p-lock per step (data-model change, v0.2).
