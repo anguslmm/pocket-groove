@@ -123,21 +123,34 @@ AUDIO_OBJS = ("/pg/drums/", "/pg/bass/bass.cpp", "/pg/lead/lead.cpp", "/pg/engin
 _hot = [re.compile(p) for p in HOT + (STEP if TIER >= 2 else [])]
 
 
-TOOL_TIMEOUT_S = 120
+TOOL_TIMEOUT_S = 60
 
 
 def _run(cmd, **kw):
-    # Every toolchain call goes through here: stdin is never inherited (a tool
-    # waiting on the terminal would look like a hung build) and a tool that
-    # does not finish fails the build with its name instead of stalling it.
-    kw.setdefault("stdin", subprocess.DEVNULL)
-    if "input" in kw:
-        kw.pop("stdin")
+    # Every toolchain call goes through here. The xtensa-esp32s3-elf-* tools are
+    # wrappers that start the real xtensa-esp-elf-* tool as a child, so the
+    # call runs in its own process group and a timeout kills the whole group
+    # (killing only the wrapper would leave the child holding the output pipe,
+    # and the build would still hang). stdin is never inherited.
+    import os
+    import signal
+    data = kw.pop("input", None)
+    p = subprocess.Popen(cmd, stdin=subprocess.PIPE if data is not None else subprocess.DEVNULL,
+                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True, **kw)
     try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S, **kw)
+        out, err = p.communicate(data, timeout=TOOL_TIMEOUT_S)
     except subprocess.TimeoutExpired:
-        raise RuntimeError("[audio-ram] %s did not finish within %d s (arguments: %s)"
+        try:
+            os.killpg(p.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        try:
+            p.communicate(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+        raise RuntimeError("[audio-ram] %s did not finish within %d s (last arguments: %s)"
                            % (cmd[0], TOOL_TIMEOUT_S, " ".join(cmd[-2:])))
+    return subprocess.CompletedProcess(cmd, p.returncode, out, err)
 
 
 def _sections(objcopy, path):
@@ -174,6 +187,7 @@ def _relocate(target, source, env):
             raise RuntimeError("[audio-ram] could not read sections of " + path)
         args = []
         if any(o in rel for o in AUDIO_OBJS):
+            print("[audio-ram] %s ..." % rel.split("/pg/")[-1], flush=True)
             fns = sorted({s.split(".", 2)[2] for s in secs if s.startswith((".text.", ".literal."))})
             dm = _demangle(cxxfilt, fns)
             pick = {f for f in fns if any(h.search(dm.get(f, f)) or h.search(f) for h in _hot)}
@@ -209,10 +223,26 @@ def _relocate_all(target, source, env):
     # (idempotent: renamed sections no longer match .text.* / .literal.*).
     # A post-action on each object would be neater, but PlatformIO does not run
     # post-actions attached inside a build middleware.
+    import faulthandler
     import glob
     import os
+    import sys
+    # If this step stalls, print where (the Python stack of every thread)
+    # every 20 s instead of sitting silent.
+    faulthandler.dump_traceback_later(20, repeat=True, file=sys.__stderr__)
+    try:
+        return _relocate_all_body(target, source, env)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
+
+
+def _relocate_all_body(target, source, env):
+    import glob
+    import os
+    print("[audio-ram] scanning %s" % env.subst("$BUILD_DIR"), flush=True)
     objs = [o for o in glob.glob(os.path.join(env.subst("$BUILD_DIR"), "**", "*.o"), recursive=True)
             if "/pg/pg/" in o.replace("\\", "/")]
+    print("[audio-ram] %d lib/pg objects" % len(objs), flush=True)
     _relocate([type("N", (), {"__str__": lambda self, o=o: o})() for o in objs], None, env)
     # Fail the build rather than ship an image that silently stayed in flash.
     # (On a re-link without recompiling, the sections are already renamed and
