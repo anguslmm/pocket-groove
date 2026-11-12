@@ -56,6 +56,24 @@ control appeals. Candidates: characters per voice, dice/mutate/morph, punch-in e
 mic sampling (try samples in flash on the Cardputer before considering a bigger device).
 The macros get designed from the owner's full pass through every sound on the desktop build.
 
+Motion (decided with the owner 2026-11-12, to be built as part of the macro redesign; needs a
+new project format, which is fine because the owner writes no real song before the redesign):
+- Today: one parameter lock per step (set by hand, applied at the note), live NOTE recording,
+  ratchets stored per step; ALT+pad rolls and parameter movements are not recorded.
+- Decision: one set of macro values per NOTE (no values on empty steps for now). Between notes
+  the value moves in a straight line through time, arriving exactly at the next note's start
+  and continuing through silence ("rule A"); so a note held across a sweep plays a ramp. A value
+  cannot rise and fall within one note. The last note of a pattern glides toward the first note
+  of whatever plays next; a track with one note stays constant. Motion recording writes the live
+  macro values (keys or tilt) into the notes as the pattern passes.
+- Known limit, accepted: a note followed by a long gap can only glide slowly. If it bites, allow
+  values on empty steps later; that would not change how existing recordings play.
+- Engineering this needs: voices that accept smooth parameter changes cheaply (some drums
+  recompute expf/powf on every change), and RAM for the values (about 16-32 KB for 4 macros on
+  every step of 16 patterns x 8 tracks x 64 steps, against a 34 KB minimum-free margin).
+- Tilt verified on hardware (hw-spike): fun, steady, no key loss; all four response presets
+  useful, so response speed should belong to the control being moved, not be global.
+
 Known follow-ups:
 - USB audio build: what takes the 28 KB between free and minimum-ever heap (its `r` report
   prints the minimum by boot phase); if a mounted SD card was not part of the 66 / 38 KB
