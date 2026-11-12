@@ -84,6 +84,14 @@ if(TARGET itest_bounce AND TARGET bounce)
   add_dependencies(itest_bounce bounce)
 endif()
 
+# The owner's assessment sheet must list exactly the instrument's parameters, with the
+# ranges and defaults the code has (host/tools/param_reference.cpp, --check-assessment).
+if(TARGET param_reference)
+  add_test(NAME check_assessment
+           COMMAND param_reference --check-assessment docs/ASSESSMENT.md
+           WORKING_DIRECTORY ${PG_ROOT})
+endif()
+
 # The USB transfer client (tools/pg.py) against the device's protocol module
 # (pg::io::Xfer in host/tools/xfer_sim, on a pseudo-terminal). Needs Python 3
 # with pyserial; skipped (exit 77) without pyserial.
