@@ -12,7 +12,7 @@ brew install sdl2 cmake
 
 You also need the Xcode command-line tools (`xcode-select --install`) for the compiler. Nothing else: no PlatformIO, no Python.
 
-Recent Homebrew versions ship `sdl2` as *sdl2-compat* (the SDL2 interface running on SDL3). That is fine; the app prints the SDL version it runs on at start. If something misbehaves and you want a plain SDL2 instead, build it from source with the app: `cmake -S host -B build/host -DPG_FETCH_SDL2=ON` (downloads SDL 2.32 from GitHub, takes a few minutes once).
+What `brew install sdl2` installs: Homebrew has no separate SDL2 formula any more; `sdl2` is an alias of **sdl2-compat** (2.32.x, the SDL2 interface implemented on top of SDL3, which it pulls in as `sdl3`). It installs the SDL2 headers, `sdl2-config`, `sdl2.pc` and a CMake package (`lib/cmake/SDL2/SDL2Config.cmake`, target `SDL2::SDL2`), which is what the build looks for; CMake finds it under `/opt/homebrew` (Apple silicon) or `/usr/local` (Intel) without any setting. The app prints the SDL version it runs on at start (2.32.x for sdl2-compat). If something in the window, keyboard or audio misbehaves and you suspect the compatibility layer, build a plain SDL2 from source with the app instead: `cmake -S host -B build/host -DPG_FETCH_SDL2=ON` (downloads SDL 2.32.10 from GitHub, a few minutes once; `tools/pg-desktop` keeps that setting).
 
 On Debian/Ubuntu: `apt install libsdl2-dev cmake g++`.
 
@@ -35,7 +35,7 @@ The first launch behaves like the device's first boot: the factory song ACIDJAM 
 Keys are mapped by **position**, not by the letter printed on them, so the layout of your Mac (US, German, French, ...) does not matter: the key where a US keyboard has `Q` is always the Cardputer's `q`. Letters, digits and punctuation are the same keys as on the Cardputer. The Cardputer's modifiers sit where the Mac's are:
 
 ```
-  F1 = G0 (side button)     F2 = audio stats in the title bar     F9 = record on / off
+  G0 (side button) = F1 or esc     record on / off = F9 or cmd+R     stats in the title bar = F2 or cmd+I
 
   ┌─────┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬───┬──────────┐
   │  `  │ 1 │ 2 │ 3 │ 4 │ 5 │ 6 │ 7 │ 8 │ 9 │ 0 │ - │ = │  delete  │
@@ -67,11 +67,16 @@ Keys are mapped by **position**, not by the letter printed on them, so the layou
 | `del` | Delete (the backspace key) |
 | `ent` | Return (and keypad Enter / fn+Return) |
 | `space` | Space |
-| G0 (side button) | F1 |
+| G0 (side button) | F1 or Escape |
 
-On a MacBook or Apple keyboard the top row is brightness, volume and media keys: hold the keyboard's `fn` (globe) key with F1 / F2 / F9, or switch on *Use F1, F2, etc. keys as standard function keys* in System Settings > Keyboard.
+| App command | Keys |
+|---|---|
+| record on / off | F9 or Cmd+R |
+| audio stats in the title bar | F2 or Cmd+I |
 
-Command (⌘) does nothing in Pocket Groove: macOS uses it (Cmd+Q quits, Cmd+Tab switches apps, Cmd+H hides, Cmd+M minimises). Pressing Command releases every key the app holds, so Cmd+Tab in the middle of a chord leaves nothing stuck. When the window loses focus, every held key is released too (no stuck notes, no stuck modifiers). Holding a key does not auto-repeat in the OS sense: the instrument does its own repeat on `-` / `=` as on the device.
+On a MacBook or Apple keyboard the top row is brightness, volume and media keys: there, F1 / F2 / F9 need the keyboard's `fn` (globe) key held (or *Use F1, F2, etc. keys as standard function keys* in System Settings > Keyboard). Escape, Cmd+R and Cmd+I work without it.
+
+Command (⌘) never reaches the instrument as a key. Cmd+R and Cmd+I are the app's two shortcuts (neither R nor I is played, on the press or the release); everything else with Command is macOS's (Cmd+Q quits, Cmd+Tab switches apps, Cmd+H hides, Cmd+M minimises, Cmd+W closes) or nothing. Pressing Command releases every key the app holds, so Cmd+Tab in the middle of a chord leaves nothing stuck. When the window loses focus, every held key is released too (no stuck notes, no stuck modifiers). Holding a key does not auto-repeat in the OS sense: the instrument does its own repeat on `-` / `=` as on the device.
 
 On ISO keyboards (with a key left of `Z`), that key and the key left of `1` both act as `` ` ``.
 
@@ -90,9 +95,11 @@ alt = Right Shift      # ... and ALT on right Shift
 = = Keypad +           # a second key for =
 record = F10           # F10 records as well
 none = F2              # F2 does nothing
+stats = Cmd+S          # a Command shortcut (record and stats only)
+none = Cmd+I           # remove one
 ```
 
-Cardputer keys by legend as in the manual (`` ` `` `1` ... `del` `tab` `q` ... `fn` `sft` `a` ... `ent` `ctl` `opt` `alt` `z` ... `spc` `G0`, or `shift`, `space`, `enter`, `backspace`, ...), plus `record`, `stats` and `none`. Scancode names are SDL's (`A`, `1`, `Left Shift`, `Right Alt`, `Backspace`, `F1`, `Keypad +`, ...; SDL calls Option "Alt" and Command "GUI"). `tools/pg-desktop --print-keymap` prints the map in force.
+Cardputer keys by legend as in the manual (`` ` `` `1` ... `del` `tab` `q` ... `fn` `sft` `a` ... `ent` `ctl` `opt` `alt` `z` ... `spc` `G0`, or `shift`, `space`, `enter`, `backspace`, ...), plus `record`, `stats` and `none`. `Cmd+<name>` makes a Command shortcut; those can only be `record` or `stats`, never a Cardputer key. Scancode names are SDL's (`A`, `1`, `Left Shift`, `Right Alt`, `Backspace`, `F1`, `Keypad +`, ...; SDL calls Option "Alt" and Command "GUI"). `tools/pg-desktop --print-keymap` prints the map in force.
 
 ## Options
 
@@ -128,7 +135,7 @@ There is no SD card unless you start with `--sd PATH` (any directory; it plays t
 
 ## Recording
 
-F9 starts recording what you hear to `bounces/live/YYYYMMDD-HHMMSS.wav` (16-bit stereo at the engine's rate; in `--mono` both channels are the same); F9 again stops. The title bar shows `[REC m:ss]` while it runs. Quitting stops and closes the file. The recording is the engine's output sample for sample, live moves included, before the Mac's volume. (`tools/pg bounce` renders a saved song to stems instead; it does not capture live moves.)
+F9 (or Cmd+R) starts recording what you hear to `bounces/live/YYYYMMDD-HHMMSS.wav` (16-bit stereo at the engine's rate; in `--mono` both channels are the same); the same key again stops. The title bar shows `[REC m:ss]` while it runs. Quitting stops and closes the file. The recording is the engine's output sample for sample, live moves included, before the Mac's volume. (`tools/pg bounce` renders a saved song to stems instead; it does not capture live moves.)
 
 ## Differences from the device
 
@@ -143,7 +150,7 @@ F9 starts recording what you hear to `bounces/live/YYYYMMDD-HHMMSS.wav` (16-bit 
 
 - *No keys reach the window* after starting from Terminal: click into the window once (macOS sometimes leaves keyboard focus with Terminal for a binary that is not an app bundle).
 - *Clicks or dropouts*: `--buffer 512`. F2 shows the audio callback's load and counts late callbacks, the sample rate, the buffer the output device actually gave, and the pixel factor of the picture (8x on a Retina screen at the default size).
-- *F9 changes the volume or skips a track*: see the note on function keys above (fn + F9).
+- *F9 changes the volume or skips a track*: use Cmd+R, or fn + F9 (see the note on function keys above).
 - *Control+Space switches the input source*, or *Control+arrow / Control+number switches Spaces*: macOS keyboard shortcuts take those before any app; turn them off in System Settings > Keyboard > Keyboard Shortcuts if you need the combination.
 - *`SDL2 not found`*: `brew install sdl2`, then run `tools/pg-desktop` again (it re-runs CMake).
 

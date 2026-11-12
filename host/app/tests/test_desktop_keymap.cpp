@@ -56,6 +56,13 @@ void testDefaultMap() {
   CHECK(m.lookup(SDL_SCANCODE_RALT) == kKAlt);
   CHECK(m.lookup(SDL_SCANCODE_LCTRL) == kKCtrl && m.lookup(SDL_SCANCODE_RCTRL) == kKCtrl);
   CHECK(m.lookup(SDL_SCANCODE_F1) == kKG0);
+  CHECK(m.lookup(SDL_SCANCODE_ESCAPE) == kKG0);
+  CHECK(m.scancodeFor(kKG0) == SDL_SCANCODE_F1);
+  CHECK(m.lookupCmd(SDL_SCANCODE_R) == desk::kActRecord);
+  CHECK(m.lookupCmd(SDL_SCANCODE_I) == desk::kActStats);
+  CHECK(m.lookupCmd(SDL_SCANCODE_Q) == desk::kUnbound);
+  for (int sc = 0; sc < desk::KeyMap::kScancodes; ++sc)   // no Command shortcut is an instrument key
+    CHECK(m.lookupCmd(sc) == desk::kUnbound || m.lookupCmd(sc) >= desk::kActRecord);
   CHECK(m.lookup(SDL_SCANCODE_F9) == desk::kActRecord);
   CHECK(m.lookup(SDL_SCANCODE_F2) == desk::kActStats);
   // Command is never bound, nor Caps Lock or the arrows.
@@ -75,7 +82,9 @@ void testParse() {
                 "  = = Keypad +\n"
                 "none = F2\n"
                 "record = F10\n"
-                "G0 = F12\n",
+                "G0 = F12\n"
+                "record = cmd+F5\n"
+                "none = Cmd+I\n",
                 &err));
   CHECK(m.lookup(SDL_SCANCODE_RALT) == kKFn);
   CHECK(m.lookup(SDL_SCANCODE_RSHIFT) == kKAlt);
@@ -85,6 +94,10 @@ void testParse() {
   CHECK(m.lookup(SDL_SCANCODE_F10) == desk::kActRecord);
   CHECK(m.lookup(SDL_SCANCODE_F12) == kKG0);
   CHECK(m.scancodeFor(kKFn) == SDL_SCANCODE_RALT);
+  CHECK(m.lookupCmd(SDL_SCANCODE_F5) == desk::kActRecord);
+  CHECK(m.lookup(SDL_SCANCODE_F5) == desk::kUnbound);
+  CHECK(m.lookupCmd(SDL_SCANCODE_I) == desk::kUnbound);
+  CHECK(m.lookupCmd(SDL_SCANCODE_R) == desk::kActRecord);
   desk::KeyMap b;
   CHECK(!b.parse("fn Right Alt\n", &err));
   CHECK(err.find("line 1") != std::string::npos);
@@ -92,6 +105,8 @@ void testParse() {
   CHECK(err.find("line 3") != std::string::npos);
   CHECK(!b.parse("a = NoSuchKey\n", &err));
   CHECK(!b.parse("a =\n", &err));
+  CHECK(!b.parse("a = Cmd+X\n", &err));   // Command never plays an instrument key
+  CHECK(err.find("not keys") != std::string::npos);
 }
 
 void testInput() {
@@ -123,6 +138,16 @@ void testInput() {
   int n = in.onScancode(SDL_SCANCODE_LGUI, true, false, false, true, o);
   CHECK(n == 2 && o[0].binding == kKShift && !o[0].down && o[1].binding == 36 && !o[1].down);
   CHECK(in.onScancode(SDL_SCANCODE_Q, true, false, true, false, o) == 0);    // Cmd+Q plays nothing
+  // Cmd+R / Cmd+I: the app action on the down, nothing on repeat or up, and never the R / I key
+  CHECK(in.onScancode(SDL_SCANCODE_R, true, false, true, false, o) == 1 && o[0].binding == desk::kActRecord);
+  CHECK(in.onScancode(SDL_SCANCODE_R, true, true, true, false, o) == 0);
+  CHECK(in.onScancode(SDL_SCANCODE_R, false, false, true, false, o) == 0);
+  CHECK(in.onScancode(SDL_SCANCODE_I, true, false, true, false, o) == 1 && o[0].binding == desk::kActStats);
+  CHECK(in.onScancode(SDL_SCANCODE_LGUI, false, false, false, true, o) == 0);   // Command up before I
+  CHECK(in.onScancode(SDL_SCANCODE_I, false, false, false, false, o) == 0);     // ... I's up: still nothing
+  CHECK(!in.anyHeld());
+  CHECK(in.onScancode(SDL_SCANCODE_ESCAPE, true, false, false, false, o) == 1 && o[0].binding == kKG0 && o[0].down);
+  CHECK(in.onScancode(SDL_SCANCODE_ESCAPE, false, false, false, false, o) == 1 && o[0].binding == kKG0 && !o[0].down);
   CHECK(in.onScancode(SDL_SCANCODE_J, false, false, true, false, o) == 0);   // already released
   CHECK(in.onScancode(SDL_SCANCODE_Q, false, false, true, false, o) == 0);
   CHECK(in.onScancode(SDL_SCANCODE_LGUI, false, false, false, true, o) == 0);

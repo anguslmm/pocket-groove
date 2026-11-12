@@ -26,6 +26,12 @@ tap s          # select SNARE without sound
 up shift
 tap 5
 tap 6
+sdl down Left GUI   # Command shortcuts: Cmd+R records, Cmd+I stats, Cmd+R stops;
+sdl tap R           # R (step 13) and I (step 16) must NOT reach the instrument,
+sdl tap I           # or the shot below differs from ui_shot's
+sdl tap R
+sdl up Left GUI
+sdl tap Escape      # G0: the Ui never sees it
 wait 3000
 shot keys
 down a         # a held pad ...

@@ -13,13 +13,26 @@ jobs=$( (getconf _NPROCESSORS_ONLN || sysctl -n hw.ncpu || echo 4) 2>/dev/null |
 
 # Configure (fast when nothing changed; picks up SDL2 installed after an
 # earlier configure), then build only the app: a code change is in on the next launch.
+if ! command -v cmake >/dev/null 2>&1; then
+  echo "pg-desktop: cmake not found. macOS: brew install cmake sdl2   (Debian/Ubuntu: sudo apt install cmake libsdl2-dev g++)" >&2
+  exit 1
+fi
 if ! cmake -S "$here/host" -B "$build" -DCMAKE_BUILD_TYPE=Release >"$log" 2>&1; then
   cat "$log" >&2
   echo "pg-desktop: cmake configure failed (log: $log)" >&2
   exit 1
 fi
 if grep -q "SDL2 not found" "$log"; then
-  echo "pg-desktop: SDL2 not found. On a Mac: brew install sdl2   (Debian/Ubuntu: apt install libsdl2-dev)" >&2
+  cat >&2 <<'MSG'
+pg-desktop: SDL2 not found, so the desktop app cannot be built.
+  macOS:          brew install sdl2        (installs sdl2-compat + sdl3; then run tools/pg-desktop again)
+  Debian/Ubuntu:  sudo apt install libsdl2-dev
+  Installed it somewhere else?  cmake -S host -B build/host -DSDL2_DIR=/path/to/lib/cmake/SDL2
+  Or build SDL from source once: cmake -S host -B build/host -DPG_FETCH_SDL2=ON
+MSG
+  if [ "$(uname)" = Darwin ] && ! command -v brew >/dev/null 2>&1; then
+    echo "  (Homebrew itself is not installed: see https://brew.sh)" >&2
+  fi
   exit 1
 fi
 echo "pg-desktop: building..." >&2

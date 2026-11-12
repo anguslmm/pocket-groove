@@ -75,6 +75,10 @@ def ui_shot_script(body):
             continue
         elif w[0] in ("expect-released", "quit"):
             continue
+        elif w[0] == "sdl":   # app-level keys (Command shortcuts, G0): no Ui event, same time
+            if w[1] == "tap":
+                out.append("wait 40")
+            continue
         out.append(line)
     return "\n".join(out) + "\n"
 
@@ -114,6 +118,8 @@ def part_keys():
         rc, log = run_app(extra, cwd, body, "keys")
         check(rc == 0, "%s: app exited 0 (script ok, session saved)" % label)
         check("expect-released" not in log, "%s: no key left held after focus loss" % label)
+        check(log.count("[rec] started") == 1 and log.count("[rec] stopped") == 1,
+              "%s: Cmd+R started and stopped a recording" % label)
         for shot in ("keys", "after-focus"):
             a = os.path.join(cwd, "shots-keys", shot + ".png")
             b = os.path.join(ref, shot + ".png")
@@ -142,15 +148,16 @@ def part_audio():
     # 4.5 s of play for a 2.5 s comparison: SDL's dummy driver paces its callbacks with
     # SDL_Delay and runs slower than the wall clock with small buffers, and the stop
     # (which the reference does not model) must come after the compared stretch.
-    script = "wait 500\nsdl tap F9\nwait 300\ntap spc\nwait 4500\ntap spc\nwait 300\nsdl tap F9\nquit\n"
-    for label, extra, ref_args in (("stereo-44k", [], []),
-                                   ("mono-32k-buf100", ["--mono", "--sr", "32000", "--buffer", "100"],
-                                    ["--mono", "--sr", "32000"])):
+    f9 = "wait 500\nsdl tap F9\nwait 300\ntap spc\nwait 4500\ntap spc\nwait 300\nsdl tap F9\nquit\n"
+    cmd_r = f9.replace("sdl tap F9", "sdl down Left GUI\nsdl tap R\nsdl up Left GUI")
+    for label, extra, ref_args, script in (("stereo-44k-F9", [], [], f9),
+                                           ("mono-32k-buf100-CmdR", ["--mono", "--sr", "32000", "--buffer", "100"],
+                                            ["--mono", "--sr", "32000"], cmd_r)):
         cwd = fresh(os.path.join(WORK, "audio-" + label))
         rc, log = run_app(extra, cwd, script, "audio")
         check(rc == 0, "%s: app exited 0" % label)
         m = re.search(r"\[rec\] started: (\S+) at audio frame (\d+)", log)
-        check(m is not None, "%s: F9 started a recording" % label)
+        check(m is not None, "%s: the record key started a recording" % label)
         if not m:
             continue
         wav = os.path.join(cwd, m.group(1))

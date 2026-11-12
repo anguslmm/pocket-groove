@@ -6,7 +6,13 @@ int KeyboardInput::onScancode(int sc, bool down, bool repeat, bool commandHeld, 
   if (sc <= 0 || sc >= KeyMap::kScancodes) return 0;
   if (isCommand) return down ? releaseAll(out) : 0;
   if (down) {
-    if (repeat || commandHeld || scIsDown(sc)) return 0;
+    if (commandHeld) {   // a Command shortcut (app action) or nothing; never an instrument key
+      const int a = map_->lookupCmd(sc);
+      if (repeat || a < kActRecord) return 0;
+      out[0] = KeyOut{int16_t(a), true};
+      return 1;
+    }
+    if (repeat || scIsDown(sc)) return 0;
     const int b = map_->lookup(sc);
     if (b == kUnbound) return 0;
     if (b >= pg::ui::kNumKeyIds) {          // an action: fires on the press, no up

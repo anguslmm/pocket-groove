@@ -49,6 +49,7 @@ const Bind kDefaultBindings[] = {
     {SDL_SCANCODE_SLASH, kKSlash}, {SDL_SCANCODE_SPACE, kKSpace},
     // the side button and the desktop's own keys
     {SDL_SCANCODE_F1, kKG0},
+    {SDL_SCANCODE_ESCAPE, kKG0},   // G0 without fn on Apple keyboards (F-keys are media keys there)
     {SDL_SCANCODE_F9, kActRecord},
     {SDL_SCANCODE_F2, kActStats},
     // Second keys for the same Cardputer key (after the canonical ones, so the
@@ -89,13 +90,23 @@ int scancodeFromName(const std::string& name) {
 
 }  // namespace
 
+// Command shortcuts (the Mac idiom for app commands, and they need no fn).
+// Safe: pressing Command has already released every instrument key, and a
+// Command shortcut never reaches the instrument, on its down or its up.
+const Bind kDefaultCmdBindings[] = {
+    {SDL_SCANCODE_R, kActRecord},   // Cmd+R = F9
+    {SDL_SCANCODE_I, kActStats},    // Cmd+I = F2
+};
+
 KeyMap::KeyMap() {
   clear();
   for (const Bind& b : kDefaultBindings) bind[b.sc] = b.b;
+  for (const Bind& b : kDefaultCmdBindings) cmdBind[b.sc] = b.b;
 }
 
 void KeyMap::clear() {
   for (int16_t& b : bind) b = kUnbound;
+  for (int16_t& b : cmdBind) b = kUnbound;
 }
 
 int KeyMap::scancodeFor(int b) const {
@@ -154,12 +165,22 @@ bool KeyMap::parse(const char* text, std::string* err) {
       if (err) *err = "line " + std::to_string(lineNo) + ": unknown Cardputer key '" + key + "'";
       return false;
     }
+    bool cmd = false;
+    if (rest.size() > 4 && (rest[0] == 'C' || rest[0] == 'c') && (rest[1] == 'm' || rest[1] == 'M') &&
+        (rest[2] == 'd' || rest[2] == 'D') && rest[3] == '+') {
+      cmd = true;
+      rest = trim(rest.substr(4));
+      if (b >= 0 && b < kNumKeyIds) {
+        if (err) *err = "line " + std::to_string(lineNo) + ": Command shortcuts are for record / stats, not keys";
+        return false;
+      }
+    }
     const int sc = rest.empty() ? -1 : scancodeFromName(rest);
     if (sc < 0) {
       if (err) *err = "line " + std::to_string(lineNo) + ": unknown scancode name '" + rest + "'";
       return false;
     }
-    bind[sc] = int16_t(b);
+    (cmd ? cmdBind : bind)[sc] = int16_t(b);
   }
   return true;
 }

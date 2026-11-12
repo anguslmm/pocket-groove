@@ -21,16 +21,24 @@ enum Binding : int16_t {
 struct KeyMap {
   static constexpr int kScancodes = 512;   // SDL_NUM_SCANCODES
   int16_t bind[kScancodes];
+  // Command+scancode shortcuts: app actions only (kActRecord, kActStats),
+  // never a Cardputer key: Command never reaches the instrument.
+  int16_t cmdBind[kScancodes];
 
   KeyMap();           // the default table
   void clear();
   int lookup(int scancode) const { return scancode >= 0 && scancode < kScancodes ? int(bind[scancode]) : int(kUnbound); }
+  int lookupCmd(int scancode) const {
+    return scancode >= 0 && scancode < kScancodes ? int(cmdBind[scancode]) : int(kUnbound);
+  }
   // First scancode bound to `b` (the canonical key the script player presses), or -1.
   int scancodeFor(int b) const;
 
   // Overrides from text, one per line ('#' comments):
   //     <cardputer key> = <SDL scancode name>      e.g.   fn = Right Shift
   //     none = <SDL scancode name>                 unbinds that scancode
+  //     record = Cmd+<SDL scancode name>           a Command shortcut (actions only)
+  //     none = Cmd+<SDL scancode name>             removes one
   // Cardputer keys by legend as in the manual and ui scripts (` 1 - = del tab q
   // [ ] \ fn sft a ; ' ent ctl opt alt z , . / spc G0, plus aliases such as
   // space, enter, shift, backspace), or the actions "record" and "stats".

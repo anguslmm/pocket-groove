@@ -15,7 +15,11 @@ if(PG_FETCH_SDL2)
   FetchContent_MakeAvailable(SDL2)
   set(PG_SDL_TARGET SDL2::SDL2-static)
 else()
-  find_package(SDL2 CONFIG QUIET)
+  # Homebrew: `brew install sdl2` installs sdl2-compat (the SDL2 API on SDL3; Formula/s/sdl2-compat.rb,
+  # "sdl2" is an alias). It ships <prefix>/lib/cmake/SDL2/SDL2Config.cmake with the imported
+  # target SDL2::SDL2. CMake finds it through PATH (/opt/homebrew/bin -> /opt/homebrew); the
+  # PATHS cover a CMake that is not on that PATH (Apple silicon, then Intel prefixes).
+  find_package(SDL2 CONFIG QUIET PATHS /opt/homebrew /usr/local)
   if(NOT SDL2_FOUND)
     find_package(SDL2 QUIET)   # a FindSDL2.cmake module, if the system has one
   endif()
@@ -32,7 +36,7 @@ else()
 endif()
 
 if(NOT PG_SDL_TARGET)
-  message(STATUS "pocket-groove desktop app: SDL2 not found, not built (macOS: brew install sdl2)")
+  message(STATUS "pocket-groove desktop app: SDL2 not found, not built (macOS: brew install sdl2; Debian/Ubuntu: apt install libsdl2-dev)")
   return()
 endif()
 if(PG_FETCH_SDL2)

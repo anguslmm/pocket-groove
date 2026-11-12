@@ -5,7 +5,8 @@
 //   - OS key repeat is ignored (the UI does its own repeat, as on the device);
 //   - two scancodes bound to one Cardputer key (left/right Control) count as
 //     one key: down on the first press, up on the last release;
-//   - while Command is held nothing new goes down, and pressing Command
+//   - while Command is held nothing new goes down (only the Command
+//     shortcuts, Cmd+R / Cmd+I, fire their app action), and pressing Command
 //     releases every held key: Cmd+Q / Cmd+Tab never play a note, and the
 //     key-ups that macOS swallows while Command is down cannot leave a key
 //     stuck;

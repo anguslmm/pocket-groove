@@ -76,7 +76,8 @@ void usage(FILE* f) {
                "  --record          start recording at launch\n"
                "  --script FILE     run a key script (host/app/script.h), then keep running until it quits\n"
                "  --out DIR         where script shots go (default build/desktop)\n"
-               "keys: F1 = G0, F9 = record on/off, F2 = audio stats in the title. Never Command.\n");
+               "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats in the title.\n"
+               "Command never reaches the instrument.\n");
 }
 
 bool parseArgs(int argc, char** argv, Options* o) {
@@ -310,6 +311,9 @@ int main(int argc, char** argv) {
     }
   }
   if (opt.printKeymap) {
+    for (int sc = 1; sc < desk::KeyMap::kScancodes; ++sc)
+      if (g_map.cmdBind[sc] != desk::kUnbound)
+        std::printf("%-6s = Cmd+%s\n", desk::bindingName(g_map.cmdBind[sc]), SDL_GetScancodeName(SDL_Scancode(sc)));
     for (int sc = 1; sc < desk::KeyMap::kScancodes; ++sc)
       if (g_map.bind[sc] != desk::kUnbound)
       {
