@@ -66,6 +66,12 @@ struct Options {
   std::string pgPort;                // --port for tools/pg (default: auto-detect, or $PG_PORT)
   bool listenSim = false;            // --listen-sim PPM: a simulated device instead of SDL's capture list
   double listenSimPpm = 0.0;
+  bool listenSimSpec = false;        // --listen-sim-spec: the simulated device delivers this obtained spec
+  desk::CaptureSpec listenSimSpecV;
+  int listenSimBurst = 1;            // --listen-sim-burst N: callbacks back to back
+  bool listenSimVary = false;        // --listen-sim-vary: callback sizes vary
+  std::string listenDevice;          // --listen-device NAME: another input than "Pocket Groove"
+  std::string listenDump;            // --listen-dump FILE.wav: the raw capture as SDL delivers it
   int scale = 4;
   int buffer = 256;
   int sr = 44100;
@@ -93,7 +99,12 @@ void usage(FILE* f) {
                "  --out DIR         where script shots go (default build/desktop)\n"
                "  --pg-tool PATH    tools/pg for the Stems list (default: this repository's, or $PG_TOOL)\n"
                "  --pg-port PORT    the device's serial port for the Stems list (default: auto, or $PG_PORT)\n"
+               "  --listen-dump FILE.wav  Listen: also write the raw capture exactly as SDL delivers it\n"
+               "                    (the obtained format, channels and rate in the WAV header)\n"
+               "  --listen-device NAME  Listen to this input (exact, or part of its name), not Pocket Groove\n"
                "  --listen-sim PPM  test: Listen plays a simulated device whose clock runs PPM fast\n"
+               "  --listen-sim-spec FMT:CH:RATE:FRAMES  test: ... which delivers this spec (e.g. f32:1:48000:1024)\n"
+               "  --listen-sim-burst N  test: ... N callbacks back to back;  --listen-sim-vary: sizes vary\n"
                "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats,\n"
                "Cmd+L = listen to the connected device, Cmd+B = stems. Command never reaches the instrument.\n");
 }
@@ -117,6 +128,18 @@ bool parseArgs(int argc, char** argv, Options* o) {
     else if (a == "--pg-tool") o->pgTool = next("a path");
     else if (a == "--pg-port") o->pgPort = next("a port");
     else if (a == "--listen-sim") { o->listenSim = true; o->listenSimPpm = std::atof(next("a clock offset in ppm")); }
+    else if (a == "--listen-sim-spec") {
+      const char* v = next("FORMAT:CHANNELS:RATE:FRAMES");
+      if (!desk::CaptureSpec::parse(v, &o->listenSimSpecV)) {
+        std::fprintf(stderr, "--listen-sim-spec %s: want e.g. s16:2:44100:256 or f32:1:48000:1024\n", v);
+        return false;
+      }
+      o->listenSimSpec = true;
+    }
+    else if (a == "--listen-sim-burst") o->listenSimBurst = std::atoi(next("a callback count"));
+    else if (a == "--listen-sim-vary") o->listenSimVary = true;
+    else if (a == "--listen-device") o->listenDevice = next("an input name");
+    else if (a == "--listen-dump") o->listenDump = next("a .wav file");
     else if (a == "--scale") o->scale = std::atoi(next("a factor"));
     else if (a == "--buffer") o->buffer = std::atoi(next("a frame count"));
     else if (a == "--sr") o->sr = std::atoi(next("44100 or 32000"));
@@ -147,7 +170,8 @@ uih::GhostMatrix g_matrix;  // --device-keys only
 // The desktop's additions
 pg::Framebuffer g_stripFb;      // the strip (its top kStripH rows)
 pg::Framebuffer g_overlayFb;    // the Stems list
-desk::DriftBuffer g_listenBuf;  // Listen's rate match (64 KB)
+desk::DriftBuffer g_listenBuf;  // Listen's rate match (128 KB)
+desk::CaptureSink g_listenSink; // Listen's capture conversion
 desk::SdlCapture g_sdlCapture;
 
 const char* buttonName(int b) {
@@ -220,7 +244,7 @@ class App final : public desk::ScriptHost {
     for (int i = 0; i < n; ++i) {
       const desk::KeyOut& o = out[i];
       if (o.binding == desk::kActRecord) toggleRecord();
-      else if (o.binding == desk::kActStats) showStats = !showStats;
+      else if (o.binding == desk::kActStats) toggleStats();
       else if (o.binding == desk::kActListen) toggleListen();
       else if (o.binding == desk::kActStems) toggleStems();
       else if (o.binding >= 0 && o.binding < pg::ui::kNumKeyIds) cardKey(o.binding, o.down);
@@ -263,6 +287,10 @@ class App final : public desk::ScriptHost {
     }
     listen.toggle(nowMs());
   }
+  void toggleStats() {
+    showStats = !showStats;
+    if (showStats && listen.active()) listen.printStats();   // the full counters in the terminal
+  }
   void toggleStems() {
     if (stems.isOpen()) {
       stems.close();
@@ -282,7 +310,7 @@ class App final : public desk::ScriptHost {
     if (b == desk::kBtnListen) toggleListen();
     else if (b == desk::kBtnStems) toggleStems();
     else if (b == desk::kBtnRec) toggleRecord();
-    else if (b == desk::kBtnStats) showStats = !showStats;
+    else if (b == desk::kBtnStats) toggleStats();
   }
   void updateStrip() {
     desk::StripState s;
@@ -296,7 +324,9 @@ class App final : public desk::ScriptHost {
     s.rec = rec.active();
     s.recSec = rec.active() ? int(rec.seconds()) : 0;
     s.stats = showStats;
-    s.status = showStats ? statsText : listen.statusLine();
+    // STATS while listening: the audio stats and Listen's counters take turns (2 s each).
+    s.status = !showStats ? listen.statusLine()
+               : listen.active() && (nowMs() / 2000) % 2 ? listen.stripStats() : statsText;
     if (stripDrawn && s == strip) return;
     uint64_t lit = 0;
     for (const desk::StripModifier& m : desk::kStripModifiers) lit |= s.held & (1ull << m.key);
@@ -492,11 +522,7 @@ class App final : public desk::ScriptHost {
       return 0;
     }
     if (c == "print-listen") {
-      const desk::DriftBuffer::Stats s = g_listenBuf.stats();
-      std::printf("[listen] stats: primed %d, fill %.0f fr, target %d, clock %+.1f ppm, underruns %u, overflows %u, "
-                  "resyncs %u, primes %u, pushed %llu\n",
-                  s.primed ? 1 : 0, double(s.fillFrames), s.target, double(s.clockPpm), s.underruns, s.overflows,
-                  s.resyncs, s.primes, static_cast<unsigned long long>(s.pushed));
+      listen.printStats();
       return 0;
     }
     return -1;
@@ -571,8 +597,9 @@ int main(int argc, char** argv) {
     return 1;
   }
   SDL_StopTextInput();
-  SDL_version v;
+  SDL_version v, built;
   SDL_GetVersion(&v);
+  SDL_VERSION(&built);
 
   // Files: the projects directory is the device's /int/pg (dirfs.h).
   static desk::DirFs fs(opt.dir, opt.sdDir);
@@ -620,9 +647,24 @@ int main(int argc, char** argv) {
   desk::CaptureSource* capture = &g_sdlCapture;
   if (opt.listenSim) {
     app.simCapture.reset(new desk::SimCapture(&g_audio, opt.listenSimPpm));
+    if (opt.listenSimSpec) app.simCapture->setSpec(opt.listenSimSpecV, opt.listenSimBurst, opt.listenSimVary);
     capture = app.simCapture.get();
   }
-  app.listen.init(capture, &g_listenBuf, &g_audio, opt.sr);
+  g_sdlCapture.setWanted(opt.listenDevice);
+  app.listen.init(capture, &g_listenBuf, &g_listenSink, &g_audio, opt.sr);
+  app.listen.setDumpPath(opt.listenDump);
+  {
+    // sdl2-compat (Homebrew's "sdl2": the SDL2 API on SDL3) reports 2.32.50 and up; SDL2 itself
+    // never got past 2.32.10 (sdl2-compat: "way ahead of what SDL2 Classic would report").
+    const bool compat = v.major == 2 && (v.minor > 32 || (v.minor == 32 && v.patch >= 50));
+    char info[320];
+    std::snprintf(info, sizeof(info),
+                  "SDL built against %d.%d.%d, running %d.%d.%d = %s, revision \"%s\", audio driver %s",
+                  built.major, built.minor, built.patch, v.major, v.minor, v.patch,
+                  compat ? "sdl2-compat (SDL2 API on SDL3)" : "SDL2 itself", SDL_GetRevision(),
+                  SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "-");
+    app.listen.setSdlInfo(info);
+  }
   // Stems: tools/pg of this repository (build/host/pocket-groove -> ../../tools/pg).
   {
     desk::StemsConfig sc;

@@ -61,7 +61,16 @@ bool AudioOut::open(pg::Instrument* inst, int rate, int bufferFrames, char* err,
     std::snprintf(err, size_t(errCap), "%s", SDL_GetError());
     return false;
   }
+  if (have.format != AUDIO_S16SYS || have.channels != 2) {   // allowed_changes = 0 promises this; check anyway
+    std::snprintf(err, size_t(errCap), "the output opened as format 0x%x, %d channels (not s16 stereo)",
+                  unsigned(have.format), int(have.channels));
+    SDL_CloseAudioDevice(dev_);
+    dev_ = 0;
+    return false;
+  }
   obtainedFrames_.store(have.samples);
+  desired_ = CaptureSpec{uint16_t(want.format), int(want.channels), want.freq, int(want.samples)};
+  obtained_ = CaptureSpec{uint16_t(have.format), int(have.channels), have.freq, int(have.samples)};
   tickHz_ = double(SDL_GetPerformanceFrequency());
   return true;
 }
@@ -100,6 +109,7 @@ void AudioOut::callback(void* user, uint8_t* stream, int len) {
   int16_t* out = reinterpret_cast<int16_t*>(stream);
   int frames = len / 4;
   const int total = frames;
+  a.cbStats_.onCallback(total);
   // 1. what is left of the last quantum
   while (frames > 0 && a.carryPos_ < a.carryLen_) {
     out[0] = a.carry_[a.carryPos_ * 2];
