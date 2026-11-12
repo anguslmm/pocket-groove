@@ -58,22 +58,22 @@ def _make_driver_copy(target, source, env):
     workdir = os.path.dirname(out)
     os.makedirs(workdir, exist_ok=True)
     member = "audio_device.c.obj"
-    subprocess.check_call([_tool("ar"), "x", str(source[0]), member], cwd=workdir)
+    subprocess.check_call([_tool("ar"), "x", str(source[0]), member], cwd=workdir, stdin=subprocess.DEVNULL, timeout=120)
     extracted = os.path.join(workdir, member)
-    secs = subprocess.run([_tool("readelf"), "-S", "-W", extracted], capture_output=True, text=True).stdout
+    secs = subprocess.run([_tool("readelf"), "-S", "-W", extracted], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120).stdout
     if not re.search(r"\]\s+%s\s+NOBITS" % re.escape(OUT_FIFO_SECTION), secs):
         raise RuntimeError("[usb] %s has no NOBITS section %s: the prebuilt TinyUSB changed, review tools/pio_usb.py"
                            % (member, OUT_FIFO_SECTION))
     subprocess.check_call([_tool("objcopy"), "--rename-section", "%s=%s" % (OUT_FIFO_SECTION, OUT_FIFO_TARGET),
-                           extracted, out])
+                           extracted, out], stdin=subprocess.DEVNULL, timeout=120)
     os.remove(extracted)
-    print("[usb] linking the TinyUSB audio driver with its unused OUT FIFO (3104 B) in RTC slow memory")
+    print("[usb] linking the TinyUSB audio driver with its unused OUT FIFO (3104 B) in RTC slow memory", flush=True)
     return 0
 
 
 def _check_elf(target, source, env):
     elf = str(target[0])
-    r = subprocess.run([_tool("nm"), "-S", elf], capture_output=True, text=True)
+    r = subprocess.run([_tool("nm"), "-S", elf], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120)
     hits = [l.split() for l in r.stdout.splitlines() if l.endswith(" ep_out_sw_buf")]
     if len(hits) != 1:
         raise RuntimeError("[usb] ep_out_sw_buf: expected one symbol in %s, found %d" % (elf, len(hits)))

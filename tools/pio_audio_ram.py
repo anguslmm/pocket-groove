@@ -73,7 +73,7 @@ def _define(name):
 
 TIER = _tier()
 STEREO = (_define("PG_USB_AUDIO") or "0") not in ("0", "")
-print("[audio-ram] PG_AUDIO_RAM tier %d, %s output layout" % (TIER, "STEREO (USB audio)" if STEREO else "mono (device)"))
+print("[audio-ram] PG_AUDIO_RAM tier %d, %s output layout" % (TIER, "STEREO (USB audio)" if STEREO else "mono (device)"), flush=True)
 
 # Per-quantum hot set. Regexes on demangled names.
 HOT_COMMON = [
@@ -123,9 +123,26 @@ AUDIO_OBJS = ("/pg/drums/", "/pg/bass/bass.cpp", "/pg/lead/lead.cpp", "/pg/engin
 _hot = [re.compile(p) for p in HOT + (STEP if TIER >= 2 else [])]
 
 
+TOOL_TIMEOUT_S = 120
+
+
+def _run(cmd, **kw):
+    # Every toolchain call goes through here: stdin is never inherited (a tool
+    # waiting on the terminal would look like a hung build) and a tool that
+    # does not finish fails the build with its name instead of stalling it.
+    kw.setdefault("stdin", subprocess.DEVNULL)
+    if "input" in kw:
+        kw.pop("stdin")
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=TOOL_TIMEOUT_S, **kw)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("[audio-ram] %s did not finish within %d s (arguments: %s)"
+                           % (cmd[0], TOOL_TIMEOUT_S, " ".join(cmd[-2:])))
+
+
 def _sections(objcopy, path):
     readelf = objcopy.replace("objcopy", "readelf")
-    out = subprocess.run([readelf, "-S", "-W", path], capture_output=True, text=True).stdout
+    out = _run([readelf, "-S", "-W", path]).stdout
     return re.findall(r"\]\s+(\S+)\s+(?:PROGBITS|NOBITS)", out)
 
 
@@ -135,7 +152,7 @@ def _demangle(cxxfilt, names):
     # mangled, which made every demangled-name pattern miss silently.
     if not names:
         return {}
-    r = subprocess.run([cxxfilt], input="\n".join(names), capture_output=True, text=True)
+    r = _run([cxxfilt], input="\n".join(names) + "\n")
     if r.returncode != 0:
         raise RuntimeError("[audio-ram] %s failed: %s" % (cxxfilt, r.stderr.strip()))
     out = r.stdout.split("\n")
@@ -167,13 +184,15 @@ def _relocate(target, source, env):
                     args += ["--rename-section", "%s=.iram1.pgl.%s" % (s, s[9:])]
             _moved.extend(dm.get(f, f) for f in pick)
             if pick:
-                print("[audio-ram] %s: %d functions -> IRAM" % (rel.split("/pg/")[-1], len(pick)))
+                print("[audio-ram] %s: %d functions -> IRAM" % (rel.split("/pg/")[-1], len(pick)), flush=True)
         if TIER >= 3 and any(o in rel for o in RAM_RODATA):
             for s in secs:
                 if s.startswith(".rodata"):
                     args += ["--rename-section", "%s=.dram1.pg%s" % (s, s[7:])]
         if args:
-            subprocess.check_call([objcopy] + args + [path])
+            r = _run([objcopy] + args + [path])
+            if r.returncode != 0:
+                raise RuntimeError("[audio-ram] objcopy failed on %s: %s" % (path, r.stderr.strip()))
     return 0
 
 
@@ -205,7 +224,7 @@ def _relocate_all(target, source, env):
         for nope in MUST_NOT:
             if any(re.search(nope, m) for m in _moved):
                 raise RuntimeError("[audio-ram] %s was moved to IRAM, but this build does not run it" % nope)
-        print("[audio-ram] total: %d functions -> IRAM" % len(_moved))
+        print("[audio-ram] total: %d functions -> IRAM" % len(_moved), flush=True)
     elif not objs:
         raise RuntimeError("[audio-ram] found no lib/pg objects under " + env.subst("$BUILD_DIR"))
     return 0
@@ -219,7 +238,7 @@ def _verify_elf(target, source, env):
     # nm/c++filt read these names differently, see _demangle).
     elf = str(target[0])
     nm = env.WhereIs(env.subst("$CC").replace("gcc", "nm")) or env.subst("$CC").replace("gcc", "nm")
-    r = subprocess.run([nm, "-C", elf], capture_output=True, text=True)
+    r = _run([nm, "-C", elf])
     if r.returncode != 0 or not r.stdout:
         raise RuntimeError("[audio-ram] %s -C %s failed: %s" % (nm, elf, r.stderr.strip()))
     syms = []
@@ -242,8 +261,7 @@ def _verify_elf(target, source, env):
     if bad:
         raise RuntimeError("[audio-ram] placement check of %s FAILED:\n  %s" % (elf, "\n  ".join(bad)))
     print("[audio-ram] placement check of the ELF: %d hot-path functions in IRAM, %d variants of the other "
-          "layout in flash: OK" % (len(MUST), len(MUST_NOT)))
-    return 0
+          "layout in flash: OK" % (len(MUST), len(MUST_NOT)), flush=True)
 
 
 env.AddBuildMiddleware(_pg_flags)  # noqa: F821
