@@ -1,6 +1,6 @@
 # Work state (2026-11-11)
 
-v0.1 complete and host-verified: 45/45 host tests pass; both firmware envs build clean.
+v0.1 complete and host-verified: 55/55 host tests pass; both firmware envs build clean.
 Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
 (build/firmware/pocket-groove-smoke.bin), first boot of the instrument
 (build/firmware/pocket-groove.bin), and listening feedback on renders.
