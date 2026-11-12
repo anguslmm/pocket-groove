@@ -166,7 +166,7 @@ int GhostFilter::tick(uint32_t nowMs, Out* out) {
 
 int GhostFilter::push(const KeyEvent& e, uint32_t nowMs, Out* out) {
   const int k = e.key;
-  if (k >= kNumKeys) {                       // G0 (or junk): not part of the matrix
+  if (k >= kNumKeys || off_) {               // G0 (or junk): not part of the matrix; or filter off
     out[0] = Out{e, nowMs};
     return 1;
   }

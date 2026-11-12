@@ -17,6 +17,11 @@ checked offline, then run on the owner's device and Mac (2026-11-12): enumerates
 frames dropped once at stream start (not growing). Integration into the instrument is in
 progress as env:cardputer-adv-usb. Stem bounce via tools/pg also confirmed working on hardware.
 
+Desktop app (tools/pg-desktop, host/app, docs/DESKTOP.md): SDL2 window + audio + Mac keyboard
+around the unchanged core and UI; host-verified headless (test_desktop_app: screenshots identical
+to ui_shot, F9 recording bit-identical to the offline engine, session saved at quit). Not yet run
+on macOS: waiting for the owner's checklist (Retina, right Shift/Option, focus, latency, Cmd+Q).
+
 Agreed order of work (2026-11-12, set by the owner):
 1. Owner tests on hardware what is on main: backlight/ghost fixes, tools/pg ls/pull/bounce,
    env:usb-audio-spike (docs/usb-audio.md section 8). Fix what that turns up.
