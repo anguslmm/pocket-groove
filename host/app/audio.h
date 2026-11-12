@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cstdint>
 
+#include "capture_convert.h"
 #include "listen_buffer.h"
 #include "pg/config.h"
 
@@ -64,6 +65,11 @@ class AudioOut {
     listening_.store(on, std::memory_order_release);
   }
   uint64_t framesRendered() const { return rendered_.load(std::memory_order_relaxed); }
+  // For Listen's diagnostics: what was asked and what SDL says it opened
+  // (sdl2-compat echoes the request), and the callbacks as they really come.
+  const CaptureSpec& desiredSpec() const { return desired_; }
+  const CaptureSpec& obtainedSpec() const { return obtained_; }
+  CallbackStats& callbackStats() { return cbStats_; }
 
  private:
   static void callback(void* user, uint8_t* stream, int len);
@@ -83,6 +89,8 @@ class AudioOut {
   std::atomic<float> load_{0.0f}, peak_{0.0f};
   std::atomic<uint32_t> late_{0}, gaps_{0}, calls_{0};
   std::atomic<int> obtainedFrames_{0};
+  CaptureSpec desired_, obtained_;
+  CallbackStats cbStats_;
   std::atomic<DriftBuffer*> listen_{nullptr};
   std::atomic<bool> listening_{false};
 };

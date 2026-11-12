@@ -79,6 +79,12 @@ target_compile_options(test_desktop_listen PRIVATE ${PG_FLAGS})
 set_target_properties(test_desktop_listen PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 add_test(NAME test_desktop_listen COMMAND test_desktop_listen WORKING_DIRECTORY ${PG_ROOT})
 
+# The tone in a WAV (Listen's recordings and dumps): frequency, level, THD+N (not a test by itself).
+add_executable(listen_analyze tests/listen_analyze.cpp)
+target_compile_options(listen_analyze PRIVATE ${PG_FLAGS})
+set_target_properties(listen_analyze PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+add_dependencies(pocket-groove listen_analyze)   # tools/pg-desktop builds it too (docs/DESKTOP.md troubleshooting)
+
 # Reference renderer for the live-audio comparison (not a test by itself).
 add_executable(desktop_audio_ref tests/desktop_audio_ref.cpp)
 target_link_libraries(desktop_audio_ref PRIVATE ${PG_LIBS} ${PG_LIBS})

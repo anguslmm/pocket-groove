@@ -25,7 +25,17 @@ screen or sound card) and checks it against the rest of the host build:
      key to the instrument (the app's count equals the script's).
   6. Listen against a simulated device (--listen-sim: a 1 kHz tone on a clock
      500 ppm fast): it plays, Cmd+R records it, unplug and re-plug recover,
-     Cmd+L stops it.
+     Cmd+L stops it. The recording is fitted (host/app/tests/listen_analyze):
+     the tone's frequency, level and THD+N, not just "not silent". Then the
+     same device delivering obtained specs other than the one asked for
+     (f32 mono 48 kHz in 1024-frame callbacks, CoreAudio-like bursts of 4
+     callbacks, s32 at 32 kHz in odd and varying sizes, 6-channel big-endian
+     float at 96 kHz): the recording must be the same clean tone, nothing
+     underruns, and --listen-dump holds exactly what was delivered with the
+     obtained spec in its WAV header. And SDL's own capture code path, with
+     SDL's disk audio driver reading a sine from a file as the input device:
+     the dump must be a byte-exact slice of that file and the recording the
+     clean tone.
   7. Stems end to end against xfer_sim (tools/pg --json as a subprocess): the
      device's list, a bounce of a device project to bounces/NAME/ with every
      stem file, the folder "revealed"; and the error paths in plain words:
@@ -35,6 +45,7 @@ screen or sound card) and checks it against the rest of the host build:
     python3 host/app/tests/desktop_check.py --bin build/host --work build/host/desktop_test
 """
 import argparse
+import math
 import os
 import re
 import shutil
@@ -353,13 +364,14 @@ quit
     check(log.count("[listen] playing") == 2, "played, and played again after the re-plug")
     check("[listen] closed (device gone)" in log, "unplug while listening: input closed, no crash")
     check("[listen] closed (switched off)" in log, "Cmd+L switched it off")
-    st = re.findall(r"\[listen\] stats: primed (\d), fill (\d+) fr, target (\d+), clock ([-+\d.]+) ppm, "
-                    r"underruns (\d+), overflows (\d+), resyncs (\d+), primes (\d+)", log)
-    check(len(st) == 2 and st[0][0] == "1", "primed and playing after the start (%s)" % (st[:1],))
+    st = listen_stats(log)
+    check(len(st) >= 2 and st[0]["primed"] == 1, "primed and playing after the start (%s)" % (st[:1],))
     if st:
-        u, o, r = int(st[-1][4]), int(st[-1][5]), int(st[-1][6])
+        u, o, r = st[-1]["underruns"], st[-1]["overflows"], st[-1]["resyncs"]
         check(o == 0 and r == 0 and u <= 1, "no overflow or resync, at most the unplug's underrun "
               "(underruns %d, overflows %d, resyncs %d)" % (u, o, r))
+    check("[listen] capture obtained: s16le, 2 ch, 44100 Hz" in log and "[listen] conversion: s16le as is" in log,
+          "the diagnostics block: obtained spec and conversion")
     m = re.search(r"\[keys\] (\d+) key events", log)
     check(m is not None and m.group(1) == "0", "no key reached the instrument")
     m = re.search(r"\[rec\] started: (\S+)", log)
@@ -374,8 +386,163 @@ quit
         anti = max((abs(a + b) for a, b in zip(l, r)), default=99)
         check(rms > 3000 and 980 < freq < 1020 and anti <= 2,
               "the recording carries the device's tone (rms %.0f, %.1f Hz, L = -R within %d)" % (rms, freq, anti))
+        check_tone(os.path.join(cwd, m.group(1)), 1000.5, "the recording", seconds=1.0)   # before the unplug
     for n in ("listening", "unplugged", "off"):
         check(os.path.exists(os.path.join(cwd, "shots-listen", n + "_4x.png")), "window shot %s" % n)
+
+
+LISTEN_STATS = re.compile(
+    r"\[listen\] stats: primed (?P<primed>\d), fill (?P<fill>[\d.]+) fr \([\d.]+ ms\), target (?P<target>\d+), "
+    r"step (?P<step>[\d.]+), rate (?P<rate>[-+\d.]+) ppm, clock (?P<clock>[-+\d.]+) ppm, underruns (?P<underruns>\d+), "
+    r"overflows (?P<overflows>\d+), resyncs (?P<resyncs>\d+), primes (?P<primes>\d+), pushed (?P<pushed>\d+), "
+    r"device peak (?P<dev>\S+) dBFS, after mix (?P<mix>\S+) dBFS, clipped (?P<clipped>\d+)")
+
+
+def listen_stats(log):
+    out = []
+    for m in LISTEN_STATS.finditer(log):
+        d = m.groupdict()
+        out.append({k: (float(v) if k in ("fill", "step", "rate", "clock") else v if k in ("dev", "mix") else int(v))
+                    for k, v in d.items()})
+    return out
+
+
+def analyze(path, start=0.3, seconds=1.0, channel=0, freq=1000.0):
+    p = subprocess.run([ANALYZE, path, "--from", str(start), "--seconds", str(seconds), "--channel", str(channel),
+                        "--freq", str(freq)], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    out = p.stdout.decode().strip()
+    w = out.split()
+    if p.returncode != 0 or len(w) < 16:
+        return None, out
+    return {w[i]: float(w[i + 1]) for i in range(0, len(w) - 1, 2)}, out
+
+
+def check_tone(path, freq, what, dbfs=-14.74, max_thdn=-60.0, start=0.3, seconds=2.0, channel=0, ppm_tol=2500):
+    """The 1 kHz tone at -14.7 dBFS (6000) and nothing else: frequency, level and THD+N of a fit.
+
+    The frequency within 0.25 %: in the first seconds the rate match may still move the rate by
+    up to its 0.2 % limit (test_desktop_listen checks the settled frequency to 100 ppm); what this
+    catches is a wrong rate (48 kHz played as 44.1 kHz is 8.8 %)."""
+    r, out = analyze(path, start, seconds, channel, freq)
+    sys.stdout.write("    | %s\n" % out)
+    check(r is not None and abs(r["freq"] / freq - 1) < ppm_tol * 1e-6 and abs(r["dbfs"] - dbfs) < 0.1
+          and r["thdn"] < max_thdn and r["worst"] < max_thdn + 10,
+          "%s: the tone at %.1f Hz, %.2f dBFS, THD+N < %.0f dB, no window above %.0f dB (%s)"
+          % (what, freq, dbfs, max_thdn, max_thdn + 10, out))
+    return r
+
+
+def wav_header(path):
+    with open(path, "rb") as f:
+        h = f.read(44)
+    tag, ch, rate, _, _, bits = struct.unpack("<HHIIHH", h[20:36])
+    return {"tag": tag, "channels": ch, "rate": rate, "bits": bits, "data": struct.unpack("<I", h[40:44])[0]}
+
+
+LISTEN_SPEC_SCRIPT = """wait 400
+app click-button listen
+app wait-listening 8000
+sdl down Left GUI
+sdl tap R
+sdl up Left GUI
+wait 2500
+app print-listen
+sdl down Left GUI
+sdl tap R
+sdl tap L
+sdl up Left GUI
+wait 200
+quit
+"""
+
+
+def part_listen_specs():
+    print("6b. Listen: the device delivers another spec than asked for")
+    # (label, --listen-sim-spec, burst, vary, WAV tag, bits, conversion text)
+    cases = [("f32-mono-48k-1024", "f32:1:48000:1024", 1, False, 3, 32,
+              "f32le -> s16 (saturating), mono -> both sides, 48000 -> 44100 Hz"),
+             ("s16-stereo-44k-bursts-4x256", "s16:2:44100:256", 4, False, 1, 16, "s16le as is, stereo as is"),
+             ("s32-stereo-32k-odd-441", "s32:2:32000:441", 1, True, 1, 32,
+              "s32le -> s16 (saturating), stereo as is, 32000 -> 44100 Hz"),
+             ("f32be-6ch-96k-480", "f32be:6:96000:480", 1, False, 3, 32,
+              "f32be -> s16 (saturating), 6 ch -> the first two, 96000 -> 44100 Hz")]
+    for label, spec, burst, vary, tag, bits, conv in cases:
+        cwd = fresh(os.path.join(WORK, "listen-" + label))
+        args = ["--listen-sim", "0", "--listen-sim-spec", spec, "--listen-dump", "dump.wav"]
+        if burst > 1:
+            args += ["--listen-sim-burst", str(burst)]
+        if vary:
+            args += ["--listen-sim-vary"]
+        rc, log = run_app(args, cwd, LISTEN_SPEC_SCRIPT, "listen", env=dict(os.environ, PG_TOOL="false"))
+        fmt, ch, rate, frames = spec.split(":")
+        ch, rate = int(ch), int(rate)
+        check(rc == 0 and "[listen] playing" in log, "%s: plays" % label)
+        check("[listen] conversion: " + conv in log, "%s: conversion %s" % (label, conv))
+        st = listen_stats(log)
+        check(len(st) >= 1 and st[0]["primed"] == 1 and st[0]["underruns"] == 0 and st[0]["overflows"] == 0
+              and st[0]["resyncs"] == 0 and st[0]["primes"] == 1 and st[0]["clipped"] == 0,
+              "%s: primed once, no underrun, overflow, resync or clip (%s)" % (label, st[:1]))
+        m = re.search(r"\[rec\] started: (\S+)", log)
+        check(m is not None, "%s: recorded" % label)
+        if m:
+            rec = os.path.join(cwd, m.group(1))
+            check_tone(rec, 1000.0, "%s: recording, left" % label)
+            if ch == 1:
+                sr, L, R = wav_frames(rec)
+                check(L == R, "%s: mono input on both sides" % label)
+            else:
+                check_tone(rec, 1000.0, "%s: recording, right" % label, channel=1)
+        dump = os.path.join(cwd, "dump.wav")
+        check(os.path.exists(dump), "%s: --listen-dump wrote %s" % (label, dump))
+        if os.path.exists(dump):
+            h = wav_header(dump)
+            check(h["tag"] == tag and h["channels"] == ch and h["rate"] == rate and h["bits"] == bits and h["data"] > 0,
+                  "%s: the dump's header is the obtained spec (%s)" % (label, h))
+            # the simulated device's tone, exactly as it made it (its own clock: exactly 1000 Hz)
+            check_tone(dump, 1000.0, "%s: dump" % label, start=0.1, ppm_tol=1, max_thdn=-80.0)
+
+
+def part_listen_sdl():
+    print("6c. Listen through SDL's real capture path (SDL's disk driver: a file as the input device)")
+    cwd = fresh(os.path.join(WORK, "listen-sdl-disk"))
+    rate, secs = 44100, 30
+    raw = bytearray()
+    for i in range(rate * secs):
+        v = int(round(6000 * math.sin(2 * math.pi * 1000 * i / rate)))
+        raw += struct.pack("<hh", v, -v)
+    inp = os.path.join(cwd, "in.raw")
+    with open(inp, "wb") as f:
+        f.write(raw)
+    env = dict(os.environ, PG_TOOL="false", SDL_AUDIODRIVER="disk", SDL_DISKAUDIOFILEIN=inp,
+               SDL_DISKAUDIOFILE=os.path.join(cwd, "out.raw"))
+    rc, log = run_app(["--listen-device", "capture", "--listen-dump", "dump.wav"], cwd, LISTEN_SPEC_SCRIPT, "listen",
+                      env=env, timeout=90)
+    m = re.search(r'\[listen\] playing "([^"]+)"', log)
+    if m is None and "[listen] capture" not in log and "NOT RUNNING" in log:
+        print("  skipped: this SDL has no disk audio driver")
+        return
+    check(rc == 0 and m is not None, "SdlCapture opened SDL's capture device (%s)" % (m.group(1) if m else "-"))
+    check(re.search(r"\[listen\] SDL built against \S+, running \S+ = (SDL2 itself|sdl2-compat)", log) is not None,
+          "the diagnostics name the SDL")
+    check("[listen] capture obtained: s16le, 2 ch, 44100 Hz" in log, "obtained spec printed")
+    check(re.search(r"\[listen\] capture callbacks: \d+ callbacks", log) is not None, "capture callbacks counted")
+    st = listen_stats(log)
+    check(len(st) >= 1 and st[0]["primed"] == 1 and st[0]["overflows"] == 0 and st[0]["clipped"] == 0,
+          "primed, no overflow or clip (%s)" % (st[:1],))
+    dump = os.path.join(cwd, "dump.wav")
+    if os.path.exists(dump):
+        d = read(dump)[44:]
+        at = raw.find(d[:4096]) if len(d) >= 4096 else -1
+        check(at >= 0 and at % 4 == 0 and raw[at:at + len(d)] == d,
+              "the dump is a byte-exact slice of the input file (%d bytes at offset %d)" % (len(d), at))
+    else:
+        check(False, "--listen-dump wrote dump.wav")
+    m = re.search(r"\[rec\] started: (\S+)", log)
+    check(m is not None, "recorded")
+    if m:
+        # SDL's disk driver paces both devices with SDL_Delay, so their clocks differ by an unknown,
+        # small amount: the rate match follows it; the tone stays clean.
+        check_tone(os.path.join(cwd, m.group(1)), 1000.0, "the recording", ppm_tol=20000, max_thdn=-50.0)
 
 
 def stems_script(*middle):
@@ -455,24 +622,26 @@ def part_stems():
 
 
 def main():
-    global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK
+    global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK, ANALYZE
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="host build directory")
     ap.add_argument("--work", required=True, help="scratch directory (wiped)")
+    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems)")
     a = ap.parse_args()
     b = os.path.abspath(a.bin)
     APP, UI_SHOT = os.path.join(b, "pocket-groove"), os.path.join(b, "ui_shot")
     AUDIO_REF, XFER_SIM = os.path.join(b, "desktop_audio_ref"), os.path.join(b, "xfer_sim")
+    ANALYZE = os.path.join(b, "listen_analyze")
     WORK = fresh(os.path.abspath(a.work))
     os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
     os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
-    part_keys()
-    part_session()
-    part_audio()
-    part_xfer()
-    part_strip()
-    part_listen()
-    part_stems()
+    only = set(x for x in a.only.split(",") if x)
+    parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
+             ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
+             ("listen", part_listen_sdl), ("stems", part_stems)]
+    for name, fn in parts:
+        if not only or name in only:
+            fn()
     print("FAILED: %d check(s)" % len(failures) if failures else "OK")
     return 1 if failures else 0
 
