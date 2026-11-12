@@ -12,7 +12,10 @@ DTR/RTS not resetting the board, LittleFS/FAT behaviour) has not run on hardware
 
 USB audio (stereo input over USB, UAC1 + CDC): feasible with the prebuilt TinyUSB; spike
 env:usb-audio-spike (src/usbspike, build/firmware/pocket-groove-usbspike.bin) built and
-checked offline only, waiting for the hardware test in docs/usb-audio.md section 8.
+checked offline, then run on the owner's device and Mac (2026-11-12): enumerates, streams at
+44.1 kHz, 1000 packets/s, 0 underruns, tones and click recorded correctly; one defect, 148
+frames dropped once at stream start (not growing). Integration into the instrument is in
+progress as env:cardputer-adv-usb. Stem bounce via tools/pg also confirmed working on hardware.
 
 Agreed order of work (2026-11-12, set by the owner):
 1. Owner tests on hardware what is on main: backlight/ghost fixes, tools/pg ls/pull/bounce,
@@ -23,6 +26,12 @@ Agreed order of work (2026-11-12, set by the owner):
    Nice to have: MIDI controller input for playing notes. Open design question: what a MIDI
    key does on the lead in a chord mode, and how played chords fit the one-note-plus-chord-type
    Step without changing the project format.
+   Fast follows, the only desktop-specific features for the foreseeable future (owner,
+   2026-11-12), keep them simple:
+   a. Listen to the device from the desktop app: play the "Pocket Groove" USB audio input
+      through the Mac's output, so no external monitoring setup is needed.
+   b. Pull stems with one click: browse the projects on the connected device in the app and
+      bounce the chosen one (what tools/pg ls + bounce do today).
 3. Full functionality assessment: the owner tests every instrument and setting (on the
    desktop build, faster) and gives feedback.
 
