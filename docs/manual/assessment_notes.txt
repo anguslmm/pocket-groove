@@ -1,0 +1,137 @@
+# "What it does" and "Try" texts for the parameter tables of docs/ASSESSMENT.md.
+# Format: SECTION SHORTNAME | what it does | try   (SECTION = KICK SNAR CLAP CHH OHH PERC BASS LEAD MIX GLOBAL)
+# Used by host/tools/param_reference.cpp --assessment / --check-assessment (ctest check_assessment).
+# Names, ranges and defaults come from the code; only these two texts are written by hand.
+# "TESTBED" is the project built in the sheet's "Before you start".
+
+KICK TUNE | Pitch of the boom (28-101 Hz; 66 is A). | With the bass playing, find where kick and bass stop fighting.
+KICK DCY | Length of the boom. | Kick soloed, hold `=` from 46 to 127: thump to 808 tail.
+KICK PNCH | How far the pitch drops at the hit. | Set SWP to 100 first so the drop is slow, then sweep PNCH.
+KICK SWP | How fast that pitch drop settles. | PNCH to 110 first, then sweep SWP: click-thump to laser "dooo".
+KICK CLK | Level of the click on top. | DCY to 10 first so only the attack is left, then sweep CLK.
+KICK DRV | Saturation: denser, louder, harder. | Sweep 0 to 127 with the bass on: where does it start to eat the bass?
+KICK TONE | Low-pass over the whole kick: round to bright. | CLK to 127 first, then sweep TONE down from 127.
+KICK HOLD | Keeps the boom at full level before it decays. | DCY to 20 first, then HOLD 0 against 127.
+KICK HARM | Adds a second harmonic: presence on small speakers. | Compare 0 and 127 on the laptop speakers, then on headphones.
+KICK CTON | Character of the click: tick to thwack. | CLK to 127 first, then sweep CTON.
+
+SNAR TUNE | Pitch of the drum body. | SNAP to 20 first so the body is in front, then sweep.
+SNAR DCY | Length of the snare wires (the noise). | SNAP to 127, then sweep DCY.
+SNAR SNAP | Wires against body: tom-like to crack. | Sweep 0 to 127.
+SNAR TONE | High-pass on the wires: thick to thin. | SNAP 127, DCY 80, then sweep.
+SNAR BODY | Length of the drum body. | SNAP to 20, then sweep.
+SNAR BEND | Downward pitch sweep of the body. | SNAP 20, BODY 100, then sweep BEND.
+SNAR RING | Level of the upper ring tone. | SNAP to 20, then RING 0 against 127.
+SNAR DTUN | Interval of the ring against the body. | RING to 127 first, then sweep.
+SNAR DRV | Saturation of the whole snare. | Sweep 0 to 127, then hear it against the clap.
+
+CLAP TONE | Pitch of the clap: thick to papery. | RES to 100 first so it is obvious, then sweep.
+CLAP DCY | Length of the room tail. | TAIL to 127 first, then sweep DCY.
+CLAP SPRD | Gap between the hand bursts: one clap to a loose group. | BRST to 4 first, then sweep SPRD.
+CLAP TAIL | Level of the tail against the bursts. | DCY to 100, then TAIL 0 against 127.
+CLAP BRST | Number of hand bursts before the tail; 0 = one snap. | SPRD to 100 first so they are spaced, then step 0 to 4.
+CLAP RES | Narrow, ringing band (808-ish). | Sweep with TONE at 30, then at 100.
+CLAP AIR | High sizzle on the attack. | AIR 0 against 127; listen to the front of the clap.
+CLAP DRV | The 909-style crunch. | Sweep 0 to 127.
+
+CHH TUNE | Pitch of the metal. | MTL to 127 first (all metal), then sweep.
+CHH DCY | Length of the hat; it also cuts a ringing open hat. | Sweep 0 to 127.
+CHH TONE | High-pass: thick to crisp. | Sweep 0 to 127.
+CHH MTL | Noise against metal. | Sweep 0 (pure noise) to 127 (pure metal).
+CHH COLR | Ringing colour of the filter. | TONE to 40 first, then sweep.
+CHH SNAP | Short tick at the attack. | DCY to 0 first, then SNAP 0 against 127.
+CHH SPRD | Spacing of the metal tones: tonal to clangy. | MTL to 127 first, then sweep.
+
+OHH TUNE | Pitch of the metal. | MTL to 127 first, then sweep.
+OHH DCY | Length of the ring, 40 ms to 1 s. | CHH muted (`fn`+`f`): sweep; then unmute it to hear the choke.
+OHH TONE | High-pass: thick to crisp. | Sweep 0 to 127 with DCY at 90.
+OHH MTL | Noise against metal. | Sweep 0 to 127 with DCY at 90.
+OHH COLR | Ringing colour of the filter. | TONE to 40 first, then sweep.
+OHH SNAP | Short tick at the attack. | SNAP 0 against 127.
+OHH SPRD | Spacing of the metal tones: tonal to clangy. | MTL to 127 first, then sweep.
+
+PERC MODL | Which instrument: tom, rim, cowbell, clave, shaker, zap. | Step through all six while it plays; rate each one in the model lines below.
+PERC TUNE | Pitch (shaker: filter frequency). | On TOM and ZAP, sweep while it plays.
+PERC DCY | Length of the tail (zap: length of the sweep). | On TOM and SHKR, sweep.
+PERC TONE | Colour; means something different per model (manual chapter 19). | On COWB (band-pass) and SHKR (resonance), sweep.
+PERC BEND | Pitch drop (cowbell up or down, shaker attack, zap depth). | On ZAP with DCY 100, sweep.
+PERC HARM | Interval between the two tones (shaker: grain). | On COWB, sweep and listen for the interval.
+PERC NOIS | Stick, click, breath or noise layer. | On RIM and TOM, 0 against 127.
+PERC DRV | Saturation. | On TOM, sweep 0 to 127.
+
+BASS CUT | Filter cutoff: dark to bright. Also left Shift+`[` `]` from any view. | In TESTBED only: the demos lock CUT on most bass steps, so it does nothing there.
+BASS RES | Resonance: squelch, then self-oscillation above about 123. | CUT 30, ENV 100 first, then sweep RES to 127.
+BASS ENV | How far each note opens the filter (the "wow"). | CUT 20, RES 100 first, then sweep.
+BASS DCY | How long that "wow" lasts: blip to vowel. | ENV to 100 first, then sweep.
+BASS ACC | How much accented steps jump out. | Accent two steps (hold step, `g`, `=`), then ACC 0 against 127.
+BASS DRV | Grit and growl, into and after the filter. | RES to 100, then sweep 0 to 127.
+BASS LFO | Tempo-synced wobble of the cutoff (it only opens). | CUT 20 and ADCY 127 first, long gates, then raise LFO.
+BASS RATE | Speed of the wobble as a note length. | LFO to 80 first, then try `1BAR`, `1/4`, `1/8T`, `1/16`.
+BASS WAVE | Oscillator shape: saw, square, thin pulse. | CUT 100, ENV 0 first, then sweep.
+BASS SUB | Clean sine under the bass. | Bass soloed, CUT 0: SUB 0 against 127, on headphones.
+BASS FMIX | Crossfade from saw/pulse to the FM pair (growl, metal). | FM to 100 first, then sweep FMIX 0 to 127.
+BASS FM | Brightness of the FM pair. | FMIX to 127 first (at 0 FM does nothing), then sweep.
+BASS RATI | FM pitch ratio: warm, hollow, metallic. | FMIX 127, FM 90, then step through all nine.
+BASS FOLD | Wavefolder: buzzy bass-house growl. | CUT to 80, then sweep; then hear the locks in BASSHAUS P1.
+BASS TENV | Lets the filter envelope also move FM and fold, per note. | FOLD 80 (or FMIX 127) and ENV 100 first, then TENV 0 against 127.
+BASS LSHP | Shape of the wobble. | LFO 80, RATE `1/4` first, then step through; S&H is random.
+BASS SLID | Glide time between slid notes. | SLD on a step before a different note (hold step, `h`, `=`), then sweep.
+BASS ADCY | How long a held note sounds: pluck to sustain. | Long gates first (hold step, `s`, hold `=` to 4), then sweep.
+BASS REL | Tail after the note ends. | ADCY 127, then sweep REL.
+BASS ATK | Soft start of each note. | Sweep 0 to 127 and listen to the front of the notes.
+BASS KTRK | How much the cutoff follows the note. | CUT 40, notes `z` and `,` an octave apart: KTRK 0 against 127.
+BASS LTMB | The wobble also moves FM and fold. | LFO 80, FOLD 80 first, then LTMB 0 against 127.
+BASS SUBO | Sub on the note or an octave below. | SUB 127, CUT 0, then flip.
+BASS TUNE | Transposes the main oscillator; the sub stays. | SUB 60, then try +7, +12, -12.
+
+LEAD CUT | Filter cutoff: the held brightness. | ENV 0 first, then sweep.
+LEAD RES | Resonance (level-compensated, so it doesn't jump out). | CUT 40, ENV 80 first, then sweep.
+LEAD ENV | Bite of the filter envelope. | CUT to 20 first, then sweep.
+LEAD FDCY | How long the bite lasts. | CUT 20, ENV 100 first, then sweep.
+LEAD WAVE | Oscillator 1 type. | Step through all eight with SUS 100 and long gates.
+LEAD SHP | Shape; what it does depends on WAVE. | For each WAVE in turn, sweep SHP (PULS: width, ORGN: drawbars).
+LEAD DET | Detune of oscillator 2; spread of SUPR. | WAVE SAW, MIX 0: DET 0 against 127; then WAVE SUPR.
+LEAD DCY | Amp decay to the sustain level. | SUS to 0 first, then sweep.
+LEAD ATK | Amp attack: stab to pad. | Long gates (hold step, `s`, hold `=`), SUS 100, then sweep.
+LEAD WID | Stereo width. Desktop only: the device is mono. | Headphones, WID 0% against 100%.
+LEAD SUS | Sustain level: stab to held chord. | Long gates first, then SUS 0 against 127.
+LEAD REL | Tail after the note ends. | SUS 100, REV send 0, then sweep.
+LEAD FATK | Filter envelope attack: swell instead of pluck. | CUT 20, ENV 100, long gates, then sweep.
+LEAD FLT | Low-pass, band-pass, high-pass. | CUT 60, RES 80, then flip through.
+LEAD KTRK | How much the cutoff follows the note. | CUT 30; play `z`, then `,` an octave up: 0% against 100%.
+LEAD DRV | Drive into a soft limiter: fatter stabs. | On four-note chords (ACIDJAM's MIN9 stabs), DRV 0 against 127.
+LEAD OSC2 | Oscillator 2 wave. | MIX to +63 (oscillator 2 alone) first, then step through.
+LEAD INTV | Oscillator 2 interval in semitones. | MIX 0, then try -12, +7, +12.
+LEAD MIX | Balance of oscillator 1 and 2. | INTV +7 first so you can tell them apart, then sweep.
+LEAD LFO | LFO speed, 0.1 to 20 Hz (not tempo-synced). | VIB to 127 first, then sweep.
+LEAD VIB | Vibrato depth. | Long gates, then sweep.
+LEAD LSHP | LFO to SHP (pulse-width movement on PULS). | WAVE PULS, SHP 64, LFO 60, then 0 against 127.
+LEAD LCUT | LFO to cutoff. | CUT 50, RES 60, then sweep.
+LEAD GLID | Glide time on slid notes. | Two steps with different notes, chord off (hold step, `j`, `-` and `=` together), SLD on the first; sweep.
+
+MIX LVL | Track level; 100 = unity. | Every track against the kick: is the default balance right?
+MIX DUCK | How much the ducker pulls this track down. | BASSHAUS P1: BASS 0% against 100%.
+MIX DLY | Send to the delay. | ACIDJAM, LEAD: 0% against 100%.
+MIX REV | Send to the reverb. | CLAP: 0% against 100%.
+MIX PAN | Left-right placement. Desktop only: the device is mono. | Headphones: CHH hard left, OHH hard right.
+
+GLOBAL DSRC | What triggers the ducker: the kick, every beat, or nothing. | ACIDJAM P4 (no kick): KICK against BEAT.
+GLOBAL DDEP | Depth of the dip. | BASSHAUS P1: sweep and watch `GAIN` on the curve.
+GLOBAL DHLD | Time the dip stays fully down. | DDEP 100% first, then 0 against 127.
+GLOBAL DREL | Recovery time. | BASSHAUS P1: sweep, then try just under one beat (90-100).
+GLOBAL DCRV | Recovery shape: snaps back or swells late. | DREL 90 first, then -64 against +63.
+GLOBAL DFX | How much the delay and reverb are ducked too. | LEAD delay send up first, then 0% against 100%.
+GLOBAL DTIM | Echo time as a note length. | ACIDJAM, LEAD delay send 100%, then step through all nine.
+GLOBAL DFB | How many echoes. | Sweep to 100% and listen for runaway.
+GLOBAL DTON | Echoes darker (negative) or thinner (positive). | DFB 80% first, then -64 against +63.
+GLOBAL DWID | Ping-pong width. Desktop only: the device is mono. | Headphones, 0% against 100%.
+GLOBAL RSIZ | Room size: decay 0.3 to 5 s. | CLAP reverb send 100% first, then sweep.
+GLOBAL RDMP | Darkness of the room. | RSIZ 100 first, then sweep.
+GLOBAL BPM | Tempo. Also `tab` + `-` `=`, or tap `tab`. | Note where each demo feels best.
+GLOBAL VOL | Master level (digital); 100 = unity. | Sweep and watch the level bar's red tick.
+GLOBAL FILT | DJ filter: low-pass below OFF, high-pass above. | Hold `[`, then `]`; both together = OFF.
+GLOBAL FRES | Resonance of the DJ filter. | Hold `[` to about LP30, then sweep FRES.
+GLOBAL DRIV | Master saturation: glue and loudness. | Full mix, sweep 0 to 127.
+GLOBAL ROOT | Root of the scale the note keys play. | Play the note keys on BASS after each change.
+GLOBAL SCAL | Scale of the note keys. | Lead in AUTO: play `z` to `,` in each scale.
+GLOBAL SWNG | Swing: delays every second sixteenth. | ACIDJAM: hold `tab`, `;` `.`; 54-58% is house.
