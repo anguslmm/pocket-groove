@@ -68,6 +68,14 @@ class GhostFilter {
   };
 
   void reset();
+  // Off = every event passes straight through (a keyboard with one contact per
+  // key, e.g. the desktop build's computer keyboard). On by default; reset()
+  // and a fresh Ui switch it back on. Change it only while no key is down.
+  void setEnabled(bool on) {
+    reset();
+    off_ = !on;
+  }
+  bool enabled() const { return !off_; }
   // One event in, 0..kMaxOut events out (to deliver in order). nowMs = UI clock.
   int push(const KeyEvent& e, uint32_t nowMs, Out* out);
   // Delivers held-back downs whose partner never came. Call once per UI frame.
@@ -97,6 +105,7 @@ class GhostFilter {
   Entry q_[kQueue] = {};
   uint8_t qn_ = 0;
   uint32_t dropped_ = 0, swallowed_ = 0;
+  bool off_ = false;
 };
 
 }  // namespace ui

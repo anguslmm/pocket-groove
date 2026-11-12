@@ -57,6 +57,9 @@ class Ui {
   // holds back is delivered by the next event or the next update().
   void onKey(const KeyEvent& e) { onKey(e, now_); }
   void onKey(const KeyEvent& e, uint32_t nowMs);
+  // The phantom-key filter is on after init(). A host whose keyboard has no
+  // matrix (the desktop build) switches it off right after init().
+  void setGhostFilter(bool on) { ghost_.setEnabled(on); }
 
   // Call ~30x/s. Polls the engine, runs timers (repeat, sweeps, erase, toasts),
   // and redraws what changed. Returns true if fb changed.
