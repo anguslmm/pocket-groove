@@ -111,6 +111,15 @@ bool Script::load(const char* path, const KeyMap& map, std::string* err) {
     } else if (op == "quit") {
       c.op = Cmd::Quit;
       cmds_.push_back(c);
+    } else if (op == "app") {
+      const char* rest = std::strstr(line, "app") + 3;
+      while (*rest == ' ' || *rest == '\t') ++rest;
+      std::string args = rest;
+      while (!args.empty() && (args.back() == '\n' || args.back() == '\r' || args.back() == ' ')) args.pop_back();
+      if (args.empty()) { fail("app <command>"); break; }
+      c.op = Cmd::App;
+      c.arg = args;
+      cmds_.push_back(c);
     } else if (op == "battery" || op == "sd" || op == "boot" || op == "demo" || op == "empty") {
       continue;   // ui_shot rig setup: see script.h
     } else {
@@ -162,6 +171,16 @@ bool Script::service(uint32_t nowMs, ScriptHost& host) {
       case Cmd::Quit:
         host.quit();
         break;
+      case Cmd::App: {
+        const int r = host.command(c.arg, nowMs);
+        if (r > 0) return true;   // not done yet: again on the next pass
+        if (r < 0) {
+          std::fprintf(stderr, "%s:%d: app %s: failed\n", path_.c_str(), c.line, c.arg.c_str());
+          ++errors_;
+        }
+        ++pc_;
+        return true;   // let the main loop handle what it pushed
+      }
       case Cmd::Wait:
         break;
     }

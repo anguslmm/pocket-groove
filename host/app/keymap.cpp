@@ -96,6 +96,8 @@ int scancodeFromName(const std::string& name) {
 const Bind kDefaultCmdBindings[] = {
     {SDL_SCANCODE_R, kActRecord},   // Cmd+R = F9
     {SDL_SCANCODE_I, kActStats},    // Cmd+I = F2
+    {SDL_SCANCODE_L, kActListen},   // Cmd+L: Listen
+    {SDL_SCANCODE_B, kActStems},    // Cmd+B: Stems
 };
 
 KeyMap::KeyMap() {
@@ -121,6 +123,8 @@ int KeyMap::scancodeFor(int b) const {
 const char* bindingName(int b) {
   if (b == kActRecord) return "record";
   if (b == kActStats) return "stats";
+  if (b == kActListen) return "listen";
+  if (b == kActStems) return "stems";
   if (b >= 0 && b < kNumKeyIds) return keyLegend(b);
   return "none";
 }
@@ -128,6 +132,8 @@ const char* bindingName(int b) {
 int bindingFromName(const char* name) {
   if (ieq(name, "record")) return kActRecord;
   if (ieq(name, "stats")) return kActStats;
+  if (ieq(name, "listen")) return kActListen;
+  if (ieq(name, "stems")) return kActStems;
   if (ieq(name, "none")) return kUnbound;
   const int k = keyFromName(name);
   return k >= 0 ? k : -2;

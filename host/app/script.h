@@ -13,6 +13,10 @@
 //   shot <name>                <out>/<name>.png (240x135) and <out>/<name>_4x.png
 //   expect-released            fail unless no Cardputer key is held (desktop layer and Ui)
 //   quit                       as closing the window
+//   app <command ...>          a desktop-app command (main.cpp, App::command): click X Y
+//                              (canvas pixels, through SDL's mouse events), winshot NAME,
+//                              listen-sim plug|unplug, wait-stems MS, ...; it may keep the
+//                              script waiting until it is done
 // Lines with ui_shot's setup commands (battery, sd, boot, demo, empty) are
 // skipped: the app boots like the device and its UiEnv is fixed.
 #pragma once
@@ -31,6 +35,8 @@ struct ScriptHost {
   virtual bool shot(const std::string& name) = 0;
   virtual bool allReleased() = 0;
   virtual void quit() = 0;
+  // `app ...`: 0 done, 1 not yet (asked again on the next pass), -1 failed.
+  virtual int command(const std::string& args, uint32_t nowMs) { (void)args; (void)nowMs; return -1; }
 };
 
 class Script {
@@ -42,7 +48,7 @@ class Script {
 
  private:
   struct Cmd {
-    enum Op : uint8_t { Down, Up, Wait, Focus, Shot, Expect, Quit } op;
+    enum Op : uint8_t { Down, Up, Wait, Focus, Shot, Expect, Quit, App } op;
     int sc = 0;
     uint32_t ms = 0;
     std::string arg;

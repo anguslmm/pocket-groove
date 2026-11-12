@@ -52,7 +52,7 @@ target_include_directories(pg_desk PUBLIC ${DESK_DIR} ${PG_SRC} ${CMAKE_CURRENT_
 target_link_libraries(pg_desk PUBLIC ${PG_SDL_TARGET})
 target_compile_options(pg_desk PRIVATE ${PG_FLAGS})
 
-add_executable(pocket-groove main.cpp audio.cpp display.cpp recorder.cpp)
+add_executable(pocket-groove main.cpp audio.cpp display.cpp recorder.cpp listen.cpp strip.cpp stems.cpp)
 target_link_libraries(pocket-groove PRIVATE pg_desk ${PG_LIBS} ${PG_LIBS} ${PG_SDL_TARGET})
 target_compile_options(pocket-groove PRIVATE ${PG_FLAGS})
 # Next to the other host binaries (build/host/pocket-groove).
@@ -94,7 +94,7 @@ if(Python3_Interpreter_FOUND AND TARGET ui_shot AND TARGET xfer_sim)
            COMMAND ${Python3_EXECUTABLE} ${DESK_DIR}/tests/desktop_check.py --bin ${CMAKE_BINARY_DIR}
                    --work ${CMAKE_BINARY_DIR}/desktop_test
            WORKING_DIRECTORY ${PG_ROOT})
-  set_tests_properties(test_desktop_app PROPERTIES TIMEOUT 300
+  set_tests_properties(test_desktop_app PROPERTIES TIMEOUT 900
                        ENVIRONMENT "SDL_VIDEODRIVER=dummy;SDL_AUDIODRIVER=dummy")
   add_dependencies(pocket-groove desktop_audio_ref)
 endif()

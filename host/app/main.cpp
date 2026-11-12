@@ -14,16 +14,24 @@
 // Not here (device-only, src/app): boot menu, diagnostics strip, codec volume
 // gesture, backlight. G0 (F1) is held back from the Ui as the firmware does,
 // and G0 + - / = is swallowed as there, but changes no volume.
+//
+// The desktop's own additions (docs/DESKTOP.md), none of which touches the
+// instrument: the strip under the screen (strip.h: modifier lights, controls,
+// status), Listen (listen.h: the device's USB audio input mixed into the
+// output) and the Stems list (stems.h: tools/pg ls / bounce as a subprocess).
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 
 #include <sys/stat.h>
+#include <unistd.h>
 
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "audio.h"
 #include "common/ghost_matrix.h"
@@ -32,6 +40,7 @@
 #include "display.h"
 #include "input.h"
 #include "keymap.h"
+#include "listen.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/project_io.h"
 #include "pg/ui/gfx.h"
@@ -39,6 +48,8 @@
 #include "pg/ui/ui.h"
 #include "recorder.h"
 #include "script.h"
+#include "stems.h"
+#include "strip.h"
 
 namespace {
 
@@ -51,6 +62,10 @@ struct Options {
   std::string keymapFile;
   std::string script;
   std::string outDir = "build/desktop";
+  std::string pgTool;                // tools/pg for the Stems list (default: next to this build, or $PG_TOOL)
+  std::string pgPort;                // --port for tools/pg (default: auto-detect, or $PG_PORT)
+  bool listenSim = false;            // --listen-sim PPM: a simulated device instead of SDL's capture list
+  double listenSimPpm = 0.0;
   int scale = 4;
   int buffer = 256;
   int sr = 44100;
@@ -76,8 +91,11 @@ void usage(FILE* f) {
                "  --record          start recording at launch\n"
                "  --script FILE     run a key script (host/app/script.h), then keep running until it quits\n"
                "  --out DIR         where script shots go (default build/desktop)\n"
-               "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats in the title.\n"
-               "Command never reaches the instrument.\n");
+               "  --pg-tool PATH    tools/pg for the Stems list (default: this repository's, or $PG_TOOL)\n"
+               "  --pg-port PORT    the device's serial port for the Stems list (default: auto, or $PG_PORT)\n"
+               "  --listen-sim PPM  test: Listen plays a simulated device whose clock runs PPM fast\n"
+               "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats,\n"
+               "Cmd+L = listen to the connected device, Cmd+B = stems. Command never reaches the instrument.\n");
 }
 
 bool parseArgs(int argc, char** argv, Options* o) {
@@ -96,6 +114,9 @@ bool parseArgs(int argc, char** argv, Options* o) {
     else if (a == "--keymap") o->keymapFile = next("a file");
     else if (a == "--script") o->script = next("a file");
     else if (a == "--out") o->outDir = next("a directory");
+    else if (a == "--pg-tool") o->pgTool = next("a path");
+    else if (a == "--pg-port") o->pgPort = next("a port");
+    else if (a == "--listen-sim") { o->listenSim = true; o->listenSimPpm = std::atof(next("a clock offset in ppm")); }
     else if (a == "--scale") o->scale = std::atoi(next("a factor"));
     else if (a == "--buffer") o->buffer = std::atoi(next("a frame count"));
     else if (a == "--sr") o->sr = std::atoi(next("44100 or 32000"));
@@ -123,6 +144,16 @@ pg::Framebuffer g_fb;
 desk::AudioOut g_audio;     // holds the 4 MB recording ring
 desk::KeyMap g_map;
 uih::GhostMatrix g_matrix;  // --device-keys only
+// The desktop's additions
+pg::Framebuffer g_stripFb;      // the strip (its top kStripH rows)
+pg::Framebuffer g_overlayFb;    // the Stems list
+desk::DriftBuffer g_listenBuf;  // Listen's rate match (64 KB)
+desk::SdlCapture g_sdlCapture;
+
+const char* buttonName(int b) {
+  static const char* const n[] = {"listen", "stems", "rec", "stats"};
+  return b >= 0 && b < desk::kNumButtons ? n[b] : "none";
+}
 
 class App final : public desk::ScriptHost {
  public:
@@ -132,6 +163,16 @@ class App final : public desk::ScriptHost {
   desk::Recorder rec;
   desk::KeyboardInput keyboard{&g_map};
   desk::EventQueue events;   // other sources (MIDI, later)
+  desk::Listen listen;
+  desk::Stems stems;
+  std::unique_ptr<desk::SimCapture> simCapture;
+  desk::StripState strip;
+  bool stripDrawn = false;
+  uint64_t litLogged = ~0ull;
+  std::string statsText;
+  uint32_t uiKeyEvents = 0;  // key events that reached the Ui (the tests count them)
+  uint32_t waitUntil = 0;    // `app wait-...` deadline
+  bool waiting = false;
   bool running = true;
   bool audioOk = false;
   bool showStats = false;
@@ -163,6 +204,7 @@ class App final : public desk::ScriptHost {
       swallow &= ~bit;
       return;
     }
+    ++uiKeyEvents;
     if (!opt.deviceKeys) {
       g_ui.onKey(pg::KeyEvent{uint8_t(k), down, t}, now);
       return;
@@ -179,6 +221,8 @@ class App final : public desk::ScriptHost {
       const desk::KeyOut& o = out[i];
       if (o.binding == desk::kActRecord) toggleRecord();
       else if (o.binding == desk::kActStats) showStats = !showStats;
+      else if (o.binding == desk::kActListen) toggleListen();
+      else if (o.binding == desk::kActStems) toggleStems();
       else if (o.binding >= 0 && o.binding < pg::ui::kNumKeyIds) cardKey(o.binding, o.down);
     }
   }
@@ -191,10 +235,108 @@ class App final : public desk::ScriptHost {
   void onSdlKey(const SDL_KeyboardEvent& k) {
     const int sc = k.keysym.scancode;
     const bool isCmd = sc == SDL_SCANCODE_LGUI || sc == SDL_SCANCODE_RGUI;
+    if (stems.isOpen()) {   // the list has the keyboard: nothing reaches the instrument
+      if (k.type != SDL_KEYDOWN || isCmd) return;
+      const int a = (k.keysym.mod & KMOD_GUI) ? g_map.lookupCmd(sc) : g_map.lookup(sc);
+      if ((k.keysym.mod & KMOD_GUI) || (a >= desk::kActRecord && sc != SDL_SCANCODE_ESCAPE)) {
+        if (a >= desk::kActRecord && !k.repeat) {
+          const desk::KeyOut o{int16_t(a), true};
+          deliver(&o, 1);
+        }
+        return;
+      }
+      stems.key(sc, k.repeat != 0);
+      needPresent = true;
+      return;
+    }
     desk::KeyOut out[desk::KeyboardInput::kMaxOut];
     const int n = keyboard.onScancode(sc, k.type == SDL_KEYDOWN, k.repeat != 0, (k.keysym.mod & KMOD_GUI) != 0,
                                       isCmd, out);
     deliver(out, n);
+  }
+
+  // ---- the strip's controls ---------------------------------------------------------
+  void toggleListen() {
+    if (!audioOk) {
+      std::printf("[listen] no audio output, so nothing to listen through\n");
+      return;
+    }
+    listen.toggle(nowMs());
+  }
+  void toggleStems() {
+    if (stems.isOpen()) {
+      stems.close();
+    } else {
+      releaseAll();   // no instrument key stays held while the list has the keyboard
+      stems.open();
+    }
+    needPresent = true;
+  }
+  void click(int wx, int wy) {
+    int cx = 0, cy = 0;
+    if (!display.toCanvas(wx, wy, &cx, &cy) || cy < pg::kScreenH) return;   // the device screen: nothing
+    const int b = desk::stripHit(cx, cy - pg::kScreenH);
+    if (b == desk::kBtnNone) return;
+    std::printf("[strip] click %s\n", buttonName(b));
+    std::fflush(stdout);
+    if (b == desk::kBtnListen) toggleListen();
+    else if (b == desk::kBtnStems) toggleStems();
+    else if (b == desk::kBtnRec) toggleRecord();
+    else if (b == desk::kBtnStats) showStats = !showStats;
+  }
+  void updateStrip() {
+    desk::StripState s;
+    s.held = keyboard.heldKeys();
+    s.devicePresent = listen.present();
+    s.listenWanted = listen.wanted();
+    s.listenActive = listen.active();
+    s.listenWarn = listen.hintIsWarning();
+    s.stemsOpen = stems.isOpen();
+    s.stemsBusy = stems.busy();
+    s.rec = rec.active();
+    s.recSec = rec.active() ? int(rec.seconds()) : 0;
+    s.stats = showStats;
+    s.status = showStats ? statsText : listen.statusLine();
+    if (stripDrawn && s == strip) return;
+    uint64_t lit = 0;
+    for (const desk::StripModifier& m : desk::kStripModifiers) lit |= s.held & (1ull << m.key);
+    if (lit != litLogged) {
+      litLogged = lit;
+      std::printf("[strip] lit:");
+      for (const desk::StripModifier& m : desk::kStripModifiers)
+        if ((lit >> m.key) & 1) std::printf(" %s", m.card);
+      std::printf("%s\n", lit ? "" : " -");
+      std::fflush(stdout);
+    }
+    strip = s;
+    stripDrawn = true;
+    desk::drawStrip(g_stripFb, s);
+    display.uploadStrip(g_stripFb);
+    needPresent = true;
+  }
+  void updateOverlay() {
+    if (!stems.isOpen() || !stems.changed()) return;
+    stems.draw(g_overlayFb);
+    display.uploadOverlay(g_overlayFb);
+    needPresent = true;
+  }
+  // The whole window (device screen or Stems list, and the strip) at `scale`.
+  bool windowShot(const std::string& path, int scale) {
+    const int W = desk::kCanvasW * scale, H = desk::kCanvasH * scale;
+    std::vector<uint8_t> rgb(size_t(W) * size_t(H) * 3);
+    const pg::Framebuffer& top = stems.isOpen() ? g_overlayFb : g_fb;
+    for (int y = 0; y < H; ++y)
+      for (int x = 0; x < W; ++x) {
+        const int cy = y / scale, cx = x / scale;
+        const pg::Framebuffer& fb = cy < pg::kScreenH ? top : g_stripFb;
+        const int ry = cy < pg::kScreenH ? cy : cy - pg::kScreenH;
+        const uint32_t v = desk::rgb565ToArgb(fb.palette[fb.px[ry * pg::kScreenW + cx]]);
+        uint8_t* o = &rgb[(size_t(y) * size_t(W) + size_t(x)) * 3];
+        o[0] = uint8_t(v >> 16);
+        o[1] = uint8_t(v >> 8);
+        o[2] = uint8_t(v);
+      }
+    return uih::writePng(path.c_str(), rgb.data(), W, H);
   }
 
   // ---- recording ------------------------------------------------------------------
@@ -215,21 +357,19 @@ class App final : public desk::ScriptHost {
     title.clear();   // refresh
   }
 
-  // ---- window title: project, recording, stats --------------------------------------
+  // ---- window title (project) and the strip's stats line ----------------------------
   void updateTitle(const desk::AudioStats& as) {
     char t[256];
-    int n = std::snprintf(t, sizeof(t), "Pocket Groove - %s%s", g_ui.projectName()[0] ? g_ui.projectName() : "?",
-                          g_ui.dirty() ? "*" : "");
-    if (rec.active()) {
-      const int s = int(rec.seconds());
-      n += std::snprintf(t + n, sizeof(t) - size_t(n), "   [REC %d:%02d]", s / 60, s % 60);
-    }
-    if (!audioOk) n += std::snprintf(t + n, sizeof(t) - size_t(n), "   NO AUDIO");
-    if (showStats && audioOk)
-      std::snprintf(t + n, sizeof(t) - size_t(n), "   audio %d%% (peak %d%%) late %u gaps %u, %d Hz, %d fr, %dx px%s%s",
-                    int(as.loadPct + 0.5f), int(as.peakLoadPct + 0.5f), as.late, as.gaps, as.sampleRate,
-                    as.bufferFrames, display.pixelScale(), opt.mono ? ", mono" : "",
-                    opt.deviceKeys ? ", device keys" : "");
+    const int n = std::snprintf(t, sizeof(t), "Pocket Groove - %s%s", g_ui.projectName()[0] ? g_ui.projectName() : "?",
+                                g_ui.dirty() ? "*" : "");
+    if (!audioOk) std::snprintf(t + n, sizeof(t) - size_t(n), "   NO AUDIO");
+    char st[64];
+    if (!audioOk) std::snprintf(st, sizeof(st), "NO AUDIO OUTPUT");
+    else
+      std::snprintf(st, sizeof(st), "AUD %d/%d%% LATE %u GAP %u %dFR %dX%s", int(as.loadPct + 0.5f),
+                    int(as.peakLoadPct + 0.5f), as.late, as.gaps, as.bufferFrames, display.pixelScale(),
+                    opt.mono ? " M" : "");
+    statsText = st;
     if (title != t) {
       title = t;
       display.setTitle(t);
@@ -273,6 +413,93 @@ class App final : public desk::ScriptHost {
     SDL_zero(e);
     e.type = SDL_QUIT;
     SDL_PushEvent(&e);
+  }
+
+  int command(const std::string& args, uint32_t now) override {
+    std::vector<std::string> w;
+    for (size_t i = 0; i < args.size();) {
+      while (i < args.size() && args[i] == ' ') ++i;
+      size_t j = i;
+      while (j < args.size() && args[j] != ' ') ++j;
+      if (j > i) w.push_back(args.substr(i, j - i));
+      i = j;
+    }
+    if (w.empty()) return -1;
+    auto pushClick = [&](int cx, int cy) {
+      int wx = 0, wy = 0;
+      display.fromCanvas(cx, cy, &wx, &wy);
+      for (int down = 1; down >= 0; --down) {
+        SDL_Event e;
+        SDL_zero(e);
+        e.type = down ? SDL_MOUSEBUTTONDOWN : SDL_MOUSEBUTTONUP;
+        e.button.windowID = display.windowId();
+        e.button.button = SDL_BUTTON_LEFT;
+        e.button.state = down ? SDL_PRESSED : SDL_RELEASED;
+        e.button.clicks = 1;
+        e.button.x = wx;
+        e.button.y = wy;
+        SDL_PushEvent(&e);
+      }
+    };
+    auto waitFor = [&](bool done, const char* what) {   // pending until done, failing after the deadline
+      if (done) { waiting = false; return 0; }
+      if (!waiting) {
+        waiting = true;
+        waitUntil = now + uint32_t(w.size() > 1 ? std::atoi(w[1].c_str()) : 10000);
+      }
+      if (int32_t(now - waitUntil) >= 0) {
+        waiting = false;
+        std::fprintf(stderr, "[script] timed out waiting for %s\n", what);
+        return -1;
+      }
+      return 1;
+    };
+    const std::string& c = w[0];
+    if (c == "click" && w.size() == 3) {   // canvas device pixels
+      pushClick(std::atoi(w[1].c_str()), std::atoi(w[2].c_str()));
+      return 0;
+    }
+    if (c == "click-button" && w.size() == 2) {
+      for (int b = 0; b < desk::kNumButtons; ++b)
+        if (w[1] == buttonName(b)) {
+          int x = 0, y = 0;
+          desk::stripButtonCentre(b, &x, &y);
+          pushClick(x, pg::kScreenH + y);
+          return 0;
+        }
+      return -1;
+    }
+    if (c == "winshot" && w.size() == 2) {
+      mkdirAll(opt.outDir);
+      uiFrame();
+      updateStrip();
+      if (stems.isOpen()) { stems.draw(g_overlayFb); display.uploadOverlay(g_overlayFb); }
+      const std::string p1 = opt.outDir + "/" + w[1] + ".png", p4 = opt.outDir + "/" + w[1] + "_4x.png";
+      const bool ok = windowShot(p1, 1) && windowShot(p4, 4);
+      if (ok) std::printf("[winshot] %s\n", p1.c_str());
+      return ok ? 0 : -1;
+    }
+    if (c == "listen-sim" && w.size() == 2 && simCapture) {
+      simCapture->plug(w[1] == "plug");
+      std::printf("[listen-sim] %s\n", w[1].c_str());
+      listen.rescanSoon();
+      return 0;
+    }
+    if (c == "wait-stems") return waitFor(!stems.busy(), "the stems job");
+    if (c == "wait-listening") return waitFor(listen.active() && g_listenBuf.stats().primed, "listening");
+    if (c == "print-keys") {
+      std::printf("[keys] %u key events reached the instrument\n", uiKeyEvents);
+      return 0;
+    }
+    if (c == "print-listen") {
+      const desk::DriftBuffer::Stats s = g_listenBuf.stats();
+      std::printf("[listen] stats: primed %d, fill %.0f fr, target %d, clock %+.1f ppm, underruns %u, overflows %u, "
+                  "resyncs %u, primes %u, pushed %llu\n",
+                  s.primed ? 1 : 0, double(s.fillFrames), s.target, double(s.clockPpm), s.underruns, s.overflows,
+                  s.resyncs, s.primes, static_cast<unsigned long long>(s.pushed));
+      return 0;
+    }
+    return -1;
   }
 
   static void mkdirAll(const std::string& d) { desk::makeDirs(d); }
@@ -366,6 +593,8 @@ int main(int argc, char** argv) {
   // Boot as the firmware's setup(): instrument, UI, session or demo 0, then audio last.
   pg::ui::initPalette(g_fb);
   std::memset(g_fb.px, 0, sizeof(g_fb.px));
+  pg::ui::initPalette(g_stripFb);
+  pg::ui::initPalette(g_overlayFb);
   g_inst.init(float(opt.sr), opt.mono);
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter
@@ -387,6 +616,36 @@ int main(int argc, char** argv) {
     if (opt.record) app.toggleRecord();
     g_audio.start();
   }
+  // Listen: SDL's capture list, or the test's simulated device.
+  desk::CaptureSource* capture = &g_sdlCapture;
+  if (opt.listenSim) {
+    app.simCapture.reset(new desk::SimCapture(&g_audio, opt.listenSimPpm));
+    capture = app.simCapture.get();
+  }
+  app.listen.init(capture, &g_listenBuf, &g_audio, opt.sr);
+  // Stems: tools/pg of this repository (build/host/pocket-groove -> ../../tools/pg).
+  {
+    desk::StemsConfig sc;
+    sc.tool = opt.pgTool;
+    if (sc.tool.empty() && std::getenv("PG_TOOL")) sc.tool = std::getenv("PG_TOOL");
+    if (sc.tool.empty()) {
+      if (char* base = SDL_GetBasePath()) {
+        const std::string t = std::string(base) + "../../tools/pg";
+        SDL_free(base);
+        if (::access(t.c_str(), X_OK) == 0) sc.tool = t;
+      }
+    }
+    if (sc.tool.empty()) sc.tool = "tools/pg";
+    sc.port = opt.pgPort;
+    sc.projectsDir = opt.dir;
+#ifdef __APPLE__
+    sc.reveal = "open";
+#else
+    sc.reveal = "xdg-open";
+#endif
+    if (const char* r = std::getenv("PG_REVEAL")) sc.reveal = r;   // "" = do not open the folder
+    app.stems.init(sc);
+  }
   std::fflush(stdout);
 
   uint32_t nextFrame = app.nowMs();
@@ -402,6 +661,15 @@ int main(int argc, char** argv) {
         case SDL_QUIT: app.running = false; break;
         case SDL_KEYDOWN:
         case SDL_KEYUP: app.onSdlKey(e.key); break;
+        case SDL_MOUSEBUTTONDOWN:
+          if (e.button.button == SDL_BUTTON_LEFT) app.click(e.button.x, e.button.y);
+          break;
+        case SDL_AUDIODEVICEADDED:
+        case SDL_AUDIODEVICEREMOVED:
+          if (app.simCapture == nullptr)
+            g_sdlCapture.deviceEvent(e.type == SDL_AUDIODEVICEADDED, e.adevice.iscapture != 0, e.adevice.which);
+          app.listen.rescanSoon();
+          break;
         case SDL_WINDOWEVENT:
           switch (e.window.event) {
             case SDL_WINDOWEVENT_FOCUS_LOST:
@@ -433,8 +701,12 @@ int main(int argc, char** argv) {
       lastTitle = now;
       app.updateTitle(g_audio.stats());
     }
+    if (app.audioOk) app.listen.tick(now);
+    app.stems.poll();
+    app.updateStrip();
+    app.updateOverlay();
     if (app.needPresent) {
-      app.display.present();
+      app.display.present(app.stems.isOpen());
       app.needPresent = false;
     }
   }
@@ -442,6 +714,9 @@ int main(int argc, char** argv) {
   // Quit (window closed, Cmd+Q, Ctrl+C in the terminal): the device's save path.
   app.releaseAll();
   if (app.rec.active()) app.toggleRecord();
+  app.stems.shutdown();
+  app.listen.shutdown();
+  std::printf("[keys] %u key events reached the instrument\n", app.uiKeyEvents);
   const bool saved = g_ui.saveSessionNow();
   std::printf("[session] %s %s\n", saved ? "saved to" : "NOT SAVED to", fs.real(pg::io::kSessionPath).c_str());
   g_audio.close();

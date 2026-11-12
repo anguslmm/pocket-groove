@@ -15,13 +15,15 @@ namespace desk {
 enum Binding : int16_t {
   kUnbound = -1,
   kActRecord = 100,   // F9: start / stop recording the output to a WAV
-  kActStats = 101,    // F2: audio stats in the window title
+  kActStats = 101,    // F2: audio stats (in the strip)
+  kActListen = 102,   // Cmd+L: hear the connected device through the computer
+  kActStems = 103,    // Cmd+B: the Stems list
 };
 
 struct KeyMap {
   static constexpr int kScancodes = 512;   // SDL_NUM_SCANCODES
   int16_t bind[kScancodes];
-  // Command+scancode shortcuts: app actions only (kActRecord, kActStats),
+  // Command+scancode shortcuts: app actions only (kActRecord, ...),
   // never a Cardputer key: Command never reaches the instrument.
   int16_t cmdBind[kScancodes];
 
