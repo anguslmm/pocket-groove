@@ -240,6 +240,9 @@ void Ui::prunePending() {
 
 void Ui::setStep(int t, int idx, const Step& s) {
   if (idx < 0 || idx >= kMaxSteps) return;
+  // Every step write is undoable; writes of one gesture share a snapshot (ui_edit.cpp).
+  const Step cur = stepAt(t, idx);
+  if (std::memcmp(&cur, &s, sizeof(Step)) != 0) undoForStep(t, idx, " STEP ");
   // Shadow it so the next read (e.g. the key-up of a tap) sees it before the engine does.
   PendStep* slot = nullptr;
   for (PendStep& p : pendSteps_)
@@ -307,6 +310,7 @@ void Ui::setValue(const ValueRef& r, int v) {
 }
 
 void Ui::noteOn(int t, int note, int vel, uint8_t flags, uint8_t chord) {
+  if (recOn_ && playing_) undoForRecording();   // the engine records this note into the pattern
   Command c = cmd(CmdType::NoteOn, t, clampi(note, 0, 127), clampi(vel, 1, 127));
   c.step = kDefaultStep;
   c.step.note = uint8_t(c.b);
@@ -390,6 +394,7 @@ void Ui::onKey(const KeyEvent& e, uint32_t nowMs) {
 void Ui::keyEvent(const KeyEvent& e, uint32_t nowMs) {
   const int k = e.key;
   now_ = nowMs;
+  evtGest_ = ++gestSeq_;   // a new key event (undo units, ui_edit.cpp)
   const uint64_t bit = 1ull << k;
   ++serial_;
   if (e.down) {
@@ -578,6 +583,7 @@ void Ui::transport(bool shift) {
     playing_ = true;
   }
   erasing_ = false;
+  recGest_ = 0;   // a recording pass ends with the transport (and a restart starts a new one)
 }
 
 void Ui::viewKey(View v) {
@@ -627,7 +633,11 @@ void Ui::stepDown(int k, int idx16, bool shift, bool ctrl) {
   const int abs = shownPage_ * 16 + idx16;
   if (heldStep_ >= 0) {
     // Tap another step = copy the held step there (7). Works across pages via '.
-    if (abs < trackLen(heldTrack_) && abs != heldStep_) setStep(heldTrack_, abs, stepAt(heldTrack_, heldStep_));
+    if (abs < trackLen(heldTrack_) && abs != heldStep_) {
+      const Step src = stepAt(heldTrack_, heldStep_), dst = stepAt(heldTrack_, abs);
+      if (std::memcmp(&src, &dst, sizeof(Step)) != 0) undoForStep(heldTrack_, heldStep_, " COPY STEP ");
+      setStep(heldTrack_, abs, src);
+    }
     return;
   }
   char buf[32];
@@ -655,6 +665,7 @@ void Ui::stepDown(int k, int idx16, bool shift, bool ctrl) {
     return;
   }
   heldStep_ = int8_t(abs);
+  heldGest_ = ++gestSeq_;   // everything until this key is released is one undo unit
   heldKey_ = uint8_t(k);
   heldTrack_ = sel_;
   heldPattern_ = pat_;
@@ -879,6 +890,7 @@ void Ui::chordKey(bool shift) {
 
 void Ui::recToggle() {
   recOn_ = !recOn_;
+  recGest_ = 0;   // a recording pass ends (or a new one starts)
   send(cmd(CmdType::SetRecord, 0, 0, recOn_ ? 1 : 0));
   if (recOn_ && !playing_) {
     // Step-write starts at step 1 of the shown page, or where it was left (9.2).
@@ -908,10 +920,10 @@ void Ui::delDown(int k) {
   }
   if (!playing_) return;
   erasing_ = true;                            // erase as the playhead passes (8.5)
+  eraseGest_ = ++gestSeq_;                    // the whole pass is one undo unit
   eraseSnapped_ = eraseDid_ = false;
   eraseLast_ = st_.step[sel_];
   rec_[k].act = kActErase;
-  // (undo snapshot at the first erase goes here in phase 2)
 }
 
 // ---- modifier layers (8.1, 8.2, 8.3) ------------------------------------------
@@ -1291,7 +1303,7 @@ void Ui::runTimers() {
           if (!eraseSnapped_) {                 // the first erase stores the undo snapshot (8.5)
             char lab[20];
             cat(cat(lab, kTrackNames[sel_]), " ERASED");
-            snapshotUndo(pat_, lab);
+            snapshotUndo(pat_, lab, eraseGest_);
             eraseSnapped_ = true;
           }
           eraseDid_ = true;
@@ -1366,13 +1378,16 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
     for (int i = 0; i < n; ++i) keyEvent(out[i].ev, out[i].ms);
   }
   now_ = env.nowMs;
+  evtGest_ = ++gestSeq_;   // this frame's timers (repeat, erase) are one event
   ++frame_;
   flushOutbox();
   pollStatus();
   if (writeBusy_ && (st_.writesDone == writeExpect_ || after(now_, writeSinceMs_ + 2000))) {
     writeBusy_ = false;   // the engine has consumed the buffer (or was re-initialised)
     ++serial_;
+    if (undoQueued_) undo();   // CTRL+Z pressed while it was in flight
   }
+  if (!(recOn_ && playing_)) recGest_ = 0;
   prunePending();
   runTimers();
   trackDirty();

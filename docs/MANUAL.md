@@ -663,10 +663,13 @@ While the chain plays, the status bar shows the slot number in green and the pla
 | `opt`+`shift`+step | Copy the pattern to another slot and queue it | yes (the destination) |
 | `shift`+step, `ctrl`+`shift`+step, `shift`+`'` | Length changes, add page | yes |
 | `del` held (erase) | | yes |
+| Step taps, STEP EDIT changes, copying a held step, step-write notes and rests | | yes |
+| A live recording pass | | yes (the whole pass) |
 
 - A track pastes onto the same kind: drum to drum, bass or lead to bass or lead (`CAN'T PASTE DRUMS ON BASS` otherwise). Pasting onto a different voice drops chords (except on the lead) and sound-parameter locks. The paste also sets the track's length.
 - To copy a track to another pattern: `ctrl`+`c`, switch pattern with `opt`+step (wait for it to start, or do it stopped), `ctrl`+`v`.
-- **Undo is one level** and covers one pattern: `ctrl`+`z` swaps the pattern back to how it was before the last undoable action; `ctrl`+`z` again redoes it. A new undoable action replaces the snapshot. Step taps, STEP EDIT changes, sound and mixer values, mutes and song edits aren't undoable. Loading a project clears undo and the clipboard.
+- **Undo is one level** and covers one pattern: `ctrl`+`z` swaps the pattern back to how it was before the last undoable action; `ctrl`+`z` again redoes it. A new undoable action replaces the snapshot. Every change to a pattern's steps and lengths is undoable, and one gesture is one action: everything done while one step key is held (placing it, every nudge of its note, fields and lock, copies to other steps, deleting it on a tap) undoes together; so does one `del` erase pass, and one live recording pass (from the first recorded note until `enter` turns REC off or the transport stops). Two separate taps are two actions, so `ctrl`+`z` takes back only the second. The toast names what it takes back, e.g. `UNDO: KICK STEP 5`, `UNDO: RECORDED NOTES`.
+- Not undoable: sound and mixer values, mutes, song chain edits, tempo, swing and the scale. Loading a project clears undo and the clipboard.
 
 ---
 
@@ -866,7 +869,7 @@ A second firmware, `cardputer-adv-usb`, makes the Cardputer a USB audio interfac
 - Mono output only (see chapter 16); the stereo USB firmware sends stereo to a computer (16.1).
 - Saving to internal flash while playing causes an audible dropout; saves aren't deferred until stop.
 - The session is saved only while stopped, and switching off doesn't save (chapter 14).
-- One level of undo, for pattern data only.
+- One level of undo, for pattern data only (sound and mixer values and the song chain aren't undoable).
 - No per-pattern tempo; the tempo is a project setting.
 - Mutes act immediately; there are no quantised mutes.
 - 16 patterns of up to 64 steps per project; 32 song slots.

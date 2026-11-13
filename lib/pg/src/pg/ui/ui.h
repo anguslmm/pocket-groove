@@ -178,7 +178,12 @@ class Ui {
 
   // clipboard and undo (ui_edit.cpp)
   void ctrlCombo(int k, bool shift);
-  void snapshotUndo(int pat, const char* label);
+  // gest: the gesture the snapshot belongs to (0 = only this key event / frame), see ui_edit.cpp.
+  void snapshotUndo(int pat, const char* label, uint32_t gest = 0);
+  uint32_t gestureNow() const;
+  bool undoCovers(uint32_t gest) const;
+  void undoForStep(int t, int idx, const char* what);
+  void undoForRecording();
   void undo();
   void cutCopyTrack(bool cut);
   void cutCopyPattern(bool cut);
@@ -415,6 +420,10 @@ class Ui {
   uint8_t undoIdx_ = 0, undoPat_ = 0, clipKind_ = 0, clipTrack_ = 0;
   bool undoValid_ = false, undoIsRedo_ = false;
   char undoLabel_[20] = {};
+  // undo units (ui_edit.cpp): ids from one counter, 0 = none
+  uint32_t gestSeq_ = 0, evtGest_ = 0, heldGest_ = 0, eraseGest_ = 0, recGest_ = 0;
+  uint32_t undoGest_ = 0, undoEvt_ = 0;   // what the current snapshot covers
+  bool undoQueued_ = false;               // CTRL+Z while a write was in flight: runs when it lands
   bool writeBusy_ = false;
   uint32_t writeSinceMs_ = 0;
   uint8_t writeBuf_ = 0, writePat_ = 0, writeExpect_ = 0;

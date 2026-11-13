@@ -268,7 +268,7 @@ Modifier overlays appear 200 ms after the modifier goes down, **or immediately**
 * When the panel opens, the **last-used field** is selected. It's VEL the first time.
 * The note row writes the step's note and auditions it: the scale degree at the track octave for synths, or velocity levels for drums. `;`/`.` move it ±1 semitone (chromatic, not scale-locked, so any note can be reached). CTRL moves it ±12 (not SHIFT: with step 1 held, SHIFT+`;` and SHIFT+`-` close the same scan rectangle, 16.1).
 * `l` (lead) moves the chord to the next type.
-* **Tap another step key = copy the held step there** (all 8 bytes). Tapping `'` while the step stays held flips the shown page, so a step can be copied across pages. Each copy is one `SetStep`. No undo snapshot is stored, because the copies are visible and each one can be toggled off.
+* **Tap another step key = copy the held step there** (all 8 bytes). Tapping `'` while the step stays held flips the shown page, so a step can be copied across pages. Each copy is one `SetStep`. Everything done while the step is held, copies included, is one undo unit (ui_edit.cpp).
 * `del` removes the step's p-lock (`lockParam = 0`).
 * **LOCK field:** if the step has a lock, `-`/`=` change `lockValue`, with display formatted by that parameter's ParamInfo. If it has none, the first `-`/`=` creates a lock on the **focused** track parameter (`trackFocus[sel]`), starting from its current value.
 * Release of the step key closes the panel. If the step was on before the press and nothing was edited and the press was short, it toggles off (4.1).

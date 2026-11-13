@@ -159,12 +159,182 @@ static void testUndoAfterPatternSwitch() {
   ctrl("z");
   CHECK(R->ui.writeInFlight());
   CHECK(R->ui.stepAt(6, 0).flags & kStepOn);   // shown from the buffer before the engine applied it
-  ctrl("z");
-  CHECK(toastHas("BUSY"));
+  ctrl("z");                                   // still in flight: queued, not refused
+  CHECK(!toastHas("BUSY"));
+  CHECK(toastHas("UNDO: "));
   R->engineRuns = true;
   R->run(100);
   CHECK(!R->ui.writeInFlight());
-  CHECK(PAT(0).tracks[6].steps[0].flags & kStepOn);
+  CHECK(toastHas("REDO: BASS CLEARED"));       // ran once the first write landed
+  // two presses while in flight cancel out
+  R->engineRuns = false;
+  ctrl("z");
+  CHECK(toastHas("UNDO: BASS CLEARED"));
+  ctrl("z");
+  ctrl("z");
+  R->engineRuns = true;
+  R->run(100);
+  CHECK(!R->ui.writeInFlight());
+  CHECK(toastHas("UNDO: BASS CLEARED"));
+}
+
+// Step edits (setStep) are undoable; one gesture = one unit (ui_edit.cpp).
+static void testStepUndo() {
+  static Pattern before, mid;
+  R->start(true);
+  down("shift"); tap("a"); up("shift");        // KICK (on at 1, 5, 9, 13)
+  // place a note
+  before = PAT(0);
+  tap("2");
+  CHECK(R->step(0, 1).flags & kStepOn);
+  ctrl("z");
+  CHECK(toastHas("UNDO: KICK STEP 2"));
+  CHECK(!(R->step(0, 1).flags & kStepOn));
+  CHECK(samePat(PAT(0), before));
+  ctrl("z");
+  CHECK(toastHas("REDO: KICK STEP 2"));
+  CHECK(R->step(0, 1).flags & kStepOn);
+  ctrl("z");
+  CHECK(samePat(PAT(0), before));
+  tap("2");
+  undoRedo(before, 0, "place note");
+  // delete a note: back with all its fields (accent, velocity 110)
+  before = PAT(0);
+  tap("1");
+  CHECK(!(R->step(0, 0).flags & kStepOn));
+  undoRedo(before, 0, "delete note");
+  CHECK(R->step(0, 0).flags & kStepAccent);
+  CHECK_EQ(R->step(0, 0).vel, 110);
+  // two taps are two units: undo takes back only the second
+  before = PAT(0);
+  tap("3");
+  mid = PAT(0);
+  tap("4");
+  ctrl("z");
+  CHECK(samePat(PAT(0), mid));
+  CHECK(toastHas("UNDO: KICK STEP 4"));
+  ctrl("z"); ctrl("z");                        // redo, undo: step 4 off again
+  tap("3");                                    // remove step 3 again (its own unit)
+  CHECK(samePat(PAT(0), before));
+  // held step: many nudges, a held-key repeat, a copy = one unit
+  down("shift"); tap("j"); up("shift");        // BASS: step 14 has a CUT lock
+  before = PAT(0);
+  down("y"); R->run(300);
+  for (int i = 0; i < 20; ++i) tap("=");       // velocity +20
+  down("="); R->run(1000); up("=");            // and a repeat
+  tap(";");                                    // note +1
+  tap("8");                                    // copy to step 8
+  up("y");
+  CHECK(R->step(6, 13).vel != before.tracks[6].steps[13].vel);
+  CHECK_EQ(R->step(6, 13).note, before.tracks[6].steps[13].note + 1);
+  CHECK(std::memcmp(&R->step(6, 7), &R->step(6, 13), sizeof(Step)) == 0);
+  undoRedo(before, 0, "held step edits");
+  CHECK(toastHas("UNDO: BASS STEP 14"));
+  // copying an existing held step (no write at key-down): labelled as a copy
+  before = PAT(0);
+  down("y"); R->run(300);
+  tap("2");
+  up("y");
+  ctrl("z");
+  CHECK(toastHas("UNDO: BASS COPY STEP 14"));
+  CHECK(samePat(PAT(0), before));
+  // DEL on a held step (remove its lock), then the next hold is a new unit
+  down("y"); R->run(300); tap("del"); up("y");
+  CHECK_EQ(R->step(6, 13).lockParam, 0);
+  mid = PAT(0);
+  down("y"); R->run(300); tap("="); up("y");
+  ctrl("z");
+  CHECK(samePat(PAT(0), mid));
+  ctrl("z"); ctrl("z");                        // redo, undo
+  CHECK(samePat(PAT(0), mid));
+  // step-write: a note and the slide it sets on the previous step = one unit
+  tap("ent");
+  CHECK(R->ui.stepWriteActive());
+  tap("z");
+  down("c"); R->run(50);
+  before = PAT(0);                             // the c note is written
+  down("v"); R->run(50); up("c"); up("v");
+  CHECK(R->step(6, 1).flags & kStepSlide);
+  undoRedo(before, 0, "step-write note + slide");   // takes back the v note AND the slide on c
+  CHECK(!(R->step(6, 1).flags & kStepSlide));
+  CHECK(R->step(6, 1).flags & kStepOn);
+  tap("ent");
+  CHECK(!R->ui.recOn());
+}
+
+// Undo straight after edits the engine has not applied yet.
+static void testUndoPending() {
+  static Pattern before, mid;
+  R->start(true);
+  down("shift"); tap("a"); up("shift");
+  before = PAT(0);
+  R->engineRuns = false;                       // the engine stalls: edits stay pending
+  tap("3");
+  tap("4");
+  CHECK(R->ui.stepAt(0, 2).flags & kStepOn);
+  CHECK(R->ui.stepAt(0, 3).flags & kStepOn);
+  CHECK(!(PAT(0).tracks[0].steps[2].flags & kStepOn));   // not in the project yet
+  ctrl("z");                                   // undo the second; the first stays
+  CHECK(toastHas("UNDO: KICK STEP 4"));
+  CHECK(R->ui.stepAt(0, 2).flags & kStepOn);
+  CHECK(!(R->ui.stepAt(0, 3).flags & kStepOn));
+  R->engineRuns = true;
+  R->run(100);
+  CHECK(PAT(0).tracks[0].steps[2].flags & kStepOn);
+  CHECK(!(PAT(0).tracks[0].steps[3].flags & kStepOn));
+  // undo at once after a quick edit, engine running: never BUSY
+  mid = PAT(0);
+  tap("6");
+  ctrl("z");
+  CHECK(!toastHas("BUSY"));
+  CHECK(samePat(PAT(0), mid));
+  // undo + redo faster than a frame: the redo waits for the first write
+  tap("6");
+  R->down(K("ctl"));
+  R->tap(K("z"), 1);
+  R->tap(K("z"), 1);
+  R->up(K("ctl"));
+  CHECK(R->ui.writeInFlight());
+  R->run(100);
+  CHECK(toastHas("REDO: KICK STEP 6"));
+  CHECK(PAT(0).tracks[0].steps[5].flags & kStepOn);
+  (void)before;
+}
+
+// A live recording pass is one unit, however many notes.
+static void testRecordUndo() {
+  static Pattern before, pass1;
+  R->start(false);
+  tap("spc");
+  before = PAT(0);
+  tap("ent");
+  CHECK(R->eng.status().recording);
+  for (int i = 0; i < 6; ++i) {                // clap
+    tap("d", 30);
+    R->run(170);
+  }
+  tap("a", 30);                                // and a kick
+  R->run(100);
+  int hits = 0;
+  for (int i = 0; i < 16; ++i) hits += (PAT(0).tracks[kTrackClap].steps[i].flags & kStepOn) ? 1 : 0;
+  CHECK(hits >= 4);
+  tap("ent");                                  // REC off: the pass ends
+  R->run(50);
+  undoRedo(before, 0, "recording pass");
+  CHECK(toastHas("UNDO: RECORDED NOTES"));
+  // a second pass is a new unit: undo keeps the first
+  ctrl("z");                                   // redo the first pass
+  pass1 = PAT(0);
+  tap("ent");
+  down("shift"); tap("j"); up("shift");        // bass, a held note (gate from the hold)
+  tap("z", 200);
+  R->run(100);
+  tap("ent");
+  R->run(50);
+  CHECK(!samePat(PAT(0), pass1));
+  ctrl("z");
+  CHECK(samePat(PAT(0), pass1));
+  tap("spc");
 }
 
 static void testSong() {
@@ -333,6 +503,9 @@ int main() {
   std::printf("-- key matrix model: %s\n", uih::ghostOrderName(order));
   testClipboardUndo();
   testUndoAfterPatternSwitch();
+  testStepUndo();
+  testUndoPending();
+  testRecordUndo();
   testSong();
   testHelp();
   }
