@@ -257,7 +257,12 @@ void Ui::drawStatus(Framebuffer& fb) {
     const int w = int(std::strlen(tag)) * 6 + 3;
     g.rrect(92, 1, w, 9, col);
     g.text(94, 2, tag, BG);
-    g.text(92 + w + 3, 2, name, TEXT);
+    // The name gives way to the value: cut it to what fits left of the
+    // right-aligned read-out (a 4-letter macro name next to "100%").
+    const int nameX = 92 + w + 3;
+    const int room = (165 - int(std::strlen(val)) * 6 - 1 - nameX) / 6;
+    if (room < int(std::strlen(name))) name[room > 0 ? room : 0] = 0;
+    g.text(nameX, 2, name, TEXT);
     g.textR(165, 2, val, WHITE);
     // Locked on some steps: those steps won't follow this value (UX 7).
     if (focusLocked_) g.text(166, 2, PG_ICON_LOCK, AMBER);
