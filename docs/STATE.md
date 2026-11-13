@@ -45,12 +45,32 @@ Order of work (owner, updated 2026-11-12):
    of free-form questions (what was fun, what was ugly or useless, what was missing).
    ASSESSMENT.md stays as a reference only. In parallel: env:hw-spike (tilt sensor and mic
    sampling to/from flash) to learn what the hardware can do before designing around it.
-3. THEN: the macro redesign (see Design direction). The owner will make a song only AFTER the
-   redesign: the goal is a fun experience that is not hindered by the tiny device.
+3. STARTED (2026-11-13): the macro redesign (see Design direction). The owner will make a song
+   only AFTER the redesign: the goal is a fun experience that is not hindered by the tiny device.
+   First step built: the macro lab (docs/MACROLAB.md), a workbench, not the design. A portable,
+   heap-free macro model and .pgm text format (lib/pg/src/pg/macro: per track a base patch and up
+   to 4 macros, each driving up to 8 parameters through breakpoint curves with set/add/mul and
+   "by" scaling), and `tools/pg-desktop --lab`: hot-reloaded sets from macros/, sliders and an XY
+   pad (standing in for tilt), good/bad marks with a note to lab-notes.txt. The loop: Claude
+   writes or edits sets -> the owner `git pull`s (the app picks them up while playing) -> plays,
+   marks -> pastes lab-notes.txt back. Starter sets in macros/ (bass ACID / GROWL, lead STAB, kick
+   BOOM, snare CRACK) only prove the rig; real candidates come in bulk from the owner's marks.
+   Host-verified only (headless: test_desktop_app part 8); not yet run on the owner's Mac.
+   Facts found for the redesign (docs/MACROLAB.md, last section; host/tools/zipper_probe):
+   parameters are 7-bit (one bass CUT value = 73 cents of cutoff, lead 83). Smoothing: bass
+   cutoff CV ~1.2 ms and level-type params ~1.6 ms one-poles, the rest unsmoothed; lead ~5 ms on
+   cutoff/reso/shape/width/drive/osc mix, the rest unsmoothed; drums none at all (a change
+   recomputes coefficients with powf/expf, mid-hit too); mixer rows ~4 ms. A slow 7-bit cutoff
+   sweep does not click (step transients equal a smooth sweep's within 2 dB) but is a staircase:
+   at RES 110 the harmonics near the peak jump ~11 dB at each step with stillness between, very
+   likely audible as stepping on slow, narrow sweeps (not listened to: WAVs in build/zipper/).
+   So the redesign needs finer internal values or a longer slew for swept parameters, and cheap
+   per-quantum updates in the drums.
 4. LATER: a design sprint on the flow between desktop and device, giving each its own UX.
 ON HOLD, do not build: MIDI controller input. The owner is not convinced they want it (it
 distracts from the intended flow) and it needs more design than a quick proposal.
-No further desktop-specific features for now beyond the strip, Listen and Stems.
+No further desktop-specific features for now beyond the strip, Listen and Stems (and the macro lab,
+a development workbench behind --lab, not a product feature).
 
 Design direction (owner, 2026-11-12; brainstorm only, nothing built yet): capture the
 playfulness of the OP-1 without its feature set. Sounds are shaped through a few designed

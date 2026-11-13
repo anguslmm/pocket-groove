@@ -52,7 +52,7 @@ target_include_directories(pg_desk PUBLIC ${DESK_DIR} ${PG_SRC} ${CMAKE_CURRENT_
 target_link_libraries(pg_desk PUBLIC ${PG_SDL_TARGET})
 target_compile_options(pg_desk PRIVATE ${PG_FLAGS})
 
-add_executable(pocket-groove main.cpp audio.cpp display.cpp recorder.cpp listen.cpp strip.cpp stems.cpp)
+add_executable(pocket-groove main.cpp audio.cpp display.cpp recorder.cpp listen.cpp strip.cpp stems.cpp lab.cpp)
 target_link_libraries(pocket-groove PRIVATE pg_desk ${PG_LIBS} ${PG_LIBS} ${PG_SDL_TARGET})
 target_compile_options(pocket-groove PRIVATE ${PG_FLAGS})
 # Next to the other host binaries (build/host/pocket-groove).
@@ -70,6 +70,15 @@ target_link_libraries(test_desktop_files PRIVATE pg_desk ${PG_LIBS} ${PG_LIBS})
 target_compile_options(test_desktop_files PRIVATE ${PG_FLAGS})
 set_target_properties(test_desktop_files PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 add_test(NAME test_desktop_files COMMAND test_desktop_files ${CMAKE_BINARY_DIR}/desktop_test_files
+         WORKING_DIRECTORY ${PG_ROOT})
+
+# The macro lab's logic against a fake host (lab.cpp needs no SDL calls).
+add_executable(test_desktop_lab tests/test_desktop_lab.cpp lab.cpp)
+target_include_directories(test_desktop_lab PRIVATE ${DESK_DIR} ${PG_SRC})
+target_link_libraries(test_desktop_lab PRIVATE ${PG_LIBS} ${PG_LIBS})
+target_compile_options(test_desktop_lab PRIVATE ${PG_FLAGS})
+set_target_properties(test_desktop_lab PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME test_desktop_lab COMMAND test_desktop_lab ${CMAKE_BINARY_DIR}/desktop_test_lab_unit
          WORKING_DIRECTORY ${PG_ROOT})
 
 # Listen's rate match against simulated clocks (header-only, no SDL needed by the test itself).

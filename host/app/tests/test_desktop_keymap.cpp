@@ -63,6 +63,16 @@ void testDefaultMap() {
   CHECK(m.lookupCmd(SDL_SCANCODE_L) == desk::kActListen);
   CHECK(m.lookupCmd(SDL_SCANCODE_B) == desk::kActStems);
   CHECK(m.lookupCmd(SDL_SCANCODE_Q) == desk::kUnbound);
+  // the macro lab's Command shortcuts (they do nothing without --lab); none that macOS owns
+  CHECK(m.lookupCmd(SDL_SCANCODE_G) == desk::kActLabGood && m.lookupCmd(SDL_SCANCODE_D) == desk::kActLabBad);
+  CHECK(m.lookupCmd(SDL_SCANCODE_LEFT) == desk::kActLabPrev && m.lookupCmd(SDL_SCANCODE_RIGHT) == desk::kActLabNext);
+  CHECK(m.lookupCmd(SDL_SCANCODE_UP) == desk::kActLabUp && m.lookupCmd(SDL_SCANCODE_DOWN) == desk::kActLabDown);
+  CHECK(m.lookupCmd(SDL_SCANCODE_1) == desk::kActLabMacro1 && m.lookupCmd(SDL_SCANCODE_4) == desk::kActLabMacro1 + 3);
+  for (SDL_Scancode sc : {SDL_SCANCODE_M, SDL_SCANCODE_H, SDL_SCANCODE_Q, SDL_SCANCODE_W, SDL_SCANCODE_TAB,
+                          SDL_SCANCODE_SPACE, SDL_SCANCODE_COMMA})
+    CHECK(m.lookupCmd(sc) == desk::kUnbound);
+  CHECK(desk::bindingFromName("lab-good") == desk::kActLabGood && desk::bindingFromName("lab-4") == desk::kActLabMacro1 + 3);
+  CHECK(std::string(desk::bindingName(desk::kActLabDown)) == "lab-down");
   for (int sc = 0; sc < desk::KeyMap::kScancodes; ++sc)   // no Command shortcut is an instrument key
     CHECK(m.lookupCmd(sc) == desk::kUnbound || m.lookupCmd(sc) >= desk::kActRecord);
   CHECK(m.lookup(SDL_SCANCODE_F9) == desk::kActRecord);
@@ -144,6 +154,9 @@ void testInput() {
   CHECK(in.onScancode(SDL_SCANCODE_R, true, false, true, false, o) == 1 && o[0].binding == desk::kActRecord);
   CHECK(in.onScancode(SDL_SCANCODE_R, true, true, true, false, o) == 0);
   CHECK(in.onScancode(SDL_SCANCODE_R, false, false, true, false, o) == 0);
+  // the lab's nudges repeat while held; its other shortcuts do not
+  CHECK(in.onScancode(SDL_SCANCODE_UP, true, true, true, false, o) == 1 && o[0].binding == desk::kActLabUp);
+  CHECK(in.onScancode(SDL_SCANCODE_G, true, true, true, false, o) == 0);
   CHECK(in.onScancode(SDL_SCANCODE_I, true, false, true, false, o) == 1 && o[0].binding == desk::kActStats);
   CHECK(in.onScancode(SDL_SCANCODE_LGUI, false, false, false, true, o) == 0);   // Command up before I
   CHECK(in.onScancode(SDL_SCANCODE_I, false, false, false, false, o) == 0);     // ... I's up: still nothing

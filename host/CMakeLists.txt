@@ -90,6 +90,10 @@ if(TARGET param_reference)
   add_test(NAME check_assessment
            COMMAND param_reference --check-assessment docs/ASSESSMENT.md
            WORKING_DIRECTORY ${PG_ROOT})
+  # ... and so must the macro lab's list of parameter names (docs/MACROLAB.md).
+  add_test(NAME check_macrolab
+           COMMAND param_reference --check-macrolab docs/MACROLAB.md
+           WORKING_DIRECTORY ${PG_ROOT})
 endif()
 
 # The USB transfer client (tools/pg.py) against the device's protocol module

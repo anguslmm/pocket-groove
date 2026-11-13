@@ -19,6 +19,9 @@
 // instrument: the strip under the screen (strip.h: modifier lights, controls,
 // status), Listen (listen.h: the device's USB audio input mixed into the
 // output) and the Stems list (stems.h: tools/pg ls / bounce as a subprocess).
+// With --lab, the macro lab (lab.h, docs/MACROLAB.md): a development workbench
+// that drives track parameters from hot-reloaded .pgm macro sets, through the
+// Ui's own value path (Ui::setTrackParam).
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
 
@@ -40,9 +43,11 @@
 #include "display.h"
 #include "input.h"
 #include "keymap.h"
+#include "lab.h"
 #include "listen.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/project_io.h"
+#include "pg/macro/macro.h"
 #include "pg/ui/gfx.h"
 #include "pg/ui/keys.h"
 #include "pg/ui/ui.h"
@@ -72,7 +77,11 @@ struct Options {
   bool listenSimVary = false;        // --listen-sim-vary: callback sizes vary
   std::string listenDevice;          // --listen-device NAME: another input than "Pocket Groove"
   std::string listenDump;            // --listen-dump FILE.wav: the raw capture as SDL delivers it
+  bool lab = false;                  // --lab [DIR]: the macro lab
+  std::string labDir = "macros";
+  std::string labNotes = "lab-notes.txt";
   int scale = 4;
+  bool scaleGiven = false;
   int buffer = 256;
   int sr = 44100;
   bool mono = false;
@@ -105,8 +114,12 @@ void usage(FILE* f) {
                "  --listen-sim PPM  test: Listen plays a simulated device whose clock runs PPM fast\n"
                "  --listen-sim-spec FMT:CH:RATE:FRAMES  test: ... which delivers this spec (e.g. f32:1:48000:1024)\n"
                "  --listen-sim-burst N  test: ... N callbacks back to back;  --listen-sim-vary: sizes vary\n"
+               "  --lab [DIR]       the macro lab (docs/MACROLAB.md): macro sets from DIR (default ./macros),\n"
+               "                    hot-reloaded; marks go to ./lab-notes.txt (--lab-notes FILE)\n"
                "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats,\n"
-               "Cmd+L = listen to the connected device, Cmd+B = stems. Command never reaches the instrument.\n");
+               "Cmd+L = listen to the connected device, Cmd+B = stems. Command never reaches the instrument.\n"
+               "With --lab: Cmd+G / Cmd+D mark good / bad, Cmd+Left / Right the set, Cmd+1..4 a macro,\n"
+               "Cmd+Up / Down move it (docs/MACROLAB.md).\n");
 }
 
 bool parseArgs(int argc, char** argv, Options* o) {
@@ -140,7 +153,12 @@ bool parseArgs(int argc, char** argv, Options* o) {
     else if (a == "--listen-sim-vary") o->listenSimVary = true;
     else if (a == "--listen-device") o->listenDevice = next("an input name");
     else if (a == "--listen-dump") o->listenDump = next("a .wav file");
-    else if (a == "--scale") o->scale = std::atoi(next("a factor"));
+    else if (a == "--scale") { o->scale = std::atoi(next("a factor")); o->scaleGiven = true; }
+    else if (a == "--lab") {
+      o->lab = true;
+      if (i + 1 < argc && argv[i + 1][0] != '-') o->labDir = argv[++i];
+    }
+    else if (a == "--lab-notes") o->labNotes = next("a file");
     else if (a == "--buffer") o->buffer = std::atoi(next("a frame count"));
     else if (a == "--sr") o->sr = std::atoi(next("44100 or 32000"));
     else if (a == "--mono") o->mono = true;
@@ -157,6 +175,7 @@ bool parseArgs(int argc, char** argv, Options* o) {
   if (o->sr != 44100 && o->sr != 32000) { std::fprintf(stderr, "--sr must be 44100 or 32000\n"); return false; }
   if (o->scale < 1 || o->scale > 16) { std::fprintf(stderr, "--scale must be 1..16\n"); return false; }
   if (o->buffer < 16 || o->buffer > 8192) { std::fprintf(stderr, "--buffer must be 16..8192\n"); return false; }
+  if (o->lab && !o->scaleGiven) o->scale = 3;   // the panel widens the window: keep it on a laptop screen
   return true;
 }
 
@@ -173,13 +192,14 @@ pg::Framebuffer g_overlayFb;    // the Stems list
 desk::DriftBuffer g_listenBuf;  // Listen's rate match (128 KB)
 desk::CaptureSink g_listenSink; // Listen's capture conversion
 desk::SdlCapture g_sdlCapture;
+uint8_t g_labPx[desk::kLabW * desk::kCanvasH];   // the macro lab panel (--lab)
 
 const char* buttonName(int b) {
   static const char* const n[] = {"listen", "stems", "rec", "stats"};
   return b >= 0 && b < desk::kNumButtons ? n[b] : "none";
 }
 
-class App final : public desk::ScriptHost {
+class App final : public desk::ScriptHost, public desk::LabHost {
  public:
   Options opt;
   desk::DirFs* fs = nullptr;
@@ -189,6 +209,9 @@ class App final : public desk::ScriptHost {
   desk::EventQueue events;   // other sources (MIDI, later)
   desk::Listen listen;
   desk::Stems stems;
+  desk::Lab lab;
+  bool labMouse = false;     // a drag that started on the lab panel
+  bool textInput = false;    // SDL text input on (only while a lab note is typed)
   std::unique_ptr<desk::SimCapture> simCapture;
   desk::StripState strip;
   bool stripDrawn = false;
@@ -247,6 +270,12 @@ class App final : public desk::ScriptHost {
       else if (o.binding == desk::kActStats) toggleStats();
       else if (o.binding == desk::kActListen) toggleListen();
       else if (o.binding == desk::kActStems) toggleStems();
+      else if (o.binding >= desk::kActLabGood && o.binding <= desk::kActLast) {
+        if (lab.enabled() && !stems.isOpen()) {
+          lab.action(o.binding, (SDL_GetModState() & KMOD_SHIFT) != 0);
+          labTyping();
+        }
+      }
       else if (o.binding >= 0 && o.binding < pg::ui::kNumKeyIds) cardKey(o.binding, o.down);
     }
   }
@@ -256,9 +285,51 @@ class App final : public desk::ScriptHost {
     deliver(out, keyboard.releaseAll(out));
   }
 
+  // ---- the macro lab ----------------------------------------------------------------
+  // LabHost: the lab reads and sets parameters exactly as the UI's own value keys do.
+  int selectedTrack() override { return g_ui.selTrack(); }
+  int paramValue(int track, int index) override { return g_ui.paramValue(track, index); }
+  void setParam(int track, int index, int value) override { g_ui.setTrackParam(track, index, value); }
+  uint32_t lockedMask(int track) override {
+    const pg::TrackPattern& tp = g_inst.project().patterns[g_ui.editPattern() & 15].tracks[track & 7];
+    uint32_t m = 0;
+    for (int i = 0; i < tp.length && i < pg::kMaxSteps; ++i)
+      if (tp.steps[i].lockParam >= 1 && tp.steps[i].lockParam <= pg::kParamsPerTrack) m |= 1u << (tp.steps[i].lockParam - 1);
+    return m;
+  }
+  // While a note is typed after a mark the keyboard is the lab's (text input on).
+  void labTyping() {
+    if (lab.typing() == textInput) return;
+    textInput = lab.typing();
+    if (textInput) {
+      releaseAll();   // no instrument key stays held while the note has the keyboard
+      SDL_StartTextInput();
+    } else {
+      SDL_StopTextInput();
+    }
+    needPresent = true;
+  }
+  void labFrame(uint32_t now) {
+    if (!lab.enabled()) return;
+    lab.tick(now);
+    if (lab.changed()) {
+      lab.draw(g_labPx);
+      display.uploadLab(g_labPx, g_fb.palette);
+      needPresent = true;
+    }
+  }
+
   void onSdlKey(const SDL_KeyboardEvent& k) {
     const int sc = k.keysym.scancode;
     const bool isCmd = sc == SDL_SCANCODE_LGUI || sc == SDL_SCANCODE_RGUI;
+    if (lab.typing()) {   // the note after a mark: nothing reaches the instrument
+      if (k.type != SDL_KEYDOWN) return;
+      if (sc == SDL_SCANCODE_RETURN || sc == SDL_SCANCODE_KP_ENTER) lab.typeKey(desk::Lab::kTypeEnter);
+      else if (sc == SDL_SCANCODE_ESCAPE) lab.typeKey(desk::Lab::kTypeEscape);
+      else if (sc == SDL_SCANCODE_BACKSPACE) lab.typeKey(desk::Lab::kTypeBackspace);
+      labTyping();
+      return;
+    }
     if (stems.isOpen()) {   // the list has the keyboard: nothing reaches the instrument
       if (k.type != SDL_KEYDOWN || isCmd) return;
       const int a = (k.keysym.mod & KMOD_GUI) ? g_map.lookupCmd(sc) : g_map.lookup(sc);
@@ -302,7 +373,16 @@ class App final : public desk::ScriptHost {
   }
   void click(int wx, int wy) {
     int cx = 0, cy = 0;
-    if (!display.toCanvas(wx, wy, &cx, &cy) || cy < pg::kScreenH) return;   // the device screen: nothing
+    if (!display.toCanvas(wx, wy, &cx, &cy)) return;
+    if (cx >= desk::kCanvasW) {   // the lab panel
+      if (lab.enabled()) {
+        labMouse = true;
+        lab.mouseDown(cx - desk::kCanvasW, cy);
+        labTyping();
+      }
+      return;
+    }
+    if (cy < pg::kScreenH) return;   // the device screen: nothing
     const int b = desk::stripHit(cx, cy - pg::kScreenH);
     if (b == desk::kBtnNone) return;
     std::printf("[strip] click %s\n", buttonName(b));
@@ -352,7 +432,7 @@ class App final : public desk::ScriptHost {
   }
   // The whole window (device screen or Stems list, and the strip) at `scale`.
   bool windowShot(const std::string& path, int scale) {
-    const int W = desk::kCanvasW * scale, H = desk::kCanvasH * scale;
+    const int W = display.canvasW() * scale, H = desk::kCanvasH * scale;
     std::vector<uint8_t> rgb(size_t(W) * size_t(H) * 3);
     const pg::Framebuffer& top = stems.isOpen() ? g_overlayFb : g_fb;
     for (int y = 0; y < H; ++y)
@@ -360,7 +440,9 @@ class App final : public desk::ScriptHost {
         const int cy = y / scale, cx = x / scale;
         const pg::Framebuffer& fb = cy < pg::kScreenH ? top : g_stripFb;
         const int ry = cy < pg::kScreenH ? cy : cy - pg::kScreenH;
-        const uint32_t v = desk::rgb565ToArgb(fb.palette[fb.px[ry * pg::kScreenW + cx]]);
+        const uint32_t v = cx >= desk::kCanvasW
+                               ? desk::rgb565ToArgb(g_fb.palette[g_labPx[cy * desk::kLabW + cx - desk::kCanvasW]])
+                               : desk::rgb565ToArgb(fb.palette[fb.px[ry * pg::kScreenW + cx]]);
         uint8_t* o = &rgb[(size_t(y) * size_t(W) + size_t(x)) * 3];
         o[0] = uint8_t(v >> 16);
         o[1] = uint8_t(v >> 8);
@@ -471,11 +553,12 @@ class App final : public desk::ScriptHost {
         SDL_PushEvent(&e);
       }
     };
-    auto waitFor = [&](bool done, const char* what) {   // pending until done, failing after the deadline
+    // pending until done, failing after the deadline (the argument at index msArg, default 10 s)
+    auto waitFor = [&](bool done, const char* what, size_t msArg = 1) {
       if (done) { waiting = false; return 0; }
       if (!waiting) {
         waiting = true;
-        waitUntil = now + uint32_t(w.size() > 1 ? std::atoi(w[1].c_str()) : 10000);
+        waitUntil = now + uint32_t(w.size() > msArg ? std::atoi(w[msArg].c_str()) : 10000);
       }
       if (int32_t(now - waitUntil) >= 0) {
         waiting = false;
@@ -503,6 +586,7 @@ class App final : public desk::ScriptHost {
       mkdirAll(opt.outDir);
       uiFrame();
       updateStrip();
+      if (lab.enabled()) lab.draw(g_labPx);
       if (stems.isOpen()) { stems.draw(g_overlayFb); display.uploadOverlay(g_overlayFb); }
       const std::string p1 = opt.outDir + "/" + w[1] + ".png", p4 = opt.outDir + "/" + w[1] + "_4x.png";
       const bool ok = windowShot(p1, 1) && windowShot(p4, 4);
@@ -525,7 +609,106 @@ class App final : public desk::ScriptHost {
       listen.printStats();
       return 0;
     }
+    if (c.compare(0, 4, "lab-") == 0) return labCommand(w, pushClick, waitFor);
     return -1;
+  }
+
+  // `app lab-...` (docs/MACROLAB.md; host/app/tests/desktop_check.py, part "lab"):
+  //   lab-select TRACK SET|none   choose a set (name, file name or path) on a track
+  //   lab-drag M POS              drag macro M's slider (selected track) to POS, by mouse events
+  //   lab-pad X Y                 click the XY pad at (X, Y), 0..1, by mouse events
+  //   lab-click prev|next|good|bad|axis-x|axis-y   click a panel button
+  //   lab-type TEXT...            type into the note (SDL text input events)
+  //   lab-print TRACK             the lab's view of TRACK and the engine's parameter values
+  //   lab-wait-synced [MS]        until the engine has every value the lab sent
+  //   lab-wait-reloads N [MS]     until N files have been (re)loaded or removed since start
+  template <class Click, class Wait>
+  int labCommand(const std::vector<std::string>& w, Click pushClick, Wait waitFor) {
+    if (!lab.enabled()) {
+      std::fprintf(stderr, "[script] %s: start with --lab\n", w[0].c_str());
+      return -1;
+    }
+    const std::string& c = w[0];
+    auto trackArg = [&](const std::string& s) { return pg::macro::trackFromName(s.c_str()); };
+    if (c == "lab-select" && w.size() == 3) return lab.selectSet(trackArg(w[1]), w[2]) ? 0 : -1;
+    if (c == "lab-drag" && w.size() == 3) {
+      int x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+      const int m = std::atoi(w[1].c_str());
+      lab.sliderPoint(m, 0.0f, &x0, &y0);
+      lab.sliderPoint(m, float(std::atof(w[2].c_str())), &x1, &y1);
+      pushMouse(SDL_MOUSEBUTTONDOWN, desk::kCanvasW + x0, y0);
+      pushMouse(SDL_MOUSEMOTION, desk::kCanvasW + (x0 + x1) / 2, y0);
+      pushMouse(SDL_MOUSEMOTION, desk::kCanvasW + x1, y1);
+      pushMouse(SDL_MOUSEBUTTONUP, desk::kCanvasW + x1, y1);
+      return 0;
+    }
+    if (c == "lab-pad" && w.size() == 3) {
+      int x = 0, y = 0;
+      lab.padPoint(float(std::atof(w[1].c_str())), float(std::atof(w[2].c_str())), &x, &y);
+      pushClick(desk::kCanvasW + x, y);
+      return 0;
+    }
+    if (c == "lab-click" && w.size() == 2) {
+      static const char* const names[] = {"prev", "next", "good", "bad", "axis-x", "axis-y"};
+      for (int b = 0; b < 6; ++b)
+        if (w[1] == names[b]) {
+          int x = 0, y = 0;
+          lab.buttonCentre(desk::Lab::Button(b), &x, &y);
+          pushClick(desk::kCanvasW + x, y);
+          return 0;
+        }
+      return -1;
+    }
+    if (c == "lab-type" && w.size() >= 2) {
+      std::string text;
+      for (size_t i = 1; i < w.size(); ++i) text += (i > 1 ? " " : "") + w[i];
+      for (size_t i = 0; i < text.size(); i += 8) {   // SDL's text event holds up to 31 bytes
+        SDL_Event e;
+        SDL_zero(e);
+        e.type = SDL_TEXTINPUT;
+        e.text.windowID = display.windowId();
+        std::snprintf(e.text.text, sizeof(e.text.text), "%s", text.substr(i, 8).c_str());
+        SDL_PushEvent(&e);
+      }
+      return 0;
+    }
+    if (c == "lab-print" && w.size() == 2) {
+      const int t = trackArg(w[1]);
+      if (t < 0) return -1;
+      std::printf("[lab-state] %s\n", lab.describe(t).c_str());
+      std::string eng;
+      for (int p = 0; p < pg::kParamsPerTrack; ++p)
+        if (const pg::ParamInfo* in = g_inst.engine().trackParamInfo(t, p))
+          eng += std::string(" ") + in->name + "=" + std::to_string(int(g_inst.project().tracks[t].params[p]));
+      std::printf("[lab-engine] %s%s\n", pg::macro::trackName(t), eng.c_str());
+      std::fflush(stdout);
+      return 0;
+    }
+    if (c == "lab-wait-synced") return waitFor(lab.synced(), "the lab's values in the engine", 1);
+    if (c == "lab-wait-reloads" && w.size() >= 2)
+      return waitFor(lab.reloads() >= std::atoi(w[1].c_str()), "a macro file reload", 2);
+    return -1;
+  }
+  void pushMouse(uint32_t type, int cx, int cy) {
+    int wx = 0, wy = 0;
+    display.fromCanvas(cx, cy, &wx, &wy);
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = type;
+    if (type == SDL_MOUSEMOTION) {
+      e.motion.windowID = display.windowId();
+      e.motion.state = SDL_BUTTON_LMASK;
+      e.motion.x = wx;
+      e.motion.y = wy;
+    } else {
+      e.button.windowID = display.windowId();
+      e.button.button = SDL_BUTTON_LEFT;
+      e.button.state = type == SDL_MOUSEBUTTONDOWN ? SDL_PRESSED : SDL_RELEASED;
+      e.button.clicks = 1;
+      e.button.x = wx;
+      e.button.y = wy;
+    }
+    SDL_PushEvent(&e);
   }
 
   static void mkdirAll(const std::string& d) { desk::makeDirs(d); }
@@ -611,7 +794,7 @@ int main(int argc, char** argv) {
   }
 
   char err[200] = "";
-  if (!app.display.open(opt.scale, err, sizeof(err))) {
+  if (!app.display.open(opt.scale, err, sizeof(err), opt.lab)) {
     std::fprintf(stderr, "%s\n", err);
     SDL_Quit();
     return 1;
@@ -631,6 +814,13 @@ int main(int argc, char** argv) {
               v.patch, SDL_GetCurrentVideoDriver(), SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "-",
               opt.dir.c_str(), opt.sdDir.empty() ? "" : ", SD card ", opt.sdDir.c_str(),
               hadSession ? "resumed the" : "no", g_ui.projectName());
+
+  if (opt.lab) {
+    pg::macro::ParamTable pt;
+    for (int t = 0; t < pg::kNumTracks; ++t)
+      for (int p = 0; p < pg::kParamsPerTrack; ++p) pt.info[t][p] = g_inst.engine().trackParamInfo(t, p);
+    app.lab.init(opt.labDir, opt.labNotes, pt, &app, app.nowMs());
+  }
 
   app.audioOk = g_audio.open(&g_inst, opt.sr, opt.buffer, err, sizeof(err));
   if (!app.audioOk) std::printf("[audio] NOT RUNNING: %s\n", err);
@@ -706,6 +896,22 @@ int main(int argc, char** argv) {
         case SDL_MOUSEBUTTONDOWN:
           if (e.button.button == SDL_BUTTON_LEFT) app.click(e.button.x, e.button.y);
           break;
+        case SDL_MOUSEBUTTONUP:
+          if (e.button.button == SDL_BUTTON_LEFT && app.labMouse) {
+            app.labMouse = false;
+            app.lab.mouseUp();
+          }
+          break;
+        case SDL_MOUSEMOTION:
+          if (app.labMouse) {
+            int cx = 0, cy = 0;
+            app.display.toCanvasAny(e.motion.x, e.motion.y, &cx, &cy);
+            app.lab.mouseMove(cx - desk::kCanvasW, cy);
+          }
+          break;
+        case SDL_TEXTINPUT:
+          if (app.lab.typing()) app.lab.typeText(e.text.text);
+          break;
         case SDL_AUDIODEVICEADDED:
         case SDL_AUDIODEVICEREMOVED:
           if (app.simCapture == nullptr)
@@ -733,6 +939,7 @@ int main(int argc, char** argv) {
 
     const uint32_t now = app.nowMs();
     if (int32_t(now - nextFrame) >= 0) {
+      app.labFrame(now);   // the lab's values go out before the frame, so the SOUND page shows them
       app.uiFrame();
       nextFrame += kFrameMs;
       if (int32_t(now - nextFrame) > int32_t(kFrameMs)) nextFrame = now + kFrameMs;   // after a stall: no burst
@@ -754,6 +961,7 @@ int main(int argc, char** argv) {
   }
 
   // Quit (window closed, Cmd+Q, Ctrl+C in the terminal): the device's save path.
+  app.lab.finishTyping(false);   // a mark waiting for its note is written without one
   app.releaseAll();
   if (app.rec.active()) app.toggleRecord();
   app.stems.shutdown();

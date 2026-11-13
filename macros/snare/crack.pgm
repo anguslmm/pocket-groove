@@ -1,0 +1,12 @@
+# CRACK: from a tuned, ringing snare to a short, bright crack.
+voice snare
+name CRACK
+
+macro SKIN 0.5
+  tune     0:40 1:85
+  body     0:70 1:30
+  ring     0:40 1:90
+macro WIRE 0.5
+  snappy   0:40 1:115
+  decay    0:30 0.7:70 1:100
+  tone     0:40 1:100

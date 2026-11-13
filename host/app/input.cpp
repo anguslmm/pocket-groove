@@ -8,7 +8,7 @@ int KeyboardInput::onScancode(int sc, bool down, bool repeat, bool commandHeld, 
   if (down) {
     if (commandHeld) {   // a Command shortcut (app action) or nothing; never an instrument key
       const int a = map_->lookupCmd(sc);
-      if (repeat || a < kActRecord) return 0;
+      if (a < kActRecord || (repeat && !actionRepeats(a))) return 0;
       out[0] = KeyOut{int16_t(a), true};
       return 1;
     }

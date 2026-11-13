@@ -134,6 +134,12 @@ class Ui {
   const ParamInfo* paramInfo(int track, int index) const { return eng_->trackParamInfo(track, index); }
   int noteForKey(int n) const { return noteFor(sel_, n); }   // what note key n plays on the selected track
 
+  // Sets a track parameter (0..31) the way the UI's own value keys do: clamped to its
+  // range, shadowed until the engine has it (so paramValue() and the SOUND page show it at
+  // once), coalesced, through Engine::post. Nothing is sent when the value is unchanged.
+  // For host tools that drive parameters (the desktop macro lab, docs/MACROLAB.md).
+  void setTrackParam(int track, int index, int value);
+
  private:
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
   enum Act : uint8_t {
