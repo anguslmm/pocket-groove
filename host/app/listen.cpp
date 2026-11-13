@@ -16,18 +16,6 @@ namespace desk {
 // ---- SdlCapture ---------------------------------------------------------------------
 
 namespace {
-bool containsNoCase(const char* hay, const char* needle) {
-  const size_t n = std::strlen(needle);
-  for (; *hay; ++hay) {
-    size_t i = 0;
-    while (i < n && hay[i] && std::tolower(static_cast<unsigned char>(hay[i])) ==
-                                  std::tolower(static_cast<unsigned char>(needle[i])))
-      ++i;
-    if (i == n) return true;
-  }
-  return false;
-}
-
 std::string dbfs(int peak) {
   if (peak <= 0) return "-inf dBFS";
   char t[32];
@@ -40,16 +28,17 @@ bool SdlCapture::present() {
   if (dev_) return !lost_.load();   // listing while open is not needed (and some backends dislike it)
   const char* want = wanted_.empty() ? kListenDeviceName : wanted_.c_str();
   const int n = SDL_GetNumAudioDevices(1);
-  std::string exact, partial, list;
+  std::vector<std::string> names;
+  std::string list;
   for (int i = 0; i < n; ++i) {
     const char* nm = SDL_GetAudioDeviceName(i, 1);
     if (!nm) continue;
     list += std::string(list.empty() ? "" : ", ") + "\"" + nm + "\"";
-    if (!std::strcmp(nm, want)) exact = nm;
-    else if (partial.empty() && containsNoCase(nm, want)) partial = nm;
+    names.push_back(nm);
   }
   list_ = list.empty() ? "(none)" : list;
-  name_ = !exact.empty() ? exact : partial;
+  const int at = findInput(names, want);   // exactly, else the first containing it (input_names.h)
+  name_ = at < 0 ? std::string() : names[size_t(at)];
   return !name_.empty();
 }
 

@@ -440,6 +440,9 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    - DESKTOP: the same gesture and the same Recorder on SDL's default capture device (mono s16 at
      44.1 kHz, SDL converts; open only while L is held; `--mic-device`), into
      samples/NN-recNN.wav, loaded like any file there.
+     (2026-11-13, after "no sound on macOS": the input is chosen, never the device's own "Pocket
+     Groove" stream unless asked; `--mic-device` partial, `--list-inputs`; exact zeros for 1 s while
+     WAITING shows MIC SILENT and prints both causes. Not yet confirmed on the owner's Mac.)
    - DIAGNOSTICS: the report's [mic] lines (serial `r`): available or why, RX registered /
      initialised / attached, ADC on, GPIO46 (oe out level ie out_sel, the I2S data-in routing); the
      codec registers read back with the ADC set's expected values (DIFFERS if not); the input now

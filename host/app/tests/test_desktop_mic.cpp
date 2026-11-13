@@ -9,6 +9,11 @@
 //   nothing   release before any sound: CANCELLED, no file, the slot stays empty
 //   failure   a source that cannot open: start() is refused with a reason
 //   overrun   the main thread stalled for 4 s: the ring (3 s) drops the excess and counts it
+//   choice    which input (chooseMicInput): never the device's own stream unless asked for,
+//             the default when known and not that, else a microphone by name, else the
+//             first other input; --mic-device exact or partial, any case; the start line
+//   silent    a second of exact zeros while WAITING: MIC SILENT once per hold; not for a
+//             quiet room (non-zero noise) or zeros broken by a sound
 //   usage: test_desktop_mic WORKDIR
 #include <dirent.h>
 #include <sys/stat.h>
@@ -55,9 +60,17 @@ class SynthSource final : public desk::MicSource {
   }
   void close() override { isOpen = false; }
   std::string name() const override { return "synthetic"; }
-  // ms of the room plus, at amp > 0, a sung 220 Hz vowel, in 512-sample callbacks
+  // ms of the room plus, at amp > 0, a sung 220 Hz vowel, in 512-sample callbacks;
+  // with zeros, exact digital silence instead (a dead input)
+  bool zeros = false;
   void deliver(uint32_t ms, double amp) {
     if (!isOpen) return;
+    if (zeros) {
+      std::vector<int16_t> z(size_t(ms) * 441 / 10, 0);
+      for (size_t done = 0; done < z.size(); done += 512)
+        cb_(z.data() + done, int(std::min<size_t>(512, z.size() - done)), user_);
+      return;
+    }
     std::normal_distribution<double> nd(0.0, 25.0);
     const size_t n = size_t(ms) * 441 / 10;
     std::vector<int16_t> b(512);
@@ -105,6 +118,55 @@ pg::sampler::RecState pollState(desk::Mic& m) {
 
 int main(int argc, char** argv) {
   using pg::sampler::RecState;
+  // which input: chooseMicInput over lists of names, the system default known or not
+  {
+    using V = std::vector<std::string>;
+    const std::string pg = "Pocket Groove", mbp = "MacBook Pro Microphone", ext = "External USB Mic";
+    auto pick = [](const V& in, const std::string* def, const std::string& want = "") {
+      const desk::MicChoice c = desk::chooseMicInput(in, def, want);
+      return c.ok ? c.name : std::string("-");
+    };
+    // the default is the device's own stream: a microphone by name, else the first other input
+    check(pick({pg, mbp}, &pg) == mbp, "default PG: the MacBook microphone");
+    check(pick({pg, mbp}, nullptr) == mbp, "default unknown: the MacBook microphone");
+    check(pick({mbp, pg}, nullptr) == mbp, "... in either order");
+    check(pick({pg}, &pg) == "-" && pick({pg}, nullptr) == "-", "only the device's stream: none");
+    check(pick({ext, pg}, &pg) == ext, "default PG: the first other input");
+    check(pick({pg, ext}, nullptr) == ext, "default unknown: the first other input");
+    check(pick({pg, ext, mbp}, nullptr) == mbp, "a microphone by name before the first other input");
+    check(pick({pg, "Built-in Input", ext}, nullptr) == "Built-in Input", "\"built-in\" counts as a microphone");
+    check(pick({"POCKET GROOVE (2)", ext}, nullptr) == ext,
+          "a name containing Pocket Groove (any case) is the device's stream");
+    // a default that is not the device: used
+    check(pick({pg, mbp, ext}, &ext) == ext, "default known: the default");
+    check(pick({pg, ext}, &ext) == ext, "default known: the default, also over no microphone");
+    {
+      const std::string other = "Studio Display Microphone";
+      const desk::MicChoice c = desk::chooseMicInput({pg, mbp}, &other, "");
+      check(c.ok && c.name == other && c.open.empty(), "a default not in the list: SDL's default is opened");
+      const desk::MicChoice d = desk::chooseMicInput({pg, mbp, ext}, &ext, "");
+      check(d.ok && d.open == ext, "a listed default: opened by its name");
+    }
+    check(pick({}, nullptr) == "the default input", "SDL lists nothing: its default");
+    check(pick({}, &pg) == "-", "nothing listed, the default is PG: none");
+    // --mic-device: exact, or part of a name, any case; PG allowed when asked for
+    check(pick({pg, mbp, ext}, &ext, "macbook") == mbp, "--mic-device macbook: partial, any case");
+    check(pick({pg, mbp, ext}, nullptr, "USB") == ext, "--mic-device USB");
+    check(pick({pg, mbp}, nullptr, "pocket") == pg, "--mic-device pocket: the device's stream when asked");
+    check(pick({"Mic 2", "Mic"}, nullptr, "Mic") == "Mic", "--mic-device: an exact name before a partial one");
+    {
+      const desk::MicChoice c = desk::chooseMicInput({pg, mbp}, nullptr, "zoom");
+      check(!c.ok && c.why.find("zoom") != std::string::npos, "--mic-device that matches nothing: none, says why");
+    }
+    const desk::MicChoice c = desk::chooseMicInput({pg, mbp}, &pg, "");
+    check(desk::micInputsLine({pg, mbp}, c) ==
+              "[mic] inputs: \"Pocket Groove\", \"MacBook Pro Microphone\"; using \"MacBook Pro Microphone\" "
+              "(a microphone; the system default is the device's own stream)",
+          "the start line");
+    check(desk::micInputsLine({pg}, desk::chooseMicInput({pg}, nullptr, "")).find("none usable") != std::string::npos,
+          "the start line: none usable");
+  }
+
   const std::string work = argc > 1 ? argv[1] : "build/host/desktop_test_mic";
   const std::string dir = work + "/samples";
   rmTree(dir);
@@ -178,6 +240,53 @@ int main(int argc, char** argv) {
   mic.release();
   mic.poll(&v);
   check(!mic.armed(), "ends");
+
+  // a dead input: exact zeros for about a second while WAITING -> MIC SILENT, once per hold
+  {
+    auto feed = [&](uint32_t ms) {   // in UI frames (~30 ms), polling as the Ui does
+      for (uint32_t t = 0; t < ms; t += 30) {
+        src.deliver(30, 0.0);
+        mic.poll(&v);
+      }
+    };
+    check(mic.takeSilentNotice().empty() && mic.silentNotices() == 0, "no notice so far");
+    src.zeros = true;
+    check(mic.start(9), "start slot 10 on a dead input");
+    feed(900);
+    check(v.state == RecState::Waiting && mic.silentNotices() == 0, "0.9 s of zeros: not yet");
+    feed(300);
+    check(mic.silentNotices() == 1, "1.2 s of zeros: noticed");
+    check(mic.takeSilentNotice() == "MIC SILENT: SYNTHETIC", "the screen text");
+    check(mic.takeSilentNotice().empty(), "taken once");
+    feed(3000);
+    check(mic.silentNotices() == 1 && mic.takeSilentNotice().empty(), "once per hold");
+    mic.release();
+    mic.poll(&v);
+    check(v.state == RecState::Cancelled && !mic.armed(), "let go: nothing kept");
+    check(mic.start(9), "hold again");
+    feed(1200);
+    check(mic.silentNotices() == 2 && !mic.takeSilentNotice().empty(), "the next hold says it again");
+    mic.release();
+    mic.poll(&v);
+    // zeros broken by a single non-zero sample: the run starts over
+    check(mic.start(9), "hold again");
+    feed(800);
+    src.zeros = false;
+    src.deliver(1, 0.0);
+    src.zeros = true;
+    feed(800);
+    check(mic.silentNotices() == 2, "0.8 s + 0.8 s of zeros with noise between: no notice");
+    mic.release();
+    mic.poll(&v);
+    // a quiet room (non-zero noise, sigma 25 = -62 dBFS): never
+    src.zeros = false;
+    check(mic.start(9), "hold in a quiet room");
+    feed(3000);
+    check(v.state == RecState::Waiting && mic.silentNotices() == 2 && mic.takeSilentNotice().empty(),
+          "quiet noise for 3 s: WAITING, no notice");
+    mic.release();
+    mic.poll(&v);
+  }
 
   std::printf("test_desktop_mic: %d passed, %d failed\n", g_pass, g_fail);
   rmTree(dir);

@@ -24,13 +24,12 @@
 #include <vector>
 
 #include "capture_convert.h"
+#include "input_names.h"   // kListenDeviceName, the name matching
 #include "listen_buffer.h"
 
 namespace desk {
 
 class AudioOut;
-
-constexpr const char* kListenDeviceName = "Pocket Groove";   // the firmware's USB product / audio input name
 
 class CaptureSource {
  public:
