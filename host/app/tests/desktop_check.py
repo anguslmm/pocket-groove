@@ -97,7 +97,7 @@ def key_id(name):
 
 def ui_shot_script(body):
     """The desktop key script as a ui_shot script: same keys, same timing."""
-    out = ["battery 255", "sd 0", "boot"]   # the app's UiEnv; boot = the device's power-on
+    out = ["dev 0", "battery 255", "sd 0", "boot"]   # the app (no --dev), its UiEnv; boot = the power-on
     held = set()
     for raw in body.splitlines():
         line = raw.split("#", 1)[0].strip()

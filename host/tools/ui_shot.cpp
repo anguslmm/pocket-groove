@@ -4,6 +4,8 @@
 //
 // Script format, one command per line, '#' starts a comment:
 //   demo | empty            start a fresh rig with the factory demo / an empty project
+//   dev <0|1>               developer mode for the next demo / empty / boot (default 1: the
+//                           parameter pages the older scripts shoot; 0 = the player's SOUND page)
 //   down <key>  up <key>    key events by legend: ` 1 .. 8 9 0 - = del tab q .. i o p [ ] \ fn sft a .. k
 //                           l ; ' ent ctl opt alt z .. , . / spc G0 (aliases: space enter shift minus
 //                           equals comma dot semicolon quote backtick lbracket rbracket ...)
@@ -61,6 +63,11 @@ int main(int argc, char** argv) {
     if (op == "demo" || op == "empty") {
       rig.start(op == "demo");
       started = true;
+      continue;
+    }
+    if (op == "dev") {
+      rig.devMode = std::atoi(a) != 0;
+      if (started) rig.ui.setDevMode(rig.devMode);
       continue;
     }
     if (!started) {

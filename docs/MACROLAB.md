@@ -4,7 +4,7 @@ A workbench for designing the instrument's macros: a few designed controls per v
 
 **edit a `.pgm` file (or `git pull`) → hear it in the desktop app, already playing → mark what feels good or bad → paste `lab-notes.txt` back.**
 
-It is a development tool, not a product feature: off unless the desktop app is started with `--lab`, a plain panel beside the device screen, nothing stored in projects. The macro model and the file parser are portable core code (`lib/pg/src/pg/macro/`, no heap, float only, 1.9 KB per loaded set), so the device can load the same files later: a macro set is meant to become the instrument a track slot holds.
+It is a development tool, not a product feature: off unless the desktop app is started with `--lab`, a plain panel beside the device screen. Since stage A of the redesign (2026-11-13) **a macro set is an instrument**: every track slot holds one, its four macros are the SOUND page (docs/UX.md 10.3), and the sets in `macros/` are compiled into the firmware as the built-in instruments (see [Instruments](#instruments) below). The lab is where they are tuned: a file in the lab folder **replaces the built-in instrument of the same voice and name** while the app runs, and the lab's sliders move the track's own macros, the same ones the SOUND page shows. Tuning goes on continually, in parallel with development, and never blocks it.
 
 ## Start it
 
@@ -14,22 +14,23 @@ tools/pg-desktop --lab ~/my-macros     # another folder
 tools/pg-desktop --lab --lab-notes ~/Desktop/notes.txt
 ```
 
-Run it from the repository root. With `--lab` the window is wider (the panel is 184 device pixels to the right of the screen and strip) and opens at scale 3 instead of 4 unless `--scale` is given. Everything else is the normal desktop app ([DESKTOP.md](DESKTOP.md)).
+Run it from the repository root. With `--lab` the window is wider (the panel is 184 device pixels to the right of the screen and strip) and opens at scale 3 instead of 4 unless `--scale` is given. `--lab` also turns on **developer mode** (`--dev` alone does that without the lab): the SOUND view can then show the bare parameter pages as well, `l` flipping between them and the instrument page (a CLASSIC track shows the parameter pages first). Set authors need them; the device never shows them. Everything else is the normal desktop app ([DESKTOP.md](DESKTOP.md)).
 
 ## The panel
 
 ```
   MACRO LAB                  BASS     <- the selected track (SHIFT+pad selects silently)
-  [<]         ACID  1/2         [>]   <- the set on this track; < > step: none, then each set
+  [<]         ACID  1/5         [>]   <- the track's instrument; < > step: none (CLASSIC), then the list
   FAMILY: INTERACTION.                <- its about line (the file's first comment), else its file
   RELOADED ACID.PGM                   <- what just happened, an error (red), a warning (amber),
                                          the keyboard macro's description, or the keys
   OPEN  [SHUT=|--------OPEN]  0.40    <- one slider per macro, its end labels inside; drag it.
   BITE  [|-------------------]  0.00     Amber = the keyboard's macro. A tick under a slider:
   WOBL  [|-------------------]  0.00     an enum parameter jumps there
-  +---------+   CUT   57  RES   98    <- what the set drives, as the instrument has it now:
-  |    .    |   ENV   68  DCY   44       amber value = edited by hand since (differs from the set)
-  |         |   ...                      cyan name = p-locked on steps of this pattern
+  +---------+   CUT   57  RES   98    <- what the set drives, as the instrument plays it now (the
+  |    .    |   ENV   68  DCY   44       mixer rule applied): amber = differs from what the set
+  |         |   ...                      computes (a hand edit in dev mode, a mixer row the player
+                                         moved); a CYAN macro name = macro-locked on steps
   +---------+   [ GOOD ]   [ BAD ]
   [X OPEN][Y BITE]  lab-notes.txt     <- the XY pad drives two macros; click X / Y to choose them
 ```
@@ -43,7 +44,7 @@ The **XY pad** stands in for tilting the device: click or drag in it and the X m
 | drag a slider | that macro (a click jumps there) |
 | click / drag the XY pad | the X and Y macros together |
 | click `X ...` / `Y ...` | the next macro on that axis |
-| `<` `>`, or **Cmd+Left / Cmd+Right** | previous / next set for the selected track (`none` = the bare parameters as before) |
+| `<` `>`, or **Cmd+Left / Cmd+Right** | previous / next instrument of the selected track (`none` = CLASSIC: the track keeps the values it has and plays them as stored) |
 | **Cmd+1 .. Cmd+4** | which macro the keyboard moves (its name turns amber) |
 | **Cmd+Up / Cmd+Down** | that macro +-5 % (with Shift: +-1 %); hold to repeat |
 | **Cmd+G** / GOOD | mark "good" |
@@ -52,18 +53,19 @@ The **XY pad** stands in for tilting the device: click or drag in it and the X m
 
 None of these reach the instrument (Command never does; while a note is typed the keyboard is the lab's). Select the track the normal way: a pad key, or SHIFT+pad to select without playing. They can be rebound with `--keymap` like the other app commands (`lab-good = Cmd+K`, names `lab-good lab-bad lab-prev lab-next lab-up lab-down lab-1 .. lab-4`).
 
-## What a set does to the instrument
+## What the lab does to the instrument
 
-- While a set is active on a track, the parameters it **owns** (its base patch and every parameter a macro names) follow the macros. The lab evaluates once per UI frame and sends only values that changed, through the UI's own value path (`Ui::setTrackParam`, the same command the value keys post), so the SOUND and MIX pages show the values moving.
-- **Editing an owned parameter by hand**: your value stays until the set computes a different value for that parameter (you move a macro that drives it, or its file is reloaded). Then the macro wins. The readout shows a hand-edited value in amber.
-- **P-locks win**, as always: a step that locks an owned parameter plays its lock. The readout shows those parameter names in cyan (the factory demos lock some bass parameters, e.g. ACIDJAM's ENV on pattern 1). Use a pattern without locks to hear the macro alone.
-- **Choosing `none` or another set** puts back the values the track had when the set was chosen. Positions and the chosen set are remembered per track and file for the session (not across restarts, not in projects).
-- The resulting values are ordinary parameter values: they are in the project like any edit (the title's `*`), and in the session saved at quit. The macro state itself is never stored in a project.
-- Loading another project while a set is active: the set keeps driving its parameters on its next move; "none" then puts back the values from the old project. Choose `none` before loading if that matters.
+There is one source of truth: the track's instrument and its macro positions, stored in the project (`TrackSettings::instrument`, `macro[4]`).
+
+- **Choosing a set** in the panel chooses the track's instrument (`Ui::setInstrument`, the same path the SOUND page's `;` `.` use). Its macros start at their default positions, or where they were when the set was last left in this session. `none` is CLASSIC: the track keeps the sound parameters it has and plays them as stored.
+- **The sliders and the XY pad** move the track's own macro positions (`Ui::setMacro`, 0..255), the ones the SOUND page shows; moving a macro on the device keys moves the slider and the other way round. The engine derives the sound parameters (see [Instruments](#instruments)); the lab sends no parameter values.
+- **A file whose voice and name match a built-in instrument replaces it** while the app runs: projects keep naming it by its id, so a project that uses ACID plays `macros/bass/acid.pgm` as it is on disk now. A file with no built-in counterpart is an **extra instrument** for this session: it is listed after the built-ins (in the panel and on the SOUND page) and can be chosen, saved in a project and reloaded; without the lab such a project plays the values it was saved with (an unknown id, see below). A file without a `name` line is named after the file (`bass/my_test.pgm` = `MY_TEST`). Two files with the same voice and name: the first in path order wins, the other is ignored (the terminal says so).
+- **Locks**: a step's macro lock plays that macro at the lock's value (docs/UX.md 7). A macro locked on some step of the current pattern has its name drawn in cyan, and the marks line puts a `~` after its position.
+- **Developer mode** (`--lab` or `--dev`) can edit the bare sound parameters of an instrument track on the parameter pages; such a value lasts until the instrument derives again (a macro moves, the file is reloaded). The readout shows it in amber.
 
 ## Hot reload
 
-The folder is polled four times a second (plain `stat`, any depth, files ending `.pgm`; hidden files are ignored). A changed, new or deleted file takes effect at once, while the app plays; the panel says `RELOADED ACID.PGM` and the terminal prints what happened. On a reload the macro positions are kept by macro name and every owned value is sent once. A deleted active set puts the track back to the values from before it.
+The folder is polled four times a second (plain `stat`, any depth, files ending `.pgm`; hidden files are ignored). A changed, new or deleted file takes effect at once, while the app plays; the panel says `RELOADED ACID.PGM` and the terminal prints what happened. On a reload the tracks playing that set keep their macro positions by macro name. The engine is handed the new version safely while it plays: the lab publishes the replacement in the overlay the engine reads (atomics), posts `RefreshInstruments`, and frees the old version only once the engine has counted that command (`Engine::instrumentRefreshes()`), so the audio thread never reads freed memory. A deleted file that replaced a built-in gives the built-in back; a deleted extra leaves its tracks playing the values they have.
 
 A file that does not parse **never half-loads**: the last good version stays active, and the panel shows the error in red with file, line and reason (`acid.pgm:7: unknown parameter 'cutof' for bass`) until the file is fixed; the terminal prints it too. A file that never parsed is not offered. A **warning** (see the format) never stops a load: the terminal prints every warning of a file each time it loads, and while that set is active the status line shows its first one in amber (`23: BODY: plain set undoes line 17 (LO-HI); add 'override' if meant`, with the count in brackets when there are more).
 
@@ -76,7 +78,7 @@ Each mark appends one line to `lab-notes.txt` in the directory the app was start
 2026-11-13 14:03:40 BAD  bass ACID macros/bass/acid.pgm@ee20b2a7 OPEN=0.95 BITE=0.80 WOBL=0.00 | CUT=104 RES=107* ... | harsh up here
 ```
 
-time, GOOD/BAD, track, set name, file `@` the version (FNV-1a of the file's text, so a mark names the exact curves it was made with), every macro position, `|`, every owned parameter as the instrument has it (short name `=` raw value, enum values by name), `|`, the note if one was typed. A `*` after a value: edited by hand, the set computes something else. A `~`: p-locked on steps of the current pattern (those steps play their lock). With no set on the track the line says `none -` and lists all its sound parameters.
+time, GOOD/BAD, track, set name, file `@` the version (FNV-1a of the file's text, so a mark names the exact curves it was made with; `builtin@00000000` for a built-in instrument with no file in the lab folder), every macro position (`~` after it: macro-locked on steps of the current pattern), `|`, every owned parameter as the instrument plays it (short name `=` raw value, enum values by name; mixer rows with the mixer rule applied), `|`, the note if one was typed. A `*` after a value: it differs from what the set computes (a hand edit in developer mode, or a mixer row the player moved). With no set on the track (CLASSIC) the line says `none -` and lists all its sound parameters. The format is unchanged since round 1.
 
 ## The .pgm format
 
@@ -168,9 +170,42 @@ Limits live in `lib/pg/src/pg/macro/macro.h`:
 | morph lines / trim lines | 8 / 8 | 6 / 5 bytes each |
 | strings | name 12, about 72, per macro: name 6, labels 8 + 8, description 40 | |
 
-One loaded set is **1856 bytes** (`sizeof(pg::macro::MacroSet)`; v1 was 2420 with 4 x 8 targets of 8 float points), so eight loaded sets take 14.5 KB. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
+One loaded set is **1856 bytes** (`sizeof(pg::macro::MacroSet)`, including its 16-bit instrument id; v1 was 2420 with 4 x 8 targets of 8 float points). The 24 built-in sets live in flash (about 44 KB); the device holds no copy of them in RAM. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
 
 Evaluation of one set: per target a search for the segment (one position decode per point passed: an integer compare and one float division), two value decodes (integer divide and one float division each), one division and a few multiply-adds for the curve; per patch value of an active morph two multiply-adds; per trim a curve, and one 2^x from a 6-term polynomial for all trims (no `powf`, no libm); then a clamp and round per owned parameter. On this host it takes about 130 to 340 ns per set (KEYS and TRIO, all morph, are the cheapest, POLES with 22 targets and 64 points the dearest; `itest_macro_files` prints each), about 0.8 us for a set near the limits (60 targets, 188 points, two 22-value morphs, 4 trims; `test_macro_eval`). For POLES that is roughly 150 float divisions (point decoding and the curve segments), 200 other float operations and the integer work around them. On the ESP32-S3 (240 MHz, single-precision FPU) expect very roughly ten to thirty times the host time, around 3 to 10 us per set: eight sets at 300 Hz would be about 1 to 3 % of one core (an estimate from the host figures, not measured on the device).
+
+## Instruments
+
+Stage A of the redesign (2026-11-13). The model and the format above are unchanged; this is how a set becomes what a track plays.
+
+**A track slot holds one instrument.** `TrackSettings` (lib/pg/src/pg/project.h) carries the instrument's 16-bit **id** and four **macro positions** (0..255, position = byte / 255) in what were reserved bytes, so the `Project` did not grow; `kProjectVersion` is 2. Id 0 is **CLASSIC**: no instrument, the track's stored sound parameters play as they are. A version-1 project loads with no instrument on any track and sounds exactly as before (`itest_golden` renders every demo directly and through a version-1 file, bit for bit). The built-in demos are CLASSIC for now; a new project (CTRL+N) starts with the first instrument of every track at its default positions.
+
+**Ids.** `macro::setId(voice, name)`: FNV-1a of `voice:NAME` (`bass:ACID`), folded to 16 bits. A project names an instrument by its id, so adding or reordering sets never breaks a saved project. Changing a set's content changes how existing projects sound: intended, the sets are retuned continually. The generator and `itest_instrument` fail on two sets with one id and on id 0 (rename the set).
+
+**Derivation.** With an instrument, the track's sound parameters 0..23 are derived: `evaluate(set, positions, under = the voice's default values)`, written into the project's parameters whenever the id or a position changes. So an instrument sounds the same whatever the track held before, the stored values are always what plays, and a project whose instrument the firmware does not know (an **unknown id**: a lab extra, a set removed later) simply plays the values it was saved with; the id is kept, the SOUND page says UNKNOWN and offers the list. The voices receive 7-bit parameters exactly as before.
+
+- *Where it runs*: on the audio thread, at a quantum edge, only on a change. Once per quantum the engine compares each track's id and positions with what it derived from (48 bytes, inside `quantum()`; nothing else is added to the per-quantum or per-sample path); `SetInstrument`, `SetMacro` and a Project edited by any route are followed that way. A step whose macro lock differs from the one in scope evaluates once at that step. `Engine::sanitizeProject` also derives (so a loaded project already holds what will play and its CRC stays clean).
+- *Cost*: one evaluation is 130-340 ns on the host for the round-1 sets; on the ESP32-S3, running from flash, expect very roughly 3-10 us. A held-key sweep sends one `SetMacro` per 40 ms repeat per macro, so two macros swept at once cost two evaluations every 40 ms, well under 0.1 % of a core; a pattern full of macro locks adds at most one evaluation per track per step. Evaluation stays in flash (`tools/pio_audio_ram.py` is unchanged): it is neither per-sample nor per-quantum. To measure on the device: the AUD load (`r` report) while sweeping two macros on a busy pattern against the same pattern idle, and the worst quantum time with a macro lock on every step of every track.
+
+**The mixer rule.** Level, pan, the two sends and duck (parameters 24..28) are the player's (MIX view) and an instrument never overwrites them. A set may still drive the level (`lvl`, `trim`) and the sends (`dly`, `rev`); what plays is
+
+- *level* = player × instrument ÷ default: the instrument's level is a gain trim relative to the parameter's default (through the cubic taper its dB add to the player's);
+- *send* = player + (instrument − default): the instrument adds to (or takes from) the player's send;
+- *pan* and *duck*: the player's only (an instrument's targets on them are ignored);
+
+each rounded and clamped to 0..127 (`macro::combineMixer`). With the player's values at their defaults this is exactly what the set evaluated to, so the round-1 sets sound as they did in the lab and `macro_audit` (which now renders through the rule, the player at the defaults) passes all 24 unchanged.
+
+**Macro locks.** A step may lock one macro of its track's instrument (`Step::lockParam` 33..36 = macro 1..4, `lockValue` the position). While such a step is in scope (the usual rule: until the next step of the track that fires, across the pattern wrap) the engine plays the instrument with that macro at the lock's value. On a track with an instrument, a lock of a sound parameter (1..24) is ignored (the instrument owns them; it stays in the step and comes back if the track goes CLASSIC); mixer locks work and combine by the rule. On a CLASSIC track a macro lock does nothing. Pasting or copying a track onto another track drops its macro locks (they only mean something for the instrument they were made on).
+
+**Built-in instruments.** The `.pgm` files under `macros/` are the source. `host/tools/macro_builtin` compiles them into `lib/pg/src/pg/macro/builtin_data.cpp`, a checked-in C++ source of const, constant-initialised `MacroSet` tables (24 sets, 1856 bytes each, about 44 KB of flash). The firmware build runs no host tool; the engine and the UI use the tables in place, with no parser and no RAM copy on the device. The order and the selection come from `macros/builtin.txt` (one line per voice; the **first** file of a line is what a new project starts with: kick BOOM, snare CRACK, clap HYPE, CHH TICK, OHH BLAST, perc TAP, bass ACID, lead HANDS). Every `.pgm` under `macros/` must be listed; a listed file must parse without warnings and have a `name`. After changing any listed file or the list, regenerate and commit:
+
+```bash
+cmake --build build/host --target macro_builtin && build/host/macro_builtin
+```
+
+The ctest `check_builtin` (`macro_builtin --check`) fails while the checked-in table is stale, and `itest_instrument` compares every table entry with what parsing its file gives now, byte for byte.
+
+**The library.** `macro::findInstrument(id)`, `instrumentCount(track)`, `instrumentAt(track, i)`: the built-ins, with the host's overlay laid over them (the lab, above; the device has none).
 
 ## The sets in macros/
 

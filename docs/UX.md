@@ -8,13 +8,14 @@ Status: complete for v1 implementation. Mockups are in `docs/ux/` (contact sheet
 
 1. **Modes.** There is one home view, **GROOVE**: an 8-track overview above 16 step keys. There are five more views, each on its own key that never changes: **SOUND** `9`, **MIX** `0`, **FX** `o`, **SONG** `p` and **PROJECT** `\`. `` ` `` always goes home. Everything else is a temporary layer: a step held (STEP EDIT), a modifier held (FN mute, OPT patterns, ALT roll, TAB tempo, CTRL edit), a pop-up or a dialog. These never trap you, because releasing the key, or pressing `` ` ``, ends them. The keys that never change meaning anywhere (except while typing a file name) are SPACE (play/stop), `` ` `` (home), the five view keys, `[ ]` (DJ filter, with SHIFT for bass cutoff), TAB (tempo), `/` (help), the pads `a`-`k` (play and select a track), FN+pad (mute), OPT+step (queue a pattern) and the CTRL combos.
 2. **Step grid.** Steps 1-8 are on `1`-`8` and steps 9-16 on `q`-`i`, as two rows of 8 that sit exactly under the on-screen 2x8 pads. The row `a`-`k` holds the 8 track pads (KICK SNAR CLAP CHH OHH PERC BASS LEAD). The row `z`-`,` holds the 8 note keys. `'` pages through 16-step pages (up to 4). SHIFT+step sets the pattern length. CTRL+SHIFT+step sets the length of the selected track only (polymeter).
-3. **Value editing.** There's exactly one "focused value", shown in the status-bar chip. `-` and `=` change it from every view. A tap moves it by 1. Holding sweeps it with acceleration. SHIFT moves it 8x. Pressing both keys resets it to the default. You choose what is focused in SOUND, MIX or FX, or by selecting a track, and it stays on `-`/`=` after you go back to GROOVE. Two performance sweeps are always live and ignore the focus: `[`/`]` move the **master DJ filter** (both keys together = off) and **SHIFT+`[`/`]` move the bass cutoff**. Neither needs any selection first.
-4. **Step detail and p-locks.** Hold a step key. The pad row becomes 8 step fields (VEL, GATE/PITCH, PROB, RATCH, ACC, SLIDE, CHORD, LOCK) and `-`/`=` edit the chosen field. The note row sets the step's note, and on drum tracks it sets velocity instead. Tapping another step while one is held copies the held step there. To p-lock a step, hold it while you're in SOUND or MIX and press `-`/`=`: that locks the focused parameter on that step. Every gesture uses at most two non-modifier keys.
-5. **Note entry.** v1 ships three methods. The first is a **scale-locked note row** (`z`-`,` = 8 consecutive degrees of the project scale from the track's octave; `;`/`.` change octave). The second is **303-style step-write**: REC while stopped, then each note key writes and advances, SHIFT adds an accent, holding the previous note gives a slide, DEL inserts a rest. The third is **live record**: REC while playing. There is no piano layout in v1, because a scale-locked row can't hit a wrong note. Lead chords come from **AUTO** mode by default: each note key plays the diatonic triad on that degree of the scale. `l` cycles AUTO, AUTO7 and the fixed chord types.
-6. **Performance.** FN+pad mutes and FN+note-key solos. OPT+step queues a pattern for the next boundary, and OPT+SHIFT+step copies the current pattern there first and then queues it (that's how variations get built). ALT+pad rolls a track while held. `[`/`]` sweep the DJ filter. Holding DEL while playing erases the selected track as the playhead passes. All of these need at most one modifier plus one key.
-7. **Feedback.** There's a status bar on every screen showing transport, rec, pattern/queue/song slot, BPM with a beat blink, the focus chip, a mono level meter, a ducker gain-reduction bar and battery. GROOVE shows all 8 tracks' 16 steps plus a trigger lamp per track. The selected track's 16 steps are drawn as large pads with note names, velocity bars and accent, slide, ratchet, probability, lock and chord markers. Value changes pop up a name, value and bar for 1.2 s. Holding `/` shows the current view's key map, and tapping `/` turns on "explain" mode.
-8. **Destructive actions.** CTRL+X/C/V cut, copy and paste the selected track, and CTRL+SHIFT+X/C do the same for the whole pattern. Every destructive action stores a one-level undo snapshot of the affected pattern (4.2 KB). CTRL+Z undoes, and pressing it again redoes. Files are `/int/pg/NAME.pgv` and `/sd/pg/NAME.pgv`, with 8-character names. CTRL+S saves. Load asks before discarding unsaved work.
-9. **Power-on.** The device resumes the last session, or loads the factory demo (4 patterns, A minor, 124 BPM, ducker on) the very first time. A banner says "SPACE PLAY". One key press gives a pumping acid-house groove.
+3. **Instruments (stage A, 2026-11-13).** Every track slot holds an **instrument**: a macro set (docs/MACROLAB.md) with up to four macros. **SOUND is the instrument page**: the instrument's name and its macros as four large controls, each moved by its own key pair (`z`/`x`, `c`/`v`, `b`/`n`, `m`/`,`), so two macros move at once with two fingers; `;` `.` (and `9` again) step through the track's instruments. The bare sound parameters are not shown to the player any more (only in a developer mode on the desktop). A track with no instrument is CLASSIC (demos, older projects): it plays its stored sound, and its page invites a choice (10.3).
+4. **Value editing.** There's exactly one "focused value", shown in the status-bar chip. `-` and `=` change it from every view. A tap moves it by 1. Holding sweeps it with acceleration. SHIFT moves it 8x. Pressing both keys resets it to the default. You choose what is focused in SOUND, MIX or FX, or by selecting a track, and it stays on `-`/`=` after you go back to GROOVE. Two performance sweeps are always live and ignore the focus: `[`/`]` move the **master DJ filter** (both keys together = off) and **SHIFT+`[`/`]` move the bass's macro 1** (on a CLASSIC bass: its cutoff). Neither needs any selection first.
+5. **Step detail and p-locks.** Hold a step key. The pad row becomes 8 step fields (VEL, GATE/PITCH, PROB, RATCH, ACC, SLIDE, CHORD, LOCK) and `-`/`=` edit the chosen field. The note row sets the step's note, and on drum tracks it sets velocity instead. Tapping another step while one is held copies the held step there. To p-lock a step, hold it while you're in SOUND or MIX and press `-`/`=` (in SOUND: or a macro key): that locks the focused macro (or MIX parameter) on that step. Every gesture uses at most two non-modifier keys.
+6. **Note entry.** v1 ships three methods. The first is a **scale-locked note row** (`z`-`,` = 8 consecutive degrees of the project scale from the track's octave; `;`/`.` change octave). The second is **303-style step-write**: REC while stopped, then each note key writes and advances, SHIFT adds an accent, holding the previous note gives a slide, DEL inserts a rest. The third is **live record**: REC while playing. There is no piano layout in v1, because a scale-locked row can't hit a wrong note. Lead chords come from **AUTO** mode by default: each note key plays the diatonic triad on that degree of the scale. `l` cycles AUTO, AUTO7 and the fixed chord types.
+7. **Performance.** FN+pad mutes and FN+note-key solos. OPT+step queues a pattern for the next boundary, and OPT+SHIFT+step copies the current pattern there first and then queues it (that's how variations get built). ALT+pad rolls a track while held. `[`/`]` sweep the DJ filter. Holding DEL while playing erases the selected track as the playhead passes. All of these need at most one modifier plus one key.
+8. **Feedback.** There's a status bar on every screen showing transport, rec, pattern/queue/song slot, BPM with a beat blink, the focus chip, a mono level meter, a ducker gain-reduction bar and battery. GROOVE shows all 8 tracks' 16 steps plus a trigger lamp per track. The selected track's 16 steps are drawn as large pads with note names, velocity bars and accent, slide, ratchet, probability, lock and chord markers. Value changes pop up a name, value and bar for 1.2 s. Holding `/` shows the current view's key map, and tapping `/` turns on "explain" mode.
+9. **Destructive actions.** CTRL+X/C/V cut, copy and paste the selected track, and CTRL+SHIFT+X/C do the same for the whole pattern. Every destructive action stores a one-level undo snapshot of the affected pattern (4.2 KB), and so does a change of instrument (the track's instrument, positions and sound). CTRL+Z undoes, and pressing it again redoes. Files are `/int/pg/NAME.pgv` and `/sd/pg/NAME.pgv`, with 8-character names. CTRL+S saves. Load asks before discarding unsaved work.
+10. **Power-on.** The device resumes the last session, or loads the factory demo (4 patterns, A minor, 124 BPM, ducker on) the very first time. A banner says "SPACE PLAY". One key press gives a pumping acid-house groove.
 
 ---
 
@@ -39,9 +40,10 @@ All of this is UI-thread state except where it says Project. Nothing here is sav
 |---|---|---|---|
 | `view` | GROOVE, SOUND, MIX, FX, SONG, PROJECT | GROOVE | |
 | `selTrack` | 0..7 | 6 (BASS) at power-on with the demo; 0 on a new project | Changed by a pad press. |
-| `focus` | `{track t, param p}` or `{global g}` | `{6, CUT}` | The thing `-`/`=` edits. See 5.1. |
-| `trackFocus[8]` | param index per track | 0 for every track, except PERC = 1 (TUNE) | Remembered per track. |
-| `soundPage[8]` | 0..2 | 0 | |
+| `focus` | `{track t, param p}`, `{track t, macro m}` or `{global g}` | `{6, CUT}` with the demo; a new project: the track's macro 1 | The thing `-`/`=` edits. See 5.1. A macro is index 32+m. |
+| `trackFocus[8]` | param or macro index per track | 0 for every track, except PERC = 1 (TUNE) | Remembered per track. A track with an instrument focuses a macro (its last one, else macro 1). |
+| `soundPage[8]` | 0..2 | 0 | Developer mode only (the parameter pages). |
+| instrument, macros | per track, in the Project (`TrackSettings`) | a new project: each track's first instrument at its default positions | Session memory: the positions each instrument had when the track left it (16 entries). |
 | `mixRow` | LEVEL, DUCK, DELAY, REVERB, PAN | LEVEL | |
 | `fxTab` | DUCK, SPACE, MASTER | DUCK | `fxFocus[3]` per tab: DDEP, DFB, FILT. |
 | `shownPage` | 0..3 | 0 | The 16-step page shown in GROOVE/SOUND/MIX. It doesn't follow the playhead (see 4.2). |
@@ -130,6 +132,7 @@ All of this is UI-thread state except where it says Project. Nothing here is sav
 
 ### 4.4 Note row (`z` `x` `c` `v` `b` `n` `m` `,`)
 
+* **In SOUND** the row is the instrument's **macro keys** (10.3): `z`/`x` macro 1 down/up, `c`/`v` macro 2, `b`/`n` macro 3, `m`/`,` macro 4. Everywhere else it plays notes as below.
 * **Synth track selected:** key *k* (0..7) plays scale degree *k* above the root at `octave[sel]`. With `kGScaleRoot`=A, MIN and octave 1, the keys play A1 B1 C2 D2 E2 F2 G2 A2. Pentatonic scales run on into the next octave, and CHRO gives 8 semitones. MIDI note = `12*(octave+1) + root + degreeOffset`, clamped to 0..127.
 * **Lead:** the note becomes a chord according to `chordMode` (section 9.3).
 * **Drum track selected:** key *k* plays that drum at **velocity** 16, 32, 48, 64, 80, 96, 112 or 127 (natural pitch). Drum pitch is a per-step field (section 7), not a live control.
@@ -145,10 +148,11 @@ All of this is UI-thread state except where it says Project. Nothing here is sav
 ### 5.1 What is focused
 
 `focus` changes when:
-* you press a column key (`z`..`,`) in SOUND, which focuses that track parameter and stores it in `trackFocus[sel]`;
+* you move a macro in SOUND (its key pair, 10.3), which focuses that macro and stores it in `trackFocus[sel]` (developer mode's parameter pages: a column key focuses that parameter);
 * you choose a row in MIX (`z`..`b`), which focuses param 24..28 of the selected track;
 * you press a column key in FX, which focuses a global;
-* you select a track with a pad in any view except FX, which sets focus to `{t, trackFocus[t]}`; in MIX it's `{t, row}`, and in FX/DUCK it's `{t, kMixDuck}`.
+* you select a track with a pad in any view except FX, which sets focus to `{t, trackFocus[t]}` (on a track with an instrument a macro: its remembered one, else macro 1); in MIX it's `{t, row}`, and in FX/DUCK it's `{t, kMixDuck}`;
+* the track's instrument changes: a focus on its sound follows to the new instrument's macro.
 
 It **doesn't** change when you change view. So you can set `focus = DDEP` in FX, go home and pump the ducker with `-`/`=` while watching the grid. The status-bar chip always shows the owner tag (track colour, or cyan "FX"), the short name and the value.
 
@@ -163,7 +167,9 @@ It **doesn't** change when you change view. So you can set `focus = DDEP` in FX,
 | Enum / ranges ≤ 16 values | One step per tap. Hold repeats every 200 ms, no acceleration, and doesn't wrap. |
 | TAB held + `-`/`=` | BPM ±1 (SHIFT ±10), same timing. |
 
-Every change sends one `SetTrackParam` or `SetGlobal` with the absolute value. The UI keeps its own "pending value" so that fast repeats don't wait for the round trip. The value pop-up (section 11.3) appears on every change.
+**Macros** (a focused macro, or its own keys in SOUND) are positions 0..255, shown as 0..100 %: a tap moves 2 (0.8 %), a held repeat 2, then 4, then 8 per 40 ms (a full sweep takes about 2.3 s), SHIFT 16 per event without acceleration; both keys of a pair (or `-` and `=`) = the instrument's default position.
+
+Every change sends one `SetTrackParam`, `SetMacro` or `SetGlobal` with the absolute value. The UI keeps its own "pending value" so that fast repeats don't wait for the round trip. The value pop-up (section 11.3) appears on every change.
 
 ### 5.3 Performance sweeps (always live, independent of focus)
 
@@ -172,10 +178,10 @@ Every change sends one `SetTrackParam` or `SetGlobal` with the absolute value. T
 | `[` hold | `kGMasterFilter` toward 0 (low-pass closing) | Constant-rate glide of **48 units/s** while held. There's no acceleration, because a filter sweep must be musical and predictable. It latches where you let go. Crossing 64 pauses there for 150 ms (a "detent at OFF"). |
 | `]` hold | `kGMasterFilter` toward 127 (high-pass opening) | Same. |
 | `[`+`]` together | `kGMasterFilter` = 64 (off) | Instant. Toast "DJ FILTER OFF". |
-| SHIFT+`[` / `]` | BASS param 0 (CUT) down/up | 48 units/s glide. SHIFT+both = back to the value it had when the sweep started (the *bass return*). |
+| SHIFT+`[` / `]` | the bass's **macro 1** down/up (a CLASSIC bass: its CUT) | The same glide end to end (96 units/s over 0..255 for a macro, 48 over 0..127 for CUT). SHIFT+both = back to the value it had when the sweep started (the *bass return*). |
 | tap `[` or `]` (< 120 ms) | ±1 | Fine nudge. |
 
-The pop-up shows "DJ FILTER LP26" or "BASS CUTOFF 74" with a bipolar or unipolar bar. If a bass step has a CUT p-lock, the lock still wins on that step. This is the contract's behaviour, and it's documented in help.
+The pop-up shows "DJ FILTER LP26", "BASS OPEN 62%" or "BASS CUTOFF 74" with a bipolar or unipolar bar. If a bass step locks that macro (or CUT), the lock still wins on that step. This is the contract's behaviour, and it's documented in help.
 
 ---
 
@@ -189,7 +195,7 @@ Images: `docs/ux/keys-groove.png`, `keys-step-held.png`, `keys-step-write.png`, 
 |---|---|---|---|---|---|---|---|---|---|
 | `` ` `` | close overlays; home | (G) home, step released | REC off, home | home | home | home | home | home | cancel |
 | `1`-`8` | step 1-8 tap/hold | copy held step here | move cursor | step tap/hold (strip) | step tap/hold | step tap/hold | put P01-P08 in slot | - | type 1-8 |
-| `9` | SOUND | SOUND (still holding: lock mode) | SOUND | next sound page | SOUND | SOUND | SOUND | SOUND | type 9 |
+| `9` | SOUND | SOUND (still holding: lock mode) | SOUND | next instrument (dev parameter pages: next page) | SOUND | SOUND | SOUND | SOUND | type 9 |
 | `0` | MIX | MIX (lock mode) | MIX | MIX | next row | MIX | MIX | MIX | type 0 |
 | `-` | focus -1 | field -1 | focus -1 | focus -1 | fader -1 | focus -1 | repeats -1 | - | type - |
 | `=` | focus +1 | field +1 | focus +1 | focus +1 | fader +1 | focus +1 | repeats +1 | - | - |
@@ -200,17 +206,17 @@ Images: `docs/ux/keys-groove.png`, `keys-step-held.png`, `keys-step-write.png`, 
 | `p` | SONG | SONG | SONG | SONG | SONG | SONG | - | SONG | type P |
 | `[` `]` | DJ filter sweep | G | G | G | G | G | G | G | - |
 | `\` | PROJECT | PROJECT | PROJECT | PROJECT | PROJECT | PROJECT | PROJECT | LOAD/SAVE tab | - |
-| `a`-`k` | pad: play + select | field VEL GATE/PTCH PROB RTCH ACC SLD CHRD LOCK | pad: play + select | pad (show its sound) | pad (select strip) | pad; DUCK tab: focus its duck | pad | pad | type |
-| `l` | chord mode (lead) | chord next (lead) | chord mode | - | - | - | - | type L |
-| `;` | octave + | note +1 semi (CTRL +12) | octave + | page prev | row prev | tab prev | slot up | list up | - |
+| `a`-`k` | pad: play + select | field VEL GATE/PTCH PROB RTCH ACC SLD CHRD LOCK | pad: play + select | pad (show its instrument) | pad (select strip) | pad; DUCK tab: focus its duck | pad | pad | type |
+| `l` | chord mode (lead) | chord next (lead) | chord mode | - (developer mode: instrument page / parameter pages) | - | - | - | type L |
+| `;` | octave + | note +1 semi (CTRL +12) | octave + | previous instrument (dev pages: page prev) | row prev | tab prev | slot up | list up | - |
 | `'` | page | page (to copy across) | page | step page | step page | - | - | - | - |
 | `enter` | REC on/off | - | REC off | REC | REC | REC | chain on/off | load / save | OK |
-| `z`-`,` | notes 1-8 | set note 1-8 (drum: velocity) | write note + advance | column 1-8 | row LEVEL DUCK DELAY REVERB PAN (`n` `m` `,` -) | column 1-8 | notes | notes | type (`,` -) |
-| `.` | octave - | note -1 semi (CTRL -12) | octave - | page next | row next | tab next | slot down | list down | - |
+| `z`-`,` | notes 1-8 | set note 1-8 (drum: velocity) | write note + advance | macro keys: `z`/`x` macro 1 -/+, `c`/`v` 2, `b`/`n` 3, `m`/`,` 4 (dev pages: column 1-8) | row LEVEL DUCK DELAY REVERB PAN (`n` `m` `,` -) | column 1-8 | notes | notes | type (`,` -) |
+| `.` | octave - | note -1 semi (CTRL -12) | octave - | next instrument (dev pages: page next) | row next | tab next | slot down | list down | - |
 | `/` | help (hold) / explain (tap) | G | G | G | G | G | G | G | - |
 | `space` | play / stop | G | play (to live rec) | G | G | G | G | G | type `_` |
 
-STEP HELD in SOUND or MIX is the same as the SOUND/MIX column, except that `-`/`=` write a **p-lock** of the focused parameter on the held step, and `del` removes it.
+STEP HELD in SOUND or MIX is the same as the SOUND/MIX column, except that `-`/`=` (and in SOUND the macro keys) write a **p-lock** of the focused macro or parameter on the held step, and `del` removes it.
 
 ### 6.2 Modifier and held-key combos (all views except NAME ENTRY)
 
@@ -222,8 +228,9 @@ STEP HELD in SOUND or MIX is the same as the SOUND/MIX column, except that `-`/`
 | SHIFT + step | Pattern length (4.2). |
 | SHIFT + pad | Select silently. |
 | SHIFT + note | Note with accent. |
-| SHIFT + `-`/`=` | ×8 steps. |
-| SHIFT + `[`/`]` | Bass cutoff sweep. |
+| SHIFT + `-`/`=` | ×8 steps (a macro: 16 of 255). |
+| SHIFT + macro key (SOUND) | That macro by 16 of 255 per tap or repeat. |
+| SHIFT + `[`/`]` | Bass sweep: its macro 1 (CLASSIC bass: cutoff). |
 | SHIFT + `'` | Add page. |
 | SHIFT + `l` | Previous chord mode. |
 | SHIFT + space | Playing: restart from step 1 (`Play a=0`). Stopped: continue from the current position (`Play a=1`). |
@@ -270,10 +277,10 @@ Modifier overlays appear 200 ms after the modifier goes down, **or immediately**
 * `l` (lead) moves the chord to the next type.
 * **Tap another step key = copy the held step there** (all 8 bytes). Tapping `'` while the step stays held flips the shown page, so a step can be copied across pages. Each copy is one `SetStep`. Everything done while the step is held, copies included, is one undo unit (ui_edit.cpp).
 * `del` removes the step's p-lock (`lockParam = 0`).
-* **LOCK field:** if the step has a lock, `-`/`=` change `lockValue`, with display formatted by that parameter's ParamInfo. If it has none, the first `-`/`=` creates a lock on the **focused** track parameter (`trackFocus[sel]`), starting from its current value.
+* **LOCK field:** if the step has a lock, `-`/`=` change `lockValue`, with display formatted by that parameter's ParamInfo (a macro lock: the macro's name and its value in %). If it has none, the first `-`/`=` creates a lock on the **focused** macro or parameter (`trackFocus[sel]`), starting from its current value. A lock the engine ignores (a sound-parameter lock on a track with an instrument; a macro lock on a CLASSIC track) is drawn DIM with "OFF".
 * Release of the step key closes the panel. If the step was on before the press and nothing was edited and the press was short, it toggles off (4.1).
 
-**Locks from SOUND/MIX** (`sound-lock.png`). Hold a step key (the strip at y 114 frames it) and press `-`/`=`. That writes `lockParam = focus+1` and `lockValue = current ± delta`. The column bar turns AMBER, a white tick marks the unlocked base value, and the big read-out turns amber with a "◆LOCK" chip. A column key (`z`..`,`) may be tapped while still holding the step, to move the focus to another parameter first. **One lock per step (contract).** Locking a different parameter replaces the old lock. Toast: "LOCK CUT REPLACES RES". Globals (FX) can't be locked; the toast says "FX VALUES CAN'T BE LOCKED". The exception is a track's DUCK amount on the FX DUCK tab, because that's a track parameter.
+**Locks from SOUND/MIX** (`instrument-lock.png`, `sound-lock.png`). Hold a step key (the strip at y 114 frames it) and press `-`/`=`, or in SOUND a macro key. That writes `lockParam = focus+1` and `lockValue = current ± delta`: a **macro lock** (`lockParam` 33..36) on the instrument page, both keys of a pair = the default on that step. The macro's bar turns AMBER with a white tick at the unlocked position, the header shows "STEP n ◆LOCK" and the value turns amber. While the step is in scope the engine plays the instrument with that macro at the lock's value. The column bar turns AMBER, a white tick marks the unlocked base value, and the big read-out turns amber with a "◆LOCK" chip. A column key (`z`..`,`) may be tapped while still holding the step, to move the focus to another parameter first. **One lock per step (contract).** Locking a different parameter replaces the old lock. Toast: "LOCK CUT REPLACES RES". Globals (FX) can't be locked; the toast says "FX VALUES CAN'T BE LOCKED". The exception is a track's DUCK amount on the FX DUCK tab, because that's a track parameter.
 
 A view key pressed while a step is held switches view and **keeps the hold**. So the path "hold step → `9` → `-`/`=`" works without letting go.
 
@@ -376,7 +383,22 @@ All coordinates are inclusive pixels on the 240x135 framebuffer, with x to the r
   * 8 field cards at pad x, y 48, 27x37: key (+3,+2), name centred y 59, value centred y 68, bar 21x3 at y 79. The selected card is RAISED with a WHITE frame, and fields not available for the track are drawn as an empty RAISED outline.
   * The footer becomes `TAP STEP COPY HERE  DEL NO LOCK`.
 
-### 10.3 SOUND (`sound.png`, `sound-kick.png`, `sound-lock.png`)
+### 10.3 SOUND: the instrument page (`instrument.png`, `instrument-labels.png`, `instrument-kick.png`, `instrument-lock.png`, `instrument-list.png`, `instrument-classic.png`)
+
+Real-UI screenshots, drawn by `build/host/ui_shot host/ui_scripts/instrument.txt docs/ux` (the first, functional version; a later stage polishes the picture).
+
+* Header y 13: track chip at x 4, then the **instrument's name** in FONT_L (WHITE); right: its place in the track's list `2/5` DIM, or while a step is held `STEP n` + an AMBER `◆LOCK` chip.
+* About line y 28 (DIM), the set's first comment, cut to 39 characters.
+* **Four macro columns** of 60 px, each above its key pair: column *m* spans x 60m..60m+59 over the keys `z x` | `c v` | `b n` | `m ,`. Top to bottom: the macro's name at y 38 (a track-colour chip when focused), its high end label at y 48 (if the set has end labels, e.g. BRIGHT), a bar 44x30 at (60m+8, 57) filling from the bottom (track MID, bright when focused, AMBER with a WHITE tick at the base when the held step locks it), its low end label at y 89 (DARK), then at y 98 the down key letter, the value in % and the up key letter. A macro the set doesn't have: a LINE "-".
+* Step strip y 114 as before (a lock = AMBER top), footer `;/. INSTRUMENT  HOLD STEP+KEY ◆`, or while held `MOVE A MACRO = LOCK  DEL REMOVE`.
+* **The instrument list** (`instrument-list.png`): after `;` `.` `9`, for 1.5 s, a box at (150, 26) lists the track's instruments (up to 8 rows, scrolling), the current one highlighted in the track colour.
+* **CLASSIC** (`instrument-classic.png`): the chip, `CLASSIC` in FONT_L, "THIS TRACK PLAYS ITS CLASSIC SOUND, AS IN A DEMO OR AN OLDER PROJECT." and a framed box "PICK AN INSTRUMENT" naming what `.`/`9` and `;` would pick. An id this firmware doesn't know shows `UNKNOWN` (amber) and "IT PLAYS THE SOUND IT WAS SAVED WITH."
+
+**Keys.** `z`/`x` macro 1 down/up, `c`/`v` macro 2, `b`/`n` macro 3, `m`/`,` macro 4: tap = one small step, hold = sweep with acceleration (5.2), SHIFT = coarse (16 of 255), both keys of a pair = the instrument's default position. Each key repeats on its own, so two macros move at once with two fingers (any key of one pair with any key of another closes no rectangle of the scan matrix, also with SHIFT held: docs/ghosting-audit.md). Moving a macro focuses it (`-`/`=` move it from any view). `;` previous / `.` next instrument, `9` again = next; the change is audible at once, a new instrument starts at its default positions or where it was when the track last left it in this session; from CLASSIC `.` picks the first, `;` the last. A run of steps while the list is up is one undo unit: CTRL+Z goes back to what the track had before (CLASSIC included, its stored sound exactly), CTRL+Z again redoes. A step held + a macro key or `-`/`=` = a macro lock (7); `del` removes it.
+
+**Developer mode** (the desktop app's `--dev`, implied by `--lab`; never on the device): a CLASSIC track shows the parameter pages below, and `l` flips between them and the instrument page on any track.
+
+### 10.3a SOUND parameter pages, developer mode only (`sound.png`, `sound-kick.png`, `sound-lock.png`)
 * Header y 14: track chip at x 4, `SOUND` TEXT, page numbers (the current one as a WHITE chip). Right: long name DIM (upper case) + value L WHITE right-aligned to x 235 at y 13.
 * 8 columns, column *c* centred at cx = 30c + 15:
   * Name at y 32. The focused column's name is a track-colour chip.
@@ -533,7 +555,8 @@ The full 48-row table with RGB565 values is printed by `--palette`. These are th
 
 * **Undo** keeps one snapshot: the full `Pattern` (4168 B) plus its index, taken *before* the action. CTRL+Z swaps the snapshot with the current contents of that pattern (so pressing it again redoes). The toast reads "UNDO: BASS CLEARED" / "REDO". Any new destructive action replaces the snapshot.
 * Writing a whole track or pattern back uses CCR-3. The fallback is trickled `SetStep` commands: at most 48 per UI frame. Each frame checks the queue with `post()` and retries what it couldn't send. A pattern restore (512 steps) then takes 11 frames, about 0.35 s. During that time the UI shows the toast and ignores further edits to that pattern.
-* Song slots, mutes and sound/mixer/global params aren't covered by undo. They aren't destructive in the same way, because they're always visibly reversible.
+* **Instrument changes** are undoable too, without a pattern snapshot: the snapshot is the track's instrument id, its four macro positions and its 24 sound parameters (so CLASSIC comes back exactly). A run of instrument steps while the list is up is one unit. Any pattern snapshot replaces it, and it replaces a pattern snapshot (one level). Toast "UNDO: BASS ACID" / "UNDO: BASS CLASSIC".
+* Song slots, mutes, macro moves and sound/mixer/global params aren't covered by undo. They aren't destructive in the same way, because they're always visibly reversible.
 
 ### 13.2 Files
 * Paths: `/int/pg/<NAME>.pgv` and `/sd/pg/<NAME>.pgv`, plus `/int/pg/_last.pgv` (the session autosave) and `/int/pg/_ui.cfg` (the UI settings blob written by `io::saveUiSettings`: bass and lead octave, chord mode, roll rate, mount and name of the open project, its dirty flag).
@@ -543,7 +566,7 @@ The full 48-row table with RGB565 values is printed by `--palette`. These are th
 * **Save** (CTRL+S, or ENTER on SAVE AS): if the project has a name and mount, it saves straight away with the toast "SAVED ACIDJAM". Otherwise it opens the name dialog. Saving reads the Project memory directly. The 1-byte race with engine edits is acceptable.
   * **Saving to /int while playing:** if the hardware test (16.4) shows audio dropouts during flash writes, the write is deferred until the transport stops, with the toast "SAVES WHEN STOPPED". SD writes are never deferred.
 * **Load**: if `dirty`, confirm first ("LOAD BASSHAUS? / ACIDJAM HAS UNSAVED CHANGES / ENTER DISCARD AND LOAD / ESC CANCEL"). Then `Stop`, `suspend()`, read into the Project, `resume()`, reset the UI state (selTrack BASS, page 0, undo/clip cleared), and go to GROOVE stopped.
-* **New** (CTRL+N): confirm if dirty. Then `suspend()`, `Engine::initProject(project)`, name `""`, `resume()`.
+* **New** (CTRL+N): confirm if dirty. Then `suspend()`, `Engine::initProject(project)`, name `""`, the first instrument of every track at its default positions (`macros/builtin.txt`), `sanitizeProject` (derives their sound), `resume()`. The ROM demos stay CLASSIC.
 * **Delete**: DEL on a row asks "DELETE WAREHOUS?" (ENTER / ESC). It can't be undone.
 * **Autosave** (session, `io::saveSession`): never while playing (a flash write stalls the audio task). Written 2 s after the transport stops, or when stopped with no key pressed for 10 s, and only if the project differs from the last session written (CRC). The firmware also calls `Ui::saveSessionNow()` before power-off. Also on a battery warning below 5 %. Autosave doesn't clear `dirty`, because that tracks the named file.
 * SD missing: the SD rows are absent, the header shows `NO SD`, and SAVE TO SD gives the RED toast "NO SD CARD". If the card is pulled mid-write, the toast "SAVE FAILED" appears and `dirty` stays.

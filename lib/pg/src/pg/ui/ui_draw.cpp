@@ -632,8 +632,8 @@ void Ui::drawInstrument(Framebuffer& fb) {
     g.text(4, 32, id ? "AN INSTRUMENT THIS FIRMWARE LACKS:" : "THIS TRACK PLAYS ITS CLASSIC SOUND,", TEXT);
     g.text(4, 41, id ? "IT PLAYS THE SOUND IT WAS SAVED WITH." : "AS IN A DEMO OR AN OLDER PROJECT.", DIM);
     // the invitation: what . and ; would pick
-    g.rrect(4, 53, 232, 46, PANEL);
-    g.rframe(4, 53, 232, 46, col);
+    g.rrect(4, 53, 232, 49, PANEL);
+    g.rframe(4, 53, 232, 49, col);
     g.text(10, 57, "PICK AN INSTRUMENT", WHITE);
     cat(catInt(buf, n), " FOR THIS TRACK");
     g.textR(230, 57, buf, DIM);
