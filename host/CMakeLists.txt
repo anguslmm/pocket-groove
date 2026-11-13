@@ -125,6 +125,13 @@ if(TARGET macro_audit)
   endforeach()
 endif()
 
+# Macro motion (stage B, engine.h "MACRO MOTION"): a held-key macro sweep through the
+# engine must be as smooth as one continuous ramp (bass ACID, lead HANDS, kick BOOM in a
+# roll); host/tools/zipper_probe.cpp --engine, WAVs in build/zipper/.
+if(TARGET zipper_probe)
+  add_test(NAME zipper_motion COMMAND zipper_probe --engine --check build/zipper WORKING_DIRECTORY ${PG_ROOT})
+endif()
+
 # The USB transfer client (tools/pg.py) against the device's protocol module
 # (pg::io::Xfer in host/tools/xfer_sim, on a pseudo-terminal). Needs Python 3
 # with pyserial; skipped (exit 77) without pyserial.
