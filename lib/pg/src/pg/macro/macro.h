@@ -160,10 +160,28 @@ struct Macro {
   float start() const { return milliToFloat(start1000); }
 };
 
+// Tilt (docs/MACROLAB.md "Tilt", docs/UX.md 10.3): which macro each tilt axis
+// moves (axis 0 = X, roll left/right; 1 = Y, pitch away/toward) and with which
+// response (pg/tilt/tilt.h: 0 fast, 1 smooth, 2 fine, 3 wide). One byte per axis
+// in MacroSet::tilt: 0 = not given in the file (the default: X macro 1, Y macro 2,
+// smooth; a set with fewer macros: none); otherwise kTiltGiven | response << 4 |
+// macro (kTiltNoMacro = `tilt x none`).
+constexpr uint8_t kTiltGiven = 0x80;
+constexpr uint8_t kTiltNoMacro = 0x0F;
+constexpr int kTiltDefaultResponse = 1;   // smooth
+inline uint8_t packTilt(int macro, int response) {
+  return uint8_t(kTiltGiven | ((response & 3) << 4) | (macro < 0 ? kTiltNoMacro : (macro & 0x0F)));
+}
+struct TiltAssign {
+  int8_t macro;       // -1 = the axis moves nothing
+  uint8_t response;   // 0..3
+};
+
 struct MacroSet {
   uint8_t track;   // TrackId
   uint8_t numMacros, numTargets, numPoints, numPatches, numPatchValues, numMorphs, numTrims;
-  uint16_t id;                  // setId(track, name): how a project names this instrument; 0 = no name yet
+  uint8_t tilt[2];              // per axis, see kTiltGiven (0 = the default)
+  uint16_t id;                 // setId(track, name): how a project names this instrument; 0 = no name yet
   char name[kSetNameLen + 1];   // may be empty: the lab names it after the file
   char about[kAboutLen + 1];    // the file's first comment line (minus "NAME -- "), may be empty: the lab's
   char tagline[kTaglineLen + 1];   // the `about "..."` statement: the player's line on the instrument page
@@ -183,6 +201,8 @@ struct MacroSet {
   int findPatch(const char* name) const;   // case-insensitive, -1 if none
   const Target& target(int macro, int j) const { return targets[macros[macro].first + j]; }
   float curve(const Target& t, float x) const { return curveAt(points + t.first, t.n, t.interp(), x); }
+  // What tilt axis a (0 = X, 1 = Y) moves in this set, defaults applied.
+  TiltAssign tiltAssign(int a) const;
 };
 
 // The parameter metadata (Engine::trackParamInfo for every track and index;

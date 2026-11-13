@@ -12,6 +12,8 @@
 voice perc
 name TAP
 about "A hand drum: tap, slap, let it ring."
+tilt x PRESS fast             # press the head: the pitch bends
+tilt y HIT
 base modl=tom tune=78 decay=48 tone=50 bend=24 harm=64 noise=30 drive=24
 
 macro HIT 0.35

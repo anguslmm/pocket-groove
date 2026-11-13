@@ -24,6 +24,10 @@
 //   session                 write the current project as the session file _last.pgv (setup only)
 //   shot <name>             write <out>/<name>.png (240x135) and <out>/<name>_4x.png
 //   bench                   print the host time of a full redraw of the current screen
+//   tilt <x> <y>            the tilt axes (-1..1, after the response) while G0 is held: `down G0`
+//                           starts the gesture as the firmware does (it engages after 150 ms),
+//                           the axes go to the Ui every 20 ms, `up G0` glides back; a `- / =`
+//                           while G0 is held cancels it (the firmware's volume keys)
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -141,6 +145,9 @@ int main(int argc, char** argv) {
       rig.engineRuns = false;
     } else if (op == "unfreeze") {
       rig.engineRuns = true;
+    } else if (op == "tilt") {
+      rig.tiltX = float(std::atof(a));
+      rig.tiltY = float(std::atof(b));
     } else if (op == "battery") {
       rig.env.batteryPct = uint8_t(std::atoi(a));
     } else if (op == "global" || op == "param" || op == "steppost") {

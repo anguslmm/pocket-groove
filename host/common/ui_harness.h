@@ -178,6 +178,15 @@ struct Rig {
   // developer mode shows; the instrument tests turn it off.
   bool devMode = true;
   int16_t audio[kBlock * 2];
+  // G0 as the firmware handles it (src/app/main.cpp): the Ui never sees the key; its
+  // down / up are the tilt gesture, G0 + - / = (volume there) cancels the tilt and is
+  // swallowed. While held, the axes below go to Ui::tiltInput every kTiltInputMs (the
+  // firmware's IMU rate), as if the device were tilted that far (after the response).
+  static constexpr uint32_t kTiltInputMs = 20;
+  bool g0Held = false;
+  uint64_t g0Swallow = 0;
+  float tiltX = 0.0f, tiltY = 0.0f;
+  uint32_t tiltNextMs = 0;
 
   static pg::Instrument& instrument() {
     static pg::Instrument i;   // ~70 KB: static, never on the stack
@@ -204,6 +213,9 @@ struct Rig {
     ui.init(eng, *proj, &fs);
     ui.setDevMode(devMode);
     resetClock();
+    g0Held = false;
+    g0Swallow = 0;
+    tiltX = tiltY = 0.0f;
     frame();
   }
   // Power-on with the current file system contents: what the firmware does.
@@ -214,6 +226,8 @@ struct Rig {
     ui.init(eng, *proj, &fs);
     ui.setDevMode(devMode);
     resetClock();
+    g0Held = false;
+    g0Swallow = 0;
     ui.boot(now());
     frame();
   }
@@ -231,6 +245,10 @@ struct Rig {
     while (samples < end) {
       if (engineRuns) inst.process(audio, kBlock);
       samples += kBlock;
+      if (ui.tiltHeld() && int32_t(now() - tiltNextMs) >= 0) {
+        ui.tiltInput(tiltX, tiltY, now());
+        tiltNextMs = now() + kTiltInputMs;
+      }
       if (uint64_t(now()) * 30 >= uint64_t(frames + 1) * 1000) {
         ++frames;
         frame();
@@ -242,6 +260,26 @@ struct Rig {
   // controller batch: same timestamp); G0 and junk ids go straight to the UI.
   void key(int k, bool down) {
     const uint32_t t = uint32_t(samples * 1000000 / uint64_t(kSr));
+    if (k == pg::ui::kKG0) {
+      if (down == g0Held) return;
+      g0Held = down;
+      if (down) {
+        ui.tiltPress(now());
+        tiltNextMs = now();
+      } else {
+        ui.tiltRelease(now());
+      }
+      return;
+    }
+    if (k >= 0 && k < 64 && ((g0Swallow >> k) & 1u)) {   // the volume key's own up
+      if (!down) g0Swallow &= ~(1ull << k);
+      return;
+    }
+    if (down && g0Held && (k == pg::ui::kKMinus || k == pg::ui::kKEquals)) {
+      g0Swallow |= 1ull << k;
+      ui.tiltCancel(now());
+      return;
+    }
     if (k < 0 || k >= pg::kNumKeys) {
       ui.onKey(pg::KeyEvent{uint8_t(k), down, t}, now());
       return;

@@ -190,6 +190,7 @@ int Ui::shownMacro(int t, int m) const {
   t &= 7;
   m &= 3;
   if (playing_ && ((st_.motion[t] >> m) & 1u) && !((st_.live[t] >> m) & 1u)) return st_.macroPos[t][m];
+  if (tiltShows(t, m)) return st_.macroPos[t][m];   // tilt: where the engine has it (base + offset)
   return macroValue(t, m);
 }
 
@@ -1597,6 +1598,13 @@ void Ui::runRepeat() {
 }
 
 void Ui::runTimers() {
+  // tilt: a hold past the tap time engages (also without input: CLASSIC's toast);
+  // the handles follow the glide back for a moment after the release
+  if (tilt_.down && !tilt_.cancelled && !tilt_.engaged && after(now_, tilt_.downMs + kTiltEngageMs)) tiltEngage();
+  if (tilt_.showUntil && after(now_, tilt_.showUntil)) {
+    tilt_.showUntil = 0;
+    ++serial_;
+  }
   // -/= repeat
   if (repKey_ >= 0 && isHeld(repKey_)) runRepeat();
   else repKey_ = -1;

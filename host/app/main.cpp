@@ -13,7 +13,15 @@
 //
 // Not here (device-only, src/app): boot menu, diagnostics strip, codec volume
 // gesture, backlight. G0 (F1) is held back from the Ui as the firmware does,
-// and G0 + - / = is swallowed as there, but changes no volume.
+// and G0 + - / = is swallowed as there, but changes no volume (it cancels a tilt,
+// as there).
+//
+// Tilt (docs/UX.md 10.3 "Tilt"): there is no IMU, so while G0 is held the mouse
+// stands in for it. Its position at the press is the zero pose; moving it right
+// is rolling right, up is tilting away, kTiltDegPerPx degrees per canvas pixel,
+// through the same per-axis responses (pg::tilt::Axis) and the same Ui path
+// (Ui::tiltPress / tiltInput / tiltRelease / tiltCancel) as the device, at the
+// device's 50 Hz. The lab's XY pad is separate and unchanged.
 //
 // The desktop's own additions (docs/DESKTOP.md), none of which touches the
 // instrument: the strip under the screen (strip.h: modifier lights, controls,
@@ -49,6 +57,7 @@
 #include "pg/instrument/instrument.h"
 #include "pg/io/project_io.h"
 #include "pg/macro/macro.h"
+#include "pg/tilt/tilt.h"
 #include "pg/ui/gfx.h"
 #include "pg/ui/keys.h"
 #include "pg/ui/ui.h"
@@ -230,6 +239,14 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   bool needPresent = true;
   bool g0Held = false;
   uint64_t swallow = 0;      // keys whose up must not reach the Ui (G0 + - / =)
+  // tilt by mouse (see the header)
+  static constexpr float kTiltDegPerPx = 0.5f;   // 70 canvas px (280 window points at 4x) = the smooth range
+  static constexpr uint32_t kTiltEveryMs = 20;   // the device's IMU rate
+  static constexpr float kTiltRangePx = 70.0f;   // script `tilt X Y`: X = 1 is this far from the press point
+  pg::tilt::Axis tiltAxis[2];
+  int mouseX = 0, mouseY = 0;                    // the last mouse position, window points (from motion events)
+  int tiltX0 = 0, tiltY0 = 0;                    // canvas pixels at the press
+  uint32_t tiltNext = 0;
   uint64_t t0Us = 0;
   std::string title;
 
@@ -243,12 +260,16 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   void cardKey(int k, bool down) {
     const uint32_t now = nowMs(), t = nowUs();
     const uint64_t bit = 1ull << k;
-    if (k == pg::ui::kKG0) {   // the firmware keeps G0 to itself (volume, diagnostics): so do we
+    if (k == pg::ui::kKG0) {   // the firmware keeps G0 to itself (volume, diagnostics, tilt): so do we
+      if (down == g0Held) return;
       g0Held = down;
+      if (down) tiltPress(now);
+      else g_ui.tiltRelease(now);
       return;
     }
     if (down && g0Held && (k == pg::ui::kKMinus || k == pg::ui::kKEquals)) {   // the firmware's volume gesture
       swallow |= bit;
+      g_ui.tiltCancel(now);
       return;
     }
     if (!down && (swallow & bit)) {
@@ -287,6 +308,26 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   void releaseAll() {
     desk::KeyOut out[desk::KeyboardInput::kMaxOut];
     deliver(out, keyboard.releaseAll(out));
+  }
+
+  // ---- tilt by mouse --------------------------------------------------------------
+  void canvasMouse(int* cx, int* cy) const { display.toCanvasAny(mouseX, mouseY, cx, cy); }
+  void tiltPress(uint32_t now) {
+    g_ui.tiltPress(now);
+    const pg::ui::Ui::TiltSpec ts = g_ui.tiltSpec();
+    for (int a = 0; a < 2; ++a) tiltAxis[a].setup(ts.response[a], float(kTiltEveryMs) * 0.001f);
+    canvasMouse(&tiltX0, &tiltY0);
+    tiltNext = now;
+  }
+  // The axes from the mouse, every kTiltEveryMs while G0 is held.
+  void tiltService(uint32_t now) {
+    if (!g_ui.tiltHeld() || int32_t(now - tiltNext) < 0) return;
+    tiltNext = now + kTiltEveryMs;
+    int cx = 0, cy = 0;
+    canvasMouse(&cx, &cy);
+    const float x = tiltAxis[0].update(float(cx - tiltX0) * kTiltDegPerPx);
+    const float y = tiltAxis[1].update(float(tiltY0 - cy) * kTiltDegPerPx);
+    g_ui.tiltInput(x, y, now);
   }
 
   // ---- the macro lab ----------------------------------------------------------------
@@ -592,6 +633,46 @@ class App final : public desk::ScriptHost, public desk::LabHost {
     const std::string& c = w[0];
     if (c == "click" && w.size() == 3) {   // canvas device pixels
       pushClick(std::atoi(w[1].c_str()), std::atoi(w[2].c_str()));
+      return 0;
+    }
+    if (c == "mouse" && w.size() == 3) {   // move the mouse (no button) to canvas device pixels: tilt with G0
+      int wx = 0, wy = 0;
+      display.fromCanvas(std::atoi(w[1].c_str()), std::atoi(w[2].c_str()), &wx, &wy);
+      SDL_Event e;
+      SDL_zero(e);
+      e.type = SDL_MOUSEMOTION;
+      e.motion.windowID = display.windowId();
+      e.motion.x = wx;
+      e.motion.y = wy;
+      SDL_PushEvent(&e);
+      return 0;
+    }
+    if (c == "tilt" && w.size() == 3) {   // ui_shot's `tilt X Y`: the mouse that far from the press point,
+      // X * kTiltRangePx right and Y * kTiltRangePx up (with the default response "smooth": about that axis value)
+      const int cx = tiltX0 + int(float(std::atof(w[1].c_str())) * kTiltRangePx);
+      const int cy = tiltY0 - int(float(std::atof(w[2].c_str())) * kTiltRangePx);
+      int wx = 0, wy = 0;
+      display.fromCanvas(cx, cy, &wx, &wy);
+      SDL_Event e;
+      SDL_zero(e);
+      e.type = SDL_MOUSEMOTION;
+      e.motion.windowID = display.windowId();
+      e.motion.x = wx;
+      e.motion.y = wy;
+      SDL_PushEvent(&e);
+      return 0;
+    }
+    if (c == "print-tilt") {   // what the Ui and the engine have (the desktop tests)
+      const pg::ui::Ui::TiltSpec ts = g_ui.tiltSpec();
+      const pg::EngineStatus& st = g_ui.engineStatus();
+      std::printf("[tilt] held %d engaged %d axes %.2f %.2f track %d macros %d %d heard %d %d base %d %d\n",
+                  int(g_ui.tiltHeld()), int(g_ui.tiltEngaged()), double(g_ui.tiltAxis(0)), double(g_ui.tiltAxis(1)),
+                  int(ts.track), int(ts.macro[0]), int(ts.macro[1]),
+                  ts.macro[0] >= 0 ? int(st.macroPos[ts.track][ts.macro[0]]) : -1,
+                  ts.macro[1] >= 0 ? int(st.macroPos[ts.track][ts.macro[1]]) : -1,
+                  ts.macro[0] >= 0 ? g_ui.macroValue(ts.track, ts.macro[0]) : -1,
+                  ts.macro[1] >= 0 ? g_ui.macroValue(ts.track, ts.macro[1]) : -1);
+      std::fflush(stdout);
       return 0;
     }
     if (c == "click-button" && w.size() == 2) {
@@ -911,6 +992,7 @@ int main(int argc, char** argv) {
   while (app.running) {
     // Wait for input until the next UI frame; keys go to the Ui the moment they arrive.
     int32_t rem = int32_t(nextFrame - app.nowMs());
+    if (g_ui.tiltHeld() && int32_t(app.tiltNext - app.nowMs()) < rem) rem = int32_t(app.tiltNext - app.nowMs());
     SDL_Event e;
     bool got = rem > 0 ? SDL_WaitEventTimeout(&e, rem > 0 ? rem : 0) != 0 : SDL_PollEvent(&e) != 0;
     while (got) {
@@ -928,6 +1010,8 @@ int main(int argc, char** argv) {
           }
           break;
         case SDL_MOUSEMOTION:
+          app.mouseX = e.motion.x;
+          app.mouseY = e.motion.y;
           if (app.labMouse) {
             int cx = 0, cy = 0;
             app.display.toCanvasAny(e.motion.x, e.motion.y, &cx, &cy);
@@ -962,6 +1046,7 @@ int main(int argc, char** argv) {
 
     if (!scriptDone && !script.service(app.nowMs(), app)) scriptDone = true;
 
+    app.tiltService(app.nowMs());
     const uint32_t now = app.nowMs();
     if (int32_t(now - nextFrame) >= 0) {
       app.labFrame(now);   // the lab's values go out before the frame, so the SOUND page shows them

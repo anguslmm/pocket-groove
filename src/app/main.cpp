@@ -4,6 +4,9 @@
 //   pg_audio  core 0, prio 20, 6 KB stack (plat::audio): render = Instrument::process,
 //             paced by the blocking I2S write. Touches no I2C, file, heap or lock.
 //   pg_keys   core 1, prio 10, 4 KB (plat::keys): drains the TCA8418 FIFO over I2C.
+//   pg_imu    core 1, prio 9, 3 KB from the heap (plat::imu): reads the BMI270 at 50 Hz
+//             ONLY while G0 is held (tilt), runs the tilt tracker (tilt_input.cpp);
+//             asleep otherwise.
 //   loopTask  core 1, prio 1, 12 KB (Arduino loop, this file): UI, display,
 //             codec volume (I2C), files, serial. Sleeps in keys::waitEvent()
 //             between ~30 fps frames, so keys are handled as they arrive.
@@ -11,9 +14,11 @@
 // Big objects are static (.bss/.data): Instrument (+ the engine's state block),
 // Ui, Framebuffer. Nothing large is allocated on the heap or a task stack.
 //
-// Gestures the firmware handles itself (the UI never sees them):
-//   G0 held + '-' / '='   codec (analog) output volume -/+ 2 dB, persisted
-//   G0 double-tap         diagnostics strip on/off
+// Gestures the firmware handles itself (the UI never sees the key):
+//   G0 held + tilt        the selected track's tilt macros (docs/UX.md 10.3 "Tilt"): the
+//                         Ui gets the gesture (tiltPress / tiltInput / tiltRelease)
+//   G0 held + '-' / '='   codec (analog) output volume -/+ 2 dB, persisted (cancels the tilt)
+//   G0 double-tap         diagnostics strip on/off (a tap never tilts: Ui::kTiltEngageMs)
 //   first key after the backlight dimmed: only wakes the screen
 // Boot menu: hold any key at power-on (or after a crash: automatic).
 // Serial (USB CDC): 'r' full report, 'h' help; a stats line every 5 s.
@@ -37,6 +42,7 @@
 
 #include "../platform/audio_out.h"
 #include "../platform/display.h"
+#include "../platform/imu.h"
 #include "../platform/keys.h"
 #include "../platform/storage.h"
 #include "../platform/system.h"
@@ -49,6 +55,7 @@
 #include "app_settings.h"
 #include "boot_menu.h"
 #include "overlay.h"
+#include "tilt_input.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/project_io.h"
 #include "pg/io/xfer.h"
@@ -101,6 +108,7 @@ constexpr uint32_t kStatsEveryMs = 5000;
 // request, so a file moves at several chunks per frame instead of one.
 constexpr uint32_t kXferSpinMs = 8;
 constexpr uint32_t kTapMaxMs = 350, kDoubleTapGapMs = 450;
+constexpr uint32_t kTiltSliceMs = 5;            // the loop's wait while G0 tilts (IMU readings every 20 ms)
 constexpr uint8_t kKMinus = 11, kKEquals = 12;  // pg/platform.h key ids
 constexpr uint64_t kMatrixMask = (1ull << pg::kNumKeys) - 1;
 
@@ -109,6 +117,7 @@ sys::ChipInfo g_chip;
 sys::HeapInfo g_heapBoot, g_heapReady;
 bool g_abnormal = false;
 bool g_keysOk = false;
+bool g_imuOk = false;
 bool g_audioOk = false;
 char g_audioErr[64] = "";
 uint64_t g_swallow = 0;          // keys whose next key-up must not reach the UI
@@ -229,6 +238,8 @@ void handleKey(const keys::Event& e, uint32_t now) {
         g_g0HaveTap = false;     // a hold (or a volume gesture) in between cancels a pending first tap
       }
       g_g0Held = false;
+      g_ui.tiltRelease(now);
+      app::tilt::release();
       g_swallow &= ~bit;
       return;
     }
@@ -250,9 +261,18 @@ void handleKey(const keys::Event& e, uint32_t now) {
     g_g0Held = true;
     g_g0UsedForVol = false;
     g_g0DownUs = e.tIntUs;
+    if (g_imuOk) g_ui.tiltPress(now);   // the pose now is the zero; it engages after a tap's time
+    if (g_ui.tiltHeld()) {
+      const pg::ui::Ui::TiltSpec ts = g_ui.tiltSpec();
+      if (ts.active) app::tilt::press(ts.response[0], ts.response[1]);   // the IMU wakes only for this
+    }
     return;
   }
   if (g_g0Held && (k == kKMinus || k == kKEquals)) {
+    if (g_ui.tiltHeld()) {          // the volume gesture takes the hold: the tilt glides back
+      g_ui.tiltCancel(now);
+      app::tilt::release();
+    }
     g_g0UsedForVol = true;
     g_swallow |= bit;
     setVolume(static_cast<int>(g_volReg) + (k == kKEquals ? app::kVolStep : -static_cast<int>(app::kVolStep)), now);
@@ -395,6 +415,15 @@ void printReport() {
     char pl[240];
     audio::placementLine(pl, sizeof(pl));
     sp("%s", pl);
+  }
+  {
+    const plat::imu::Stats is = plat::imu::stats();
+    sp("[imu] %s @0x%02X err 0x%02X, %s, reads %lu, bus errors %lu, 12-byte read avg %luus max %luus, "
+       "stack free %lu of %lu (heap)\n",
+       is.present ? "BMI270" : "NONE", is.addr, is.err, is.running ? "reading (G0 held)" : "asleep",
+       static_cast<unsigned long>(is.reads), static_cast<unsigned long>(is.errors),
+       static_cast<unsigned long>(is.busAvgUs), static_cast<unsigned long>(is.busMaxUs),
+       static_cast<unsigned long>(is.stackFree), static_cast<unsigned long>(plat::imu::kTaskStack));
   }
   sp("[keys] controller %s, mode %s, events %lu, INT drains %lu, polled events %lu, drops %lu, fifo ovf %lu, "
      "i2c err %lu, INT->read max %luus\n",
@@ -701,6 +730,12 @@ void setup() {
   }
   g_keysOk = keys::begin();
   sp("[boot] keyboard TCA8418: %s\n", g_keysOk ? "OK" : "NOT FOUND (G0 and serial still work)");
+  g_imuOk = app::tilt::begin();
+  {
+    const plat::imu::Stats is = plat::imu::stats();
+    sp("[boot] IMU: %s @0x%02X err 0x%02X (tilt: hold G0)\n", g_imuOk ? "BMI270" : "NOT FOUND (no tilt)", is.addr,
+       is.err);
+  }
   const uint32_t tKeys = sys::millis();
 
   const bool intOk = storage::beginInternal(onFormat, nullptr);
@@ -917,8 +952,14 @@ void loop() {
   // Sleep until the next frame, handling keys the moment they arrive. Always
   // give up the CPU at least once per frame (core 1's idle task frees the
   // stacks of finished helper tasks).
+  // While G0 tilts, wake every few ms to pass the newest IMU reading (50 Hz) to the
+  // Ui, which posts it to the engine at once (no redraw: that waits for the frame).
   bool slept = false;
   for (;;) {
+    if (g_ui.tiltHeld()) {
+      float tx, ty;
+      if (app::tilt::read(&tx, &ty)) g_ui.tiltInput(tx, ty, sys::millis());
+    }
     const int32_t rem = static_cast<int32_t>(frameStartMs + kFrameMs - sys::millis());
     keys::Event e;
     if (rem <= 0) {
@@ -927,6 +968,8 @@ void loop() {
       break;
     }
     slept = true;
-    if (keys::waitEvent(&e, static_cast<uint32_t>(rem))) handleKey(e, sys::millis());
+    const uint32_t wait = g_ui.tiltHeld() && rem > static_cast<int32_t>(kTiltSliceMs) ? kTiltSliceMs
+                                                                                     : static_cast<uint32_t>(rem);
+    if (keys::waitEvent(&e, wait)) handleKey(e, sys::millis());
   }
 }

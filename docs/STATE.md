@@ -225,8 +225,71 @@ Order of work (owner, updated 2026-11-12):
    estimate); minimum-ever heap (the build moved _heap_start by about 1.1 KB). The owner's ears:
    whether 63 levels per note are enough, whether one bar is the right "still" time for live, and
    whether resting at Stop (instead of returning to the base) feels right.
-   LATER STAGES (not built, not designed out): (D) tilt as a macro control (its values reach
-   motion recording through SetMacro like the keys);
+   STAGE D DONE (2026-11-13, branch of the tilt worktree): TILT MOVES THE MACROS. Hold G0 and
+   tilt: two macros of the selected track's instrument follow the roll (X) and the tip away /
+   toward (Y), from the pose at the press (any holding angle), from every view; release glides
+   back in 150 ms. A hold engages after 150 ms, so a tap (and the diagnostics double tap) never
+   moves anything; G0 + -/= (volume) cancels the tilt for that hold. Which macros and which of
+   the spike's four responses (fast / smooth / fine / wide = acc-fast / acc-smooth / fused /
+   fused-wide) belong to the instrument: `.pgm` lines `tilt x NAME [response]`, `tilt y none`
+   (default X macro 1, Y macro 2, smooth; MacroSet +2 bytes: sizeof 1896 -> 1900). Assignments
+   (where the default was not the best: macros/*.pgm, docs/MACROLAB.md "Tilt"): BOOM Y FAR, PUSH Y
+   FLICK, SWARM X RING / Y none, TAP X PRESS fast / Y HIT, TRAIL X DROP / Y DIRT, DICE X GLITCH
+   fast / Y none, POLES Y DIRT, SURGE Y none, HANDS Y SHAKE, KEYS Y none, DRIFT X WANDER wide /
+   Y BLOOM fine, SWAP X WARP fast / Y none, VOYAGE X GRIT / Y SPACE wide; the other 11 sets keep
+   the default. Additive and momentary: heard = clamp(base or motion + offset, 0, 255); an
+   axis at its full range = 160 of 255 (from the middle an end at 79 % of the range: ~28 deg
+   smooth, 24 fast / fine, 48 wide); nothing stored. Engine (engine.h "TILT OFFSET"):
+   SetMacroOffset (track, macro, signed 1/16 units, ramp in ms, hold flag), a second trajectory
+   slot per macro on stage B's ramps; with every offset 0 the output is bit for bit the old
+   engine's (itest_tilt: a render with motion, key moves and a recording pass hashes to what
+   the engine before stage D gave). Recording: record on + playing + a tilt that left the dead
+   zone = live (the notes that start take the heard value); the release ends live at once; over
+   a motion the hand takes the macro where the motion has it. UI: marks next to the tilted
+   macros' names (left-right / up-down arrows, white while held), handles follow the engine;
+   other views: `[TRACK] TILT` + a pose dot in the status bar; CLASSIC: one toast per hold;
+   explain mode explains G0. Device: src/platform/imu.* (BMI270 at 0x69/0x68: ODR 100 Hz, +-4 g,
+   +-1000 dps; one 12-byte burst per reading; a task on core 1, prio 9, that sleeps unless G0
+   is held and then reads at 50 Hz), src/app/tilt_input.* (pg::tilt::Tracker on the IMU task:
+   one gravity estimate per response in use, one sqrtf per normalisation, a polynomial atan2,
+   coefficients computed at the press; atomics to the UI loop, which wakes every 5 ms while G0
+   is held and posts each reading at once with a 30 ms glide). Desktop: G0 (F1 / Esc) held +
+   the mouse = tilt through the same Ui path (0.5 deg per screen pixel); ui_shot `tilt X Y`.
+   Host tests (76, all pass): test_tilt_math (angles at any holding angle within 0.01 deg, the
+   four responses, a gyro bias stays within bias x tau, a jolt rejected by the fused ones),
+   test_macro_tilt (the `tilt` lines, errors, round trips), itest_tilt (engine: additive,
+   clamp, glide back, over motion every quantum, recording, bit-identical; UI: tap, hold,
+   sensitivity, volume cancel, CLASSIC, track taken at engage, recording + undo, explain;
+   every built-in axis moves a continuous parameter), test_desktop_app part 9 (the mouse);
+   check_builtin, macro_audit, itest_macro_files pass. Screenshots: docs/ux/tilt-*.png, the
+   instrument page ones regenerated with the marks.
+   Firmware (all four envs warning-free, cardputer-adv-usb, cardputer-adv, hw-spike, profile;
+   before -> after, USB / jack): flash 1117223 -> 1125295 / 1054619 -> 1062743 (+8 KB), static RAM
+   199580 -> 200340 / 199036 -> 199796 (+760 B: the engine's offset slots 512, the tracker, the
+   UI's tilt state, the reader), _heap_start 0x3FCD3FA0 -> 0x3FCD4398 / 0x3FCD2280 -> 0x3FCD2678
+   (+1016 B with the IRAM), IRAM functions 95 -> 95 / 94 -> 94 (placement checks OK; macroPos
+   grew: .iram0.text 126891 -> 127163 / 119951 -> 120219), plus the IMU task's 3072 B stack and
+   its control block from the heap at boot (about 3.4 KB).
+   CPU (estimates, not measured): idle (G0 up) nothing (the task is blocked; one compare per
+   UI loop pass). While tilting, core 1: the bus 50 x ~0.6 ms busy-waited = ~3 % (the spike
+   measured 728 us for 18 bytes; 12 now), the tracker ~1.5-6 k cycles per reading from flash
+   = ~0.03-0.13 %, the UI loop's 5 ms wakeups ~0.1 %: about 3.2 %, under the 4 % target. Core 0
+   (audio): the tilted track is on stage B's fractional path while the hand moves (~1.3 % per
+   track by stage B's estimate), nothing once it holds still (7-bit path where it stands).
+   Latency (estimate): reading age ~10 ms + smoothing 6-27 ms + loop wakeup <= 5 ms + the 30 ms
+   glide + the audio buffer 17 ms = about 65-90 ms (the spike: 31-36 ms at 200 Hz without the
+   UI hop; 100 Hz reads would cut ~10 ms for twice the bus time).
+   HARDWARE CHECK (not done; only the device can confirm): the chip's orientation (roll right
+   must move X up, tipping the far edge away Y up: else flip kSignX / kSignY or kSwapXY in
+   src/app/tilt_input.cpp; the spike's `rest:` line answers it), the [imu] report line (reads,
+   12-byte read time, stack free of 3072), key events while tilting (none lost: type fast with
+   G0 held), the CPU load of core 1 while held, whether 30 deg from the middle to an end feels
+   right per axis (pitch is less comfortable than roll), whether the fused responses start
+   cleanly from the press without a boot gyro calibration (a creep would show as a slow drift
+   inside the dead zone), the 65-90 ms feel against the spike's, the 150 ms tap threshold
+   against the double tap, and the minimum-ever heap (about 1 KB more static RAM + IRAM, 3.4 KB
+   of task stack and control block from the heap).
+   LATER STAGES (not built, not designed out):
    (E) a polished, reactive picture on the instrument page (enum jump ticks, end labels as
    pictures); (F) a sampler instrument; (G) converting the demos from CLASSIC to instruments.
    STANDING RULE (owner, 2026-11-13): development does not wait for macro assessment. The owner
@@ -263,6 +326,7 @@ new project format, which is fine because the owner writes no real song before t
   the engine's ramps) and RAM for the values: none (stage C packed 4 x 6 bits into the 8-byte step).
 - Tilt verified on hardware (hw-spike): fun, steady, no key loss; all four response presets
   useful, so response speed should belong to the control being moved, not be global.
+  BUILT as stage D (above: the instrument's `tilt` lines choose the macros and responses).
 
 Known follow-ups:
 - USB audio build: what takes the 28 KB between free and minimum-ever heap (its `r` report

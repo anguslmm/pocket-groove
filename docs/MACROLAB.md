@@ -143,6 +143,7 @@ macro BELL "ORGAN" "BELL"
 | `PARAM [set\|add\|mul] POS:VAL ... [linear\|smooth\|step] [by MACRO] [override]` | a target of the macro above; up to 32 per macro, 64 in the set; 1 to 16 points. `override`: this plain set is meant to replace what earlier lines did (silences the warning below) |
 | `morph PATCH [POS:AMOUNT ...] [linear\|smooth\|step] [switch SW]` | a morph line of the macro above: blends from the base toward PATCH. Without points the amount is the macro's position; with them, a curve (amounts 0..1). `switch SW` is the enum switch point for this line (default 0.5). Up to 8 morph lines in the set; a macro morphs toward a patch at most once |
 | `trim POS:DB ... [linear\|smooth\|step] [by MACRO]` | a level trim of the macro above, dB -24..+24, applied after everything else whatever its place in the file. Up to 8 in the set |
+| `tilt x\|y MACRO [fast\|smooth\|fine\|wide]`, `tilt x\|y none` | optional, once per axis, anywhere (also before the macro it names): which macro the **tilt** gesture moves on that axis (`x` = roll left/right, `y` = tip away/toward) and with which response (default `smooth`). Without the line: X moves macro 1, Y macro 2, smooth (a set with one macro: Y nothing; an axis left at its default that would move the macro the other axis names moves nothing). The two axes never move one macro. See [Tilt](#tilt) |
 
 **Parameters** by short or long name from the list below, ignoring case, spaces and punctuation (`cut`, `cutoff`, `envmod` = `Env Mod`, `lfo_rate`), or by a unique start of the long name of at least 3 letters (`reso` = Resonance, `snappy` = Snappy). A start that fits two parameters is an error that says so.
 
@@ -172,7 +173,7 @@ Limits live in `lib/pg/src/pg/macro/macro.h`:
 | morph lines / trim lines | 8 / 8 | 6 / 5 bytes each |
 | strings | name 12, header 72, about 38, per macro: name 6, labels 8 + 8, description 40 | |
 
-One loaded set is **1896 bytes** (`sizeof(pg::macro::MacroSet)`, including its 16-bit instrument id; v1 was 2420 with 4 x 8 targets of 8 float points). The 24 built-in sets live in flash (about 45 KB); the device holds no copy of them in RAM. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
+One loaded set is **1900 bytes** (`sizeof(pg::macro::MacroSet)`, including its 16-bit instrument id and the two tilt bytes; v1 was 2420 with 4 x 8 targets of 8 float points). The 24 built-in sets live in flash (about 45 KB); the device holds no copy of them in RAM. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
 
 Evaluation of one set: per target a search for the segment (one position decode per point passed: an integer compare and one float division), two value decodes (integer divide and one float division each), one division and a few multiply-adds for the curve; per patch value of an active morph two multiply-adds; per trim a curve, and one 2^x from a 6-term polynomial for all trims (no `powf`, no libm); then a clamp and round per owned parameter. On this host it takes about 130 to 340 ns per set (KEYS and TRIO, all morph, are the cheapest, POLES with 22 targets and 64 points the dearest; `itest_macro_files` prints each), about 0.8 us for a set near the limits (60 targets, 188 points, two 22-value morphs, 4 trims; `test_macro_eval`). For POLES that is roughly 150 float divisions (point decoding and the curve segments), 200 other float operations and the integer work around them. On the ESP32-S3 (240 MHz, single-precision FPU) expect very roughly ten to thirty times the host time, around 3 to 10 us per set: eight sets at 300 Hz would be about 1 to 3 % of one core (an estimate from the host figures, not measured on the device).
 
@@ -432,3 +433,29 @@ Stage C of the redesign (2026-11-13; decided with the owner 2026-11-12). The con
 **Cost.** Nothing runs per quantum but two compares (is something to re-aim, is something to publish). At each step of a track whose pattern has motion a few compares; at a keyframe, a pattern boundary or a change, a scan of at most two patterns' steps of that track to find the next keyframe. A glide is a moving macro: the fractional path's cost above, for as long as it moves (between two notes with different values, all the time). A macro held by a single keyframe stands still on the 7-bit path at that value.
 
 **Proof** (host): `itest_motion_notes` (exact values at the keyframes, straight lines with and without swing, silence, wrap, queued pattern and song slot with and without keyframes, late queue, tempo change, polymeter, first pass, base moves, clearing, stop, the published positions, live recording); ctest `zipper_motion`'s keyframe case: two bass notes a bar apart, ACID OPEN 102 -> 166: the voice's cutoff path moves at most 4.75 cents per quantum, the same as one ideal ramp over that bar, and stays within 0.9 cents of it (WAVs `build/zipper/motion_bass_acid_keyframes_{motion,ideal}.wav`).
+
+## Tilt
+
+Stage D (2026-11-13). The player's side is docs/UX.md 10.3 "Tilt" and docs/MANUAL.md "Tilt"; the engine's contract is `lib/pg/src/pg/engine.h` "TILT OFFSET"; the maths `lib/pg/src/pg/tilt/tilt.h`.
+
+**The gesture.** Hold G0 and tilt the device. The pose at the press is the zero, so it works at any holding angle. Two axes come out: X (roll: right side down = up) and Y (tip the far edge away = up). Each moves one macro of the selected track's instrument, as a momentary **offset** over what would otherwise play (the macro's position, or its motion): heard = clamp(position + offset, 0, 255). Nothing about tilt is stored: the position, the notes and the project stay as they were; letting go glides back in 150 ms. With record on and the transport running, tilting records motion like a key move: the notes that start while the tilt is held take the heard value; the release ends it (`engine.h` "TILT OFFSET").
+
+**Which macros, how: the `tilt` lines.** Each axis's response belongs to the control it moves (the hardware spike's owner found all four useful, docs/hardware-notes.md 11.4):
+
+| response | source | smoothing | dead zone | full range at | for |
+|---|---|---|---|---|---|
+| `fast` | accelerometer | 20 Hz | 0.5 deg | 30 deg | twitchy, immediate (a pitch bend, a stutter) |
+| `smooth` (default) | accelerometer | 6 Hz | 1.5 deg | 35 deg | the general-purpose one |
+| `fine` | gyro-complementary, tau 0.4 s | 25 Hz | 1 deg | 30 deg | steady, subtle moves |
+| `wide` | gyro-complementary, tau 0.8 s | 12 Hz | 3 deg | 60 deg | slow, broad moves |
+
+**Sensitivity.** An axis at its full range moves the macro 160 of 255: from the middle either end is reached at 79 % of the range (about 28 degrees with `smooth`, 24 with `fast` and `fine`, 48 with `wide`), from one end about two thirds of the way across.
+
+**Choosing.** Tilt two macros that are fun to sweep together and that change a sound while it plays: a filter and its drive, a pitch and a send. Avoid a macro that only changes on the next note (envelope times, lengths) or that jumps between enum values (a wave, a filter type, a percussion model, an interval): tilt then clicks between steps instead of sweeping. `tilt x none` / `tilt y none` leave an axis unused rather than give it such a macro. `itest_tilt` lists what every built-in set's axes move and checks that each moves a continuous parameter (and jumps at most 4 times over its whole travel).
+
+The built-in sets (docs/STATE.md has the table with the reasons): BOOM `tilt y FAR` (tip it away: the kick goes far), PUSH `tilt y FLICK`, SWARM `tilt x RING` + `tilt y none`, TAP `tilt x PRESS fast` + `tilt y HIT`, TRAIL `tilt x DROP` + `tilt y DIRT`, DICE `tilt x GLITCH fast` + `tilt y none`, POLES `tilt y DIRT`, SURGE `tilt y none`, HANDS `tilt y SHAKE`, KEYS `tilt y none`, DRIFT `tilt x WANDER wide` + `tilt y BLOOM fine`, SWAP `tilt x WARP fast` + `tilt y none`, VOYAGE `tilt x GRIT` + `tilt y SPACE wide`; the others use the default (macro 1 on X, macro 2 on Y, smooth).
+
+**In the lab.** The desktop app has no IMU: hold G0 (F1 or Esc) and move the mouse; its position at the press is the zero (0.5 degrees per screen pixel: 70 pixels, 280 window points at 4x, is the `smooth` range), through the same responses and the same UI path as the device. The lab's XY pad is separate: it moves the macros' positions, not an offset.
+
+**Memory.** Two bytes per set (`MacroSet::tilt`; `sizeof` 1896 -> 1900 with the alignment). In the engine a second trajectory per track and macro (512 bytes for all tracks).
+

@@ -21,6 +21,8 @@
 voice lead
 name SWAP
 about "Six leads, six intervals. Click!"
+tilt x WARP fast              # FLAV and INTV are clicks between six leads / intervals
+tilt y none
 base osc2=saw det=30 flt=lp ktrk=64 attack=0 release=40 lfoshape=0 vib=0 lcut=0 lfo=80 fdcy=58 fatk=0
 
 macro FLAV

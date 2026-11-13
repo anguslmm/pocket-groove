@@ -18,6 +18,8 @@
 voice lead
 name VOYAGE
 about "From flute to metal in one sweep."
+tilt x GRIT                   # TRIP jumps between waveforms and filter types
+tilt y SPACE wide             # tip it away: into the delay and reverb
 base env=34 osc2=sine intv=36 det=40 attack=4 decay=80 release=46 fatk=0 fdcy=56 ktrk=64 vib=10 lfo=96 glide=50
 
 macro TRIP

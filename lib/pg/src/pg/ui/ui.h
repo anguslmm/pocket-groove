@@ -153,6 +153,7 @@ class Ui {
   uint32_t statusRedraws() const { return statusDraws_; }
   uint64_t heldKeys() const { return held_; }        // keys the UI considers down (bit = key id)
   const GhostFilter& ghostFilter() const { return ghost_; }
+  const EngineStatus& engineStatus() const { return st_; }   // as of the last update()
 
   // Effective (pending-aware) reads of the edit target, also used by the drawing code.
   Step stepAt(int track, int idx) const;
@@ -175,6 +176,35 @@ class Ui {
   // instrument itself (id 0 = CLASSIC; positions nullptr = the set's defaults).
   void setMacro(int track, int m, int value);
   void setInstrument(int track, uint16_t id, const uint8_t* positions = nullptr);
+
+  // ---- tilt (UX.md 10.3 "Tilt") --------------------------------------------
+  // The host owns G0 (the firmware: volume, diagnostics) and reports the gesture
+  // here: tiltPress at G0 down, tiltInput with the two axes (X roll, Y pitch, each
+  // -1..1 after the control's response, pg/tilt/tilt.h) as often as it has them,
+  // tiltRelease at G0 up, tiltCancel when G0 + a volume key takes the hold. A hold
+  // shorter than kTiltEngageMs (a tap) never moves anything; after that the
+  // selected track's tilt macros follow the axes as a momentary offset over what
+  // plays (engine.h "TILT OFFSET"); release or cancel glides them back.
+  struct TiltSpec {
+    int8_t track;          // the selected track
+    int8_t macro[2];       // per axis (0 = X, 1 = Y): the macro it moves, -1 = none
+    uint8_t response[2];   // per axis: pg::tilt::Response (the reader's presets)
+    bool active;           // an instrument with at least one axis assigned
+  };
+  TiltSpec tiltSpec() const;          // what a press now would drive
+  void tiltPress(uint32_t nowMs);
+  void tiltInput(float x, float y, uint32_t nowMs);
+  void tiltRelease(uint32_t nowMs);
+  void tiltCancel(uint32_t nowMs);
+  bool tiltHeld() const { return tilt_.down && !tilt_.cancelled; }   // the host should read the axes
+  bool tiltEngaged() const { return tilt_.engaged; }                  // moving the macros now
+  int tiltTrack() const { return tilt_.engaged ? tilt_.track : -1; }
+  float tiltAxis(int a) const { return tilt_.in[a & 1]; }            // the last input
+  static constexpr uint32_t kTiltEngageMs = 150;   // shorter: a tap (G0 double-tap), never audible
+  static constexpr uint32_t kTiltRampMs = 30;      // each new input glides there (inputs every ~20 ms)
+  static constexpr uint32_t kTiltReturnMs = 150;   // release / cancel: the glide back
+  static constexpr uint32_t kTiltKeepMs = 100;     // an unchanged input is re-sent this often (recording)
+  static constexpr int kTiltScale = 160;           // position units (of 255) at an axis's full range
 
  private:
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
@@ -228,6 +258,12 @@ class Ui {
   void runMacroRepeats();
   void stepInstrument(int dir);
   void snapshotInstrument(int t);
+  // tilt (ui_tilt.cpp)
+  void tiltEngage();
+  void tiltSend(bool force);
+  void tiltLetGo(uint32_t nowMs);
+  bool tiltShows(int t, int m) const;   // the page shows macro m of track t where the engine has it
+  uint8_t tiltMarks(int t, int m) const;   // bit a: tilt axis a moves macro m of track t's instrument
 
   // clipboard and undo (ui_edit.cpp)
   void ctrlCombo(int k, bool shift);
@@ -448,6 +484,16 @@ class Ui {
   uint8_t tickValid_ = 0;                   // bit per macro
   mutable ParamInfo macInfo_[4] = {};   // macroInfo() results (a ring: a frame needs at most a few at once)
   mutable uint8_t macInfoNext_ = 0;
+  // tilt (ui_tilt.cpp)
+  struct TiltState {
+    bool down, cancelled, engaged, moved, recSnap;
+    uint8_t track;
+    int8_t macro[2];
+    int16_t sent[2];        // the offsets last sent (1/16 units)
+    float in[2];            // the last input
+    uint32_t downMs, sentMs, showUntil;
+  };
+  TiltState tilt_ = {};
 
   // feedback
   char toast_[40] = {};

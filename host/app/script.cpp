@@ -120,6 +120,10 @@ bool Script::load(const char* path, const KeyMap& map, std::string* err) {
       c.op = Cmd::App;
       c.arg = args;
       cmds_.push_back(c);
+    } else if (op == "tilt") {   // ui_shot's tilt axes: the mouse while G0 is held (App::command "tilt")
+      c.op = Cmd::App;
+      c.arg = std::string("tilt ") + a + " " + b;
+      cmds_.push_back(c);
     } else if (op == "battery" || op == "sd" || op == "boot" || op == "demo" || op == "empty") {
       continue;   // ui_shot rig setup: see script.h
     } else {

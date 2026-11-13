@@ -99,6 +99,25 @@ int MacroSet::findMacro(const char* nm) const {
   return -1;
 }
 
+namespace {
+TiltAssign tiltRaw(const MacroSet& s, int a) {
+  const uint8_t b = s.tilt[a];
+  if (!(b & kTiltGiven))   // not in the file: X macro 1, Y macro 2, smooth
+    return TiltAssign{int8_t(a < s.numMacros ? a : -1), uint8_t(kTiltDefaultResponse)};
+  const int m = b & 0x0F;
+  return TiltAssign{int8_t(m < s.numMacros && m < kMaxMacros ? m : -1), uint8_t((b >> 4) & 3)};
+}
+}  // namespace
+
+// An axis left at its default that would move the macro the other axis names moves
+// nothing (`tilt x BITE` alone: Y would be BITE too).
+TiltAssign MacroSet::tiltAssign(int a) const {
+  a &= 1;
+  TiltAssign t = tiltRaw(*this, a);
+  if (t.macro >= 0 && !(tilt[a] & kTiltGiven) && tiltRaw(*this, 1 - a).macro == t.macro) t.macro = -1;
+  return t;
+}
+
 int MacroSet::findPatch(const char* nm) const {
   for (int i = 0; i < numPatches && i < kMaxPatches; ++i)
     if (ieq(patches[i].name, nm)) return i;
