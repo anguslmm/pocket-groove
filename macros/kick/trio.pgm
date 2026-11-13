@@ -1,0 +1,35 @@
+# TRIO -- family: MORPH.
+# Idea: three whole kicks at the corners of the pad, every parameter
+# crossfading between them:
+#   A (bottom left)  808    low, long, soft-edged, almost no click
+#   B (X = 1)        909    tighter, punchy, a bright click on top
+#   C (Y = 1)        GABBA  distorted, held, hard click: the rave kick
+# X goes A to B; Y pulls every value toward C ("set ... by GABBA").
+# Feel if it works: one move takes the groove from hip-hop to house to
+# hardcore, and the halfway kicks are real hybrids, not mush.
+# Try: 8-TO-9 on X, GABBA on Y, four on the floor; drag a slow circle. At the
+# top edge X only moves the click (the gabber owns everything else there).
+# audit: allow-dead 8-TO-9
+voice kick
+name TRIO
+base lvl=100 harm=30
+
+macro 8-TO-9
+  tune     0:44 1:62
+  decay    0:96 1:46
+  punch    0:52 1:88
+  sweep    0:74 1:44
+  click    0:18 1:92
+  cton     0:24 1:62
+  tone     0:70 1:108
+  hold     0:44 1:20
+
+macro GABBA
+  tune     set 0:56 1:56 by GABBA
+  decay    set 0:66 1:66 by GABBA
+  punch    set 0:112 1:112 by GABBA
+  sweep    set 0:26 1:26 by GABBA
+  drive    0:16 0.5:70 1:118
+  hold     set 0:70 1:70 by GABBA
+  harm     set 0:80 1:80 by GABBA
+  lvl      0:100 1:88                 # distortion is louder than its compensation

@@ -1,0 +1,47 @@
+# HANDS -- family: GESTURE.
+# Idea: macros named for what the hand does, each a coupled, physical move:
+#   OPEN   opening up also brightens, loosens the detune and lets notes ring
+#   PUSH   pushing adds drive and bite and makes the notes shorter and harder
+#   SHAKE  shaking the device makes the pitch and the filter tremble, faster
+#          the harder you shake
+#   HOLD   holding on makes notes sustain and bloom: the filter swells in,
+#          the release grows
+# The base is a two-saw poly lead, slightly plucky, a little wet.
+# Feel if it works: you stop thinking about parameters and play the sound
+# with your hands; OPEN + PUSH on the pad should feel like squeezing a
+# rubber toy.
+# Try: OPEN on X, PUSH on Y, play chords and the line; then SHAKE on a held
+# note.
+voice lead
+name HANDS
+base wave=saw osc2=saw intv=24 mix=64 flt=lp sus=56 decay=72 release=40 attack=0 fatk=0 lfoshape=0 ktrk=64 glide=50
+
+macro OPEN 0.3
+  cutoff   0:34 1:112 smooth
+  reso     0:18 0.6:46 1:30
+  env      0:20 0.6:62 1:44
+  fdcy     0:40 1:70
+  detune   0:30 1:70           # loosens
+  release  add 0:-10 1:24      # lets go of notes more slowly
+  lvl      0:110 0.5:104 1:98  # a closed filter is quieter
+
+macro PUSH
+  drive    0:0 1:96
+  decay    mul 0:1 1:0.55      # shorter
+  sus      mul 0:1 1:0.35
+  env      add 0:0 1:22        # harder snap
+  reso     add 0:0 1:22
+  lvl      add 0:0 1:-8        # drive is louder than its own compensation
+
+macro SHAKE
+  vib      0:0 0.3:52 1:100     # VIB is quadratic inside the voice: front-load the curve
+  lcut     0:0 0.3:28 1:58
+  lfo      0:70 1:112          # faster as it gets stronger: 2 Hz .. 10 Hz
+  lshp     0:0 1:40
+
+macro HOLD
+  sus      add 0:0 1:60
+  decay    add 0:0 1:40
+  release  add 0:0 1:46
+  fatk     0:0 1:80            # the filter swells in instead of snapping
+  attack   0:0 1:30

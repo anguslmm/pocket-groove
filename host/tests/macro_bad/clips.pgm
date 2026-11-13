@@ -1,0 +1,11 @@
+# A broken set for the macro_audit self-test (host/CMakeLists.txt): HOT
+# turns the sub, the accent and the track level to the top, which goes over
+# 0 dBFS on the accented notes.
+voice bass
+name CLIPS
+base drive=0 adcy=127
+macro HOT
+  lvl    0:100 1:127
+  sub    0:56 1:127
+  accent 0:90 1:127
+  reso   0:78 1:127

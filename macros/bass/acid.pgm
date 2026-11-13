@@ -1,22 +1,44 @@
-# ACID: a 303 line. OPEN couples cutoff and resonance in one move; BITE adds
-# grit, and more squelch the further OPEN is; WOBL is the bass-house LFO.
-# This file uses every feature of the format (docs/MACROLAB.md).
+# ACID -- family: INTERACTION.
+# Idea: one macro changes what another means. OPEN is the 303 filter (cutoff
+# and resonance in one move, the owner's pairing); BITE is distortion and fold
+# while OPEN is low, and turns into resonant squeal and envelope snap as OPEN
+# rises (its targets are scaled "by OPEN" in opposite directions).
+# Feel if it works: BITE is one "make it nastier" move whose flavour you choose
+# with the other hand: tilt shut and it growls, tilt open and it screams.
+# Try: OPEN and BITE on the pad, slow line with slides; then WOBL for the
+# bass-house wobble, SLIDE for the 303 performance (longer glides, harder
+# accents).
+# Slow sweeps: OPEN is the set most likely to be swept slowly; near the
+# resonance peak (OPEN 0.4..0.7) each 7-bit cutoff step is ~0.7 semitone and
+# may be heard as a staircase today (docs/MACROLAB.md, "What a moving
+# parameter sounds like"). Judge the sound, not the stepping.
 voice bass
 name ACID
-base wave=0 sub=40 envmod=70 decay=44 accent=90 fmix=0 lfoshape=sine
+base wave=0 sub=34 envmod=70 decay=44 accent=96 fmix=0 lfoshape=sine slide=60 ktrk=40
 
 macro OPEN 0.4
-  cutoff   0:18 0.5:62 1:108 smooth
-  reso     0:70 0.6:112 1:96          # peaks at 60 % and backs off: squelch, not whistle
-  envmod   add 0:10 1:-20             # less envelope once the filter is open by itself
+  cutoff   0:16 0.5:60 1:104 smooth
+  reso     0:70 0.6:110 1:98           # peaks at 60 % and backs off: squelch, not whistle
+  envmod   add 0:12 1:-22              # less envelope once the filter is open by itself
+  lvl      0:100 0.6:96 1:98           # the squelch peak is a little hot
 
 macro BITE
-  drive    0:20 1:95
-  fold     0.5:0 1:70                 # nothing in the first half, then the growl
-  reso     add 0:0 1:12 by OPEN       # extra squelch only counts when the filter is open
-  sub      mul 0:1 1:0.6              # thin the sub so the grit reads
+  drive    0:22 1:100
+  drive    add 0:0 1:-62 by OPEN       # open: BITE drives much less ...
+  fold     0:0 1:70
+  fold     add 0:0 1:-70 by OPEN       # ... and does not fold at all
+  reso     add 0:0 1:16 by OPEN        # ... it squeals instead (edge of self-oscillation)
+  envmod   add 0:0 1:28 by OPEN        # ... and snaps harder
+  sub      mul 0:1 1:0.55              # thin the sub so the grit reads
+  lvl      add 0:0 1:-6 by OPEN        # the squeal is louder than the growl
 
 macro WOBL
-  lfodepth 0:0 0.2:0 1:70
-  rate     0:1/4 0.4:1/8 0.75:1/8t 1:1/16   # an enum: stepped
-  cutoff   add 0:0 1:-15              # the LFO only opens: make room under it
+  lfodepth 0:0 1:64
+  rate     0:1/4 0.35:1/8 0.7:1/8t 0.9:1/16   # an enum: stepped
+  cutoff   add 0:0 1:-14               # the LFO only opens: make room under it
+
+macro SLIDE
+  slide    0:30 1:110
+  accent   0:60 1:127
+  decay    add 0:-12 1:24
+  adcy     0:80 1:110

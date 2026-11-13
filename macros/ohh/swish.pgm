@@ -1,0 +1,33 @@
+# SWISH -- family: MOVEMENT.
+# Idea: a drum has no LFO, so these macros shape how the hit moves through
+# time instead of its tone:
+#   OPEN   the pedal: a tight "tss" with a hard tick .. a long wash whose
+#          attack softens as it opens
+#   ECHO   the hit repeats in time: the delay send opens and the hat gets a
+#          little darker and shorter, so the repeats carry the rhythm
+#   SHIMR  the tail blooms: more resonance (a ringing band) and more reverb,
+#          so the hit swells after it lands
+# Feel if it works: the open hat breathes with the groove; OPEN + ECHO on the
+# pad turns one off-beat hat into a rhythmic pattern.
+# Try: OPEN on X, ECHO on Y with off-beat open hats.
+voice ohh
+name SWISH
+base tone=72 mtl=84 tune=64 sprd=64
+
+macro OPEN 0.4
+  dcy      0:14 0.4:52 1:118
+  snap     0:66 0.4:32 1:6
+  colr     0:44 1:66
+  lvl      0:100 0.4:94 1:88         # a long wash builds up: hold it down
+
+macro ECHO
+  dly      0:10 0.2:40 1:112
+  tone     add 0:0 1:-18
+  dcy      add 0:0 1:-22             # shorter hits, clearer repeats
+  lvl      add 0:0 1:-4
+
+macro SHIMR
+  colr     add 0:0 1:52
+  rev      0:24 1:110
+  dcy      add 0:0 1:16
+  lvl      add 0:0 1:-4

@@ -96,6 +96,26 @@ if(TARGET param_reference)
            WORKING_DIRECTORY ${PG_ROOT})
 endif()
 
+# Every macro set in macros/ must make a sane sound everywhere in its macro space:
+# no parse error, no silent or clipping point, no NaN / Inf, no engine fault
+# (host/tools/macro_audit.cpp, docs/MACROLAB.md "Auditing a set"). And the audit
+# must catch the broken sets in host/tests/macro_bad/ (each one must fail).
+if(TARGET macro_audit)
+  add_test(NAME macro_audit COMMAND macro_audit --hard macros WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(macro_audit PROPERTIES TIMEOUT 600)
+  set(why_silent "HARD  silent at GONE=0.00")
+  set(why_clips "HARD  clips .stem peak above 0 dBFS. at HOT=1.00")
+  set(why_typo "typo.pgm:5: unknown parameter 'cutx' for bass")
+  foreach(bad silent clips typo)
+    add_test(NAME macro_audit_catches_${bad}
+             COMMAND macro_audit --hard host/tests/macro_bad/${bad}.pgm
+             WORKING_DIRECTORY ${PG_ROOT})
+    # the right reason, and the exit status (the summary line says 1 failed)
+    set_tests_properties(macro_audit_catches_${bad} PROPERTIES
+                         PASS_REGULAR_EXPRESSION "${why_${bad}}.*1 with hard failures")
+  endforeach()
+endif()
+
 # The USB transfer client (tools/pg.py) against the device's protocol module
 # (pg::io::Xfer in host/tools/xfer_sim, on a pseudo-terminal). Needs Python 3
 # with pyserial; skipped (exit 77) without pyserial.

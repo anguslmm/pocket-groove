@@ -1,0 +1,37 @@
+# KEYS -- family: MORPH.
+# Idea: the set is three whole patches and the pad blends them:
+#   A (bottom left)  ORGAN  drawbar organ on osc 1, held, bright, still
+#   B (X = 1)        PLUCK  a filtered pulse pluck on osc 2
+#   C (Y = 1)        BELL   an FM bell on osc 1, long ring, open filter
+# X crossfades A to B for real (the oscillator mix moves from osc 1 to osc 2,
+# every envelope and filter value travels with it); Y pulls every value
+# toward C ("set ... by BELL"). One thing cannot crossfade: osc 1 is either
+# the organ or the bell, so it switches at Y = 0.5, where the other values are
+# already halfway.
+# audit: allow-jump BELL
+# Feel if it works: the pad is a map with three instruments at its corners
+# and everything in between is playable; you find a spot you like and stay.
+# Try: OR-PLK on X, BELL on Y; play chords and sweep slowly around the pad.
+voice lead
+name KEYS
+base release=30 osc2=puls intv=24 det=24 flt=lp ktrk=64 attack=0 fatk=0 drive=0 vib=0 lcut=0 lshp=0 fdcy=44
+
+macro OR-PLK
+  mix      0:0 1:127 smooth
+  sus      0:110 1:0
+  decay    0:100 1:46
+  cutoff   0:100 1:58
+  env      0:8 1:72
+  reso     0:10 1:42
+  lvl      0:100 0.5:106 1:116 # the pluck is short: lift it to sit with the held organ
+  shape    0:92 1:36           # organ registration (full drawbars) .. pulse width
+
+macro BELL
+  wave     0:orgn 0.5:bell      # the one switch (stepped)
+  mix      set 0:0 1:0 by BELL
+  sus      set 0:12 1:12 by BELL
+  decay    set 0:98 1:98 by BELL
+  release  set 0:84 1:84 by BELL
+  cutoff   set 0:116 1:116 by BELL
+  env      set 0:20 1:20 by BELL
+  shape    set 0:72 1:72 by BELL   # FM index of the bell

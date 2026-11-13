@@ -1,0 +1,32 @@
+# WOOD -- family: MATERIAL / BODY.
+# Idea: the macros change what the snare is made of and how it is built:
+#   WD-MTL  wood (a dry, short, low-ringing knock, like a rim or a block)
+#           .. metal (a long, bright, inharmonic ring, like a steel shell or
+#           a struck pan)
+#   SIZE    a small piccolo .. a deep, long field drum
+#   LOOSE   a tight head .. a loose one whose pitch drops after the hit
+# Feel if it works: you hear objects, not settings; WD-MTL x SIZE is a shelf
+# of different drums.
+# Try: WD-MTL on X, SIZE on Y on the backbeat; LOOSE for a dubby drop.
+voice snare
+name WOOD
+base snappy=60 drive=20 decay=50
+
+macro WD-MTL 0.35
+  ring     0:10 0.35:50 1:122
+  dtun     0:20 0.35:45 1:118        # 1.2 .. 2.5: from almost harmonic to clangy
+  body     0:14 0.35:44 1:104        # metal rings on
+  tone     0:46 0.35:66 1:110
+  snappy   add 0:-36 0.35:0 1:-14     # wood: the wires go quiet
+  lvl      0:102 0.35:98 1:88         # the ring is loud
+
+macro SIZE 0.4
+  tune     0:110 0.4:66 1:18
+  body     add 0:-14 0.4:0 1:24
+  decay    add 0:-20 0.4:0 1:40
+  lvl      add 0:-2 0.4:0 1:2
+
+macro LOOSE
+  bend     0:6 1:120
+  body     add 0:0 1:14
+  drive    add 0:0 1:18

@@ -8,14 +8,21 @@
 //      same set back (and the same text a second time);
 //   3. every set evaluated over a grid of macro positions stays inside every
 //      parameter's range, and owns exactly what it names;
-//   4. the starter sets prove the rig: together they use every feature (base
-//      patch, add, mul, by, smooth, step on an enum, a non-monotonic curve,
-//      a mixer row, a start position), there is a set for kick, snare, bass
-//      and lead, one bass macro drives both cutoff and resonance, one lead
-//      macro both vibrato and decay.
+//   4. the sets together use every feature (base patch, add, mul, by, smooth,
+//      step on an enum, a non-monotonic curve, a mixer row, a start position),
+//      there is a set for every track, one bass macro drives both cutoff and
+//      resonance and one lead macro both vibrato and decay (the two pairings
+//      the owner named);
+//   5. every set has a name, set names are unique per track, and every file
+//      starts with its comment header, whose first line names the family
+//      ("# NAME -- family: ...", see macros/INDEX.md).
+// That every set also SOUNDS sane (no silent, clipping or NaN point) is the
+// macro_audit test (host/tools/macro_audit.cpp).
 #include <dirent.h>
 #include <sys/stat.h>
 
+#include <cctype>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -150,6 +157,7 @@ int main() {
   listFiles("macros", &files);
   it::check(files.size() >= 4, "found %zu .pgm files under macros/ (run from the repository root)", files.size());
   Features f;
+  std::set<std::string> names;
   for (const std::string& path : files) {
     FILE* fp = std::fopen(path.c_str(), "rb");
     std::string text;
@@ -187,15 +195,24 @@ int main() {
     it::check(inRange, "%s: every value inside its parameter's range", path.c_str());
     it::check(ownsRight, "%s: owns exactly the parameters it names", path.c_str());
     scan(s, &f);
+    // 5. a name, unique per track; the header comment naming the family
+    it::check(s.name[0] != 0, "%s: has a 'name' line", path.c_str());
+    std::string key = std::string(trackName(s.track)) + "/" + s.name;
+    for (char& c : key) c = char(std::toupper(c));
+    it::check(names.insert(key).second, "%s: set name %s is used twice on %s", path.c_str(), s.name,
+              trackName(s.track));
+    const size_t eol = text.find('\n');
+    const std::string first = text.substr(0, eol == std::string::npos ? text.size() : eol);
+    it::check(first.size() > 2 && first[0] == '#' && first.find(" -- family: ") != std::string::npos,
+              "%s: the first line is the header '# NAME -- family: ...' (got '%s')", path.c_str(), first.c_str());
     std::printf("  %-26s %-5s %-12s %d macros, owns %d params\n", path.c_str(), trackName(s.track), s.name,
                 s.numMacros, __builtin_popcount(s.ownedMask()));
   }
   it::check(f.base && f.add && f.mul && f.by && f.smooth && f.enumStep && f.nonMono && f.mixer && f.start,
-            "the starter sets use every feature (base %d add %d mul %d by %d smooth %d enum-step %d "
+            "the sets use every feature (base %d add %d mul %d by %d smooth %d enum-step %d "
             "non-monotonic %d mixer %d start %d)",
             f.base, f.add, f.mul, f.by, f.smooth, f.enumStep, f.nonMono, f.mixer, f.start);
-  it::check(f.track[kTrackKick] && f.track[kTrackSnare] && f.track[kTrackBass] && f.track[kTrackLead],
-            "a starter set for each of kick, snare, bass, lead");
+  for (int t = 0; t < kNumTracks; ++t) it::check(f.track[t], "a set for %s", trackName(t));
   it::check(f.cutReso, "a bass macro drives both cutoff and resonance");
   it::check(f.vibDecay, "a lead macro drives both vibrato and decay");
   return it::finish("itest_macro_files");

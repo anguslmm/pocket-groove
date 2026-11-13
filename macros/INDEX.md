@@ -1,0 +1,70 @@
+# Macro sets, round 1
+
+Round 1 is not trying to be right. Every set on a voice is built on a different idea of what a macro *is*, so that your GOOD / BAD marks tell us which kinds are fun. Start the lab with `tools/pg-desktop --lab`, pick the track, step through the sets with `<` `>`. The first two macros of every set are the natural pair for the XY pad (the lab puts X and Y on them). Each file's header says the idea and what it should feel like if it works. Full format: [docs/MACROLAB.md](../docs/MACROLAB.md).
+
+## Bass
+
+| set | file | family | idea | macros | try first |
+|---|---|---|---|---|---|
+| ACID | bass/acid.pgm | Interaction | OPEN is the 303 filter (cutoff + resonance); BITE growls when OPEN is low and squeals when OPEN is high | OPEN BITE WOBL SLIDE | OPEN and BITE on the pad, a slow line with slides |
+| POLES | bass/poles.pgm | Opposites | four word-axes, neutral in the middle, a usable bass at every end | DK-BRT SF-HRD SH-LNG CL-DRT | start in the centre, push the pad to each edge |
+| SURGE | bass/surge.pgm | Energy | MORE = brighter, driven, faster wobble, all at once; CALM = deep, round, sub an octave down, gliding | MORE CALM | ride MORE up over four bars, snap to CALM |
+| ROAD | bass/road.pgm | Journey | ROAD travels DEEP > ACID > HOLLOW > GROWL > SCREAM | ROAD DIRT MOVE | a one-note groove, walk ROAD slowly left to right |
+| DICE | bass/dice.pgm | Odd | stepped: five flavours, five intervals over a fixed sub root; GLITCH only wakes up with the later flavours | FLAV INTV GLITCH | click around the pad on the beat |
+
+## Lead
+
+| set | file | family | idea | macros | try first |
+|---|---|---|---|---|---|
+| HANDS | lead/hands.pgm | Gesture | macros named for the hand: opening brightens and loosens, pushing drives and shortens | OPEN PUSH SHAKE HOLD | OPEN and PUSH on the pad with chords; SHAKE on a held note |
+| DRIFT | lead/drift.pgm | Movement | how the sound moves: BLOOM = longer notes with vibrato fading in (vibrato + decay), WANDER = LFO depth + speed, SWELL = pluck to swell | BLOOM WANDER SWELL | a slow line of long notes, BLOOM up |
+| KEYS | lead/keys.pgm | Morph | three patches on the pad: organ, pulse pluck, FM bell | OR-PLK BELL | chords, sweep slowly round the pad |
+| VOYAGE | lead/voyage.pgm | Journey | TRIP goes FLUTE > SAW LEAD > HOLLOW BP > SUPERSAW > FM METAL | TRIP GRIT SPACE | hold a chord, walk TRIP over eight bars |
+| SWAP | lead/swap.pgm | Odd | stepped: six whole leads, six parallel intervals; WARP is dull alone, wild on the FM / organ / bell steps | FLAV INTV WARP | click on the beat; then WARP with FLAV past the middle |
+
+## Kick
+
+| set | file | family | idea | macros | try first |
+|---|---|---|---|---|---|
+| BOOM | kick/boom.pgm | Material | what drum it is: SIZE, SKIN tight/loose, WOOD-METAL, NEAR-FAR | SIZE SKIN WD-MTL FAR | four on the floor, SIZE x SKIN |
+| TRIO | kick/trio.pgm | Morph | 808, 909 and gabber kicks on the pad | 8-TO-9 GABBA | drag a slow circle |
+| PUSH | kick/push.pgm | Gesture | PUSH = drive + punch + shorter, HOLD = held body, FLICK = sharper click | PUSH HOLD FLICK | ride PUSH into a break |
+
+## Snare
+
+| set | file | family | idea | macros | try first |
+|---|---|---|---|---|---|
+| CRACK | snare/crack.pgm | Opposites | low-high, dry-rattle, soft-hard, a 909-ish snare in the middle | LO-HI DR-RTL SF-HRD | the backbeat, LO-HI x DR-RTL |
+| WOOD | snare/wood.pgm | Material | what it is made of: wood knock to metal ring, piccolo to field drum, tight to loose | WD-MTL SIZE LOOSE | WD-MTL x SIZE on the backbeat |
+| BITE | snare/bite.pgm | Interaction | BITE = distortion on a low drum, wires and brightness on a high one | PITCH BITE ROOM | sweep the pad diagonally |
+
+## Clap, hats, perc
+
+| set | file | family | idea | macros | try first |
+|---|---|---|---|---|---|
+| HYPE | clap/hype.pgm | Energy | MORE = more hands, tighter, brighter, crunchier; CALM = a scattered crowd in a big room | MORE CALM | claps on 2 and 4, ride MORE into a drop |
+| SWARM | clap/swarm.pgm | Odd | a countable, pitched clap: HANDS steps the number of hands, PITCH + RING play a pentatonic clap melody | PITCH RING HANDS | RING high, click PITCH in time |
+| TICK | chh/tick.pgm | Opposites | dark-bright, short-long, soft-hard closed hat | DK-BRT SH-LNG SF-HRD | 16ths, DK-BRT x SH-LNG |
+| ALLOY | chh/alloy.pgm | Material | seed shaker to metal bell, tiny to big, ringing to choked | WD-MTL SIZE DAMP | 16ths, WD-MTL x SIZE |
+| SWISH | ohh/swish.pgm | Movement | how the hit moves in time: the pedal, echoes that carry the rhythm, a blooming tail | OPEN ECHO SHIMR | off-beat open hats, OPEN x ECHO |
+| BLAST | ohh/blast.pgm | Energy | MORE = brighter, metallic, harder; CALM = a dark, soft, far wash | MORE CALM | ride MORE over 8 bars |
+| TRAIL | perc/trail.pgm | Journey | tom > rim > cowbell > clave > zap, with the pitch continuous across the model changes | TRAIL DROP DIRT | a 16th roll, sweep TRAIL |
+| TAP | perc/tap.pgm | Gesture | a hand drum: soft tap to slap, pressing the skin, letting it ring | HIT PRESS LET | 16ths with accents, PRESS while it rolls |
+
+## What round 1 is testing
+
+Read a mark as evidence about the family, not only the set. Each family appears on at least two voices (Morph, Movement and Interaction on two, the others on three).
+
+| family | the idea of a macro | sets |
+|---|---|---|
+| Gesture | named for what the hand does; coupled physical moves | lead HANDS, kick PUSH, perc TAP |
+| Opposites | an axis between two words, neutral in the middle | bass POLES, snare CRACK, chh TICK |
+| Journey | one long road through several distinct sounds, spice on top | bass ROAD, lead VOYAGE, perc TRAIL |
+| Morph | whole patches at the corners of the pad, crossfaded | lead KEYS, kick TRIO |
+| Material / body | what the thing is made of, its size, tension, distance | kick BOOM, snare WOOD, chh ALLOY |
+| Energy | one macro means "more", the other "calm in a different way" | bass SURGE, clap HYPE, ohh BLAST |
+| Movement | how the sound moves in time, not its static tone | lead DRIFT, ohh SWISH |
+| Interaction | one macro changes what another means (`by`) | bass ACID, snare BITE |
+| Odd | stepped jumps between flavours; macros that only work combined | bass DICE, lead SWAP, clap SWARM |
+
+Questions the marks answer: do continuous coupled moves (Gesture, Energy) beat named axes (Opposites)? Is one long road (Journey) more fun than a pad of corners (Morph)? Do stepped, dice-like macros (Odd) feel playful or random? Is the `by` interaction (ACID, BITE) noticed at all?

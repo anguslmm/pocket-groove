@@ -1,0 +1,42 @@
+# SWAP -- family: ODD (stepped flavours, and a macro that is dull alone).
+# Idea: FLAV jumps between six whole leads (each step sets wave, shape,
+# filter and envelope together); INTV jumps osc 2 to an interval above every
+# note (unison, fifth, octave, fourth, minor third, octave below), so a line
+# becomes parallel harmony; WARP alone is only a faint filter wobble, but it
+# also sends the LFO into the oscillator shape with a depth scaled by FLAV, and
+# on the FM, organ and bell flavours (where SHAPE is the FM index or the
+# drawbars) it becomes a wobbling, talking timbre.
+#   FLAV 0.0 saw | 1/6 square | 2/6 supersaw | 3/6 FM 2 | 4/6 organ | 5/6 bell
+# The flat stretches between the steps are the idea, and so is WARP being
+# nearly dead on the saw (the audit hears nothing below 0.5 with FLAV at 0).
+# audit: allow-dead WARP
+# audit: allow-dead FLAV
+# audit: allow-dead INTV
+# audit: allow-jump FLAV
+# audit: allow-jump INTV
+# Feel if it works: a slot machine; every click lands on a playable sound,
+# and INTV makes melodies out of single notes.
+# Try: FLAV on X, INTV on Y; click on the beat. Then WARP up on FLAV past
+# the middle.
+voice lead
+name SWAP
+base osc2=saw det=30 flt=lp ktrk=64 attack=0 release=40 lfoshape=0 vib=0 lcut=0 lfo=80 fdcy=58 fatk=0
+
+macro FLAV
+  wave     0:saw 0.167:puls 0.333:supr 0.5:fm2 0.667:orgn 0.833:bell
+  shape    0:0 0.167:40 0.333:70 0.5:60 0.667:80 0.833:70 step
+  cutoff   0:84 0.167:72 0.333:96 0.5:104 0.667:110 0.833:112 step
+  reso     0:40 0.167:56 0.333:20 0.5:24 0.667:8 0.833:12 step
+  env      0:50 0.167:60 0.333:24 0.5:30 0.667:10 0.833:24 step
+  decay    0:70 0.167:52 0.333:90 0.5:64 0.667:100 0.833:96 step
+  sus      0:50 0.167:20 0.333:90 0.5:30 0.667:110 0.833:14 step
+  lvl      0:102 0.167:104 0.333:96 0.5:104 0.667:96 0.833:104 step
+
+macro INTV
+  intv     0:24 0.167:31 0.333:36 0.5:29 0.667:27 0.833:12 step   # 0, +7, +12, +5, +3, -12
+  mix      0:50 0.167:64 step
+
+macro WARP
+  lcut     0:0 0.3:44 1:80          # alone: a plain filter wobble (LFO>CUT is quadratic inside)
+  lshp     0:0 1:110 by FLAV        # with FLAV: the LFO moves the shape; on FM / organ / bell that is the index or drawbars
+  lfo      0:70 1:106               # faster as it deepens

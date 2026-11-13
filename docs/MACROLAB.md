@@ -125,6 +125,47 @@ macro WOBL
 
 **Limits** live in `lib/pg/src/pg/macro/macro.h` (`kMaxMacros`, `kMaxTargets`, `kMaxPoints`, name lengths). One set is a 2.4 KB table (`sizeof(pg::macro::MacroSet)`); evaluation is a few hundred float operations.
 
+## The sets in macros/
+
+[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works (`itest_macro_files` checks the first line and that set names are unique per track).
+
+## Auditing a set (macro_audit)
+
+Nobody writing a set can listen to it from inside the conversation, so `build/host/macro_audit` renders it instead: for a grid over the macro space it plays a short fixed phrase on the set's voice through the real engine and measures each render.
+
+```bash
+build/host/macro_audit macros/bass/acid.pgm      # one set, full report
+build/host/macro_audit macros/lead               # every set in a folder (any depth)
+build/host/macro_audit --points macros/kick/boom.pgm   # every grid point, not only lines and corners
+build/host/macro_audit --wav build/audit macros/snare/crack.pgm   # also a WAV per point, to listen to
+build/host/macro_audit --hard macros             # hard checks only, one line per set (the ctest)
+```
+
+**The grid.** Each macro alone at 0, 1/8 .. 1 with the others at their start positions (`--hard`: 0, 1/4 .. 1), every corner of the space, and a 5 x 5 grid of the first two macros (the XY pad), the others at their start.
+
+**The phrase** (120 BPM, one bar plus a second of tail). Bass: C2, G2 accented and slid into C3, a long soft G1, an accented G3. Lead: C4, an A3 min7 chord, a long C5, C3 accented and slid into G3. Drums: hits at velocity 127 (accented), 100, 60, 100 seven semitones up, 100. The track plays alone with the ducker off; what is measured is the track's stem plus its own share of the delay and reverb returns (so send macros count), as the mono sum the device plays (so WIDTH and PAN moves are inaudible and show as dead).
+
+**Columns** (one row per grid point):
+
+| column | |
+|---|---|
+| `peak` | highest sample, dBFS |
+| `loud` | loudness: the loudest 100 ms (RMS, dBFS). Compares a short pluck with a held note by how loud they sound, not by their energy; the level checks use it |
+| `rms` | RMS over the whole render, dBFS (energy: long notes and tails count) |
+| `centr` | spectral centroid, Hz, power weighted (dominated by the fundamentals on a bass) |
+| `hf` | share of the power above 1.5 kHz, dB (a brightness measure that is not fooled by the sub) |
+| `decay` | ms from the loudest 10 ms of the decay window until 20 dB below it (synths: the long note; drums: the first hit); `>` = it never fell that far inside the window |
+| `d` | spectrogram distance to the next point on the line, dB: the mean level difference over the time-frequency cells (2048-point FFT, 96 log bands 40 Hz..16 kHz) within 60 dB of the top, each weighted by the square root of its amplitude. 0 = the same sound; one CUT value at a time on a resonant bass is about 0.6; a stepped flavour change is 5 to 25 |
+
+Per set it then prints the loudness range across the whole space, the highest peak, the centroid range, the **travel** of each macro (the sum of the `d` values along its line: how much happens over its whole throw; under about 5 is a macro that barely does anything) and the problems:
+
+- **HARD** (exit 1, fails the ctest): the file does not parse, a point is **silent** (peak below -45 dBFS), a point **clips** (stem peak above 0 dBFS), **NaN / Inf** in the output, engine faults.
+- **warn** (reported, exit 0): **dead travel** (neighbours on a macro's line closer than `--dead` dB, default 0.5; merged into stretches, and counted separately for the rest of the pad), a **level jump** between neighbours (loudness differs by more than `--jump` dB, default 6), **hot** points (peak above -3 dBFS), a **loudness range** over 18 dB across the space, **subnormal** samples (with where: the track stem, the delay or the reverb return). Today the engine's delay and reverb produce subnormals on their default settings (their one-pole states decay into the subnormal range when the input goes quiet), so almost every set with a send warns; that is an engine matter, not the set's.
+
+A set whose dead stretch or jump is the idea (stepped flavours, a macro that only works combined with another) says so in a comment line, `# audit: allow-dead NAME` or `# audit: allow-jump NAME` (`*` for every macro), and the warning is not raised for that macro.
+
+The ctest `macro_audit` runs `--hard` over all of `macros/` (about 40 s); `macro_audit_catches_*` check that it really fails the broken sets in `host/tests/macro_bad/` (silent, clipping, a typo) for the right reason.
+
 ## Every parameter a file can name
 
 Generated from the instrument's parameter tables by `build/host/param_reference --macrolab docs/MACROLAB.md` (ctest `check_macrolab` fails when it is stale). Short name, long name, raw range (what the screen shows instead, if different) or the enum's value names, `[default]`. What each one does: MANUAL.md chapter "Parameter reference" and the comments in each voice's header (`lib/pg/src/pg/bass/bass.h`, `lead/lead.h`, `drums/drums.h`).
