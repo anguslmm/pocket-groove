@@ -62,11 +62,9 @@ enum class CmdType : uint8_t {
 // is followed; evaluation itself runs only on a change, at a quantum edge).
 // The mixer rows stay the player's and combine with the instrument's level and
 // sends (macro::combineMixer). An id the library does not know plays the
-// stored parameters (as CLASSIC) and is kept. Locks on such a track: a macro
-// lock (Step::lockParam 33..36) plays the instrument with that macro at the
-// lock's value for the lock's scope (evaluated at the step); a lock of a sound
-// parameter (1..24) is ignored (the instrument owns them); mixer locks work.
-// On a CLASSIC track macro locks are ignored and everything else is as before.
+// stored parameters (as CLASSIC) and is kept. An instrument track has no
+// parameter locks: its notes carry their own macro values instead (MOTION,
+// below). A CLASSIC track keeps its one parameter lock per step, as before.
 //
 // MACRO MOTION (docs/MACROLAB.md "What a moving parameter sounds like"): the
 // Project holds each macro's position as a byte, and the stored sound
@@ -84,14 +82,51 @@ enum class CmdType : uint8_t {
 // fractional level and sends. When the movement ends the values run into the
 // stored bytes (kMacroSettleMs) and the track returns to the 7-bit path, bit for
 // bit what a static project plays; it enters the fractional path the same way
-// (the first kMacroSettleMs run from the bytes it was playing). Jumps, never ramps: an instrument change (or a
-// project loaded or edited by any other route), a ramp of 1, a macro lock
-// starting or ending at a step (the note it fires snaps anyway; a note still
-// ringing on a legato slide or another lead voice hears the jump through the
-// voice's own de-click smoothing), enum and semitone parameters (they take the
-// value the set gives at the current position, so they switch where the set
-// says). CLASSIC tracks and tracks whose macros stand still never leave the
-// 7-bit path.
+// (the first kMacroSettleMs run from the bytes it was playing). Where the macros
+// stand still away from the stored bytes (a motion holds them, or they rest
+// there after Stop) the 7-bit path plays the instrument evaluated where they
+// stand. Jumps, never ramps: an instrument change (or a project loaded or
+// edited by any other route), a ramp of 1, Play from the top (to the motion's
+// start values), enum and semitone parameters (they take the value the set
+// gives at the current position, so they switch where the set says). CLASSIC
+// tracks and tracks whose macros stand still never leave the 7-bit path.
+//
+// MOTION (docs/MACROLAB.md "Motion"): on an instrument track a note (a step
+// that is on) can carry its own value of each macro (Step::macroValue, 63
+// levels). Per track and macro the KEYFRAMES are the notes with a value of that
+// macro, at their grid time including swing, within the pattern's master length
+// (a track wraps on its own length); whether a note actually fires (mute,
+// probability, a recorded note's suppression, a roll) does not matter: motion is
+// deterministic. While playing:
+//   - no keyframe in the playing pattern: the macro is at its base (the stored
+//     byte, the instrument page's position), as above;
+//   - one: it is constant at that value; several: in the quantum a keyframe's
+//     step fires the macro is exactly at its value, then it moves along a
+//     straight line to the next keyframe's value, arriving in the quantum that
+//     one fires; through silence, past notes with no value, across the wrap;
+//   - after a pattern's last keyframe the next one is the first keyframe of what
+//     plays next (the same pattern looping, a queued pattern, the next song slot:
+//     decideNext); none there: the base, arriving at the boundary. A pattern
+//     queued late, an edit of the steps or lengths, a tempo or swing change:
+//     the motion re-aims from where the macro is at that moment, so it still
+//     arrives on the note;
+//   - Play from the top starts each macro where the looping pattern has it at
+//     step 1 (a keyframe there, or the line from the pattern's last keyframe to
+//     its first), so the first pass sounds as the later ones. Stop: the macros
+//     rest where the motion had them and the motion lets go (EngineStatus::motion
+//     reads 0; the next move of a macro glides from there to its new base);
+//   - SetMacro of a macro with motion stores the new base (and the derived bytes)
+//     but is not heard until the motion ends: except while recording, when the
+//     player's hand is LIVE: from a SetMacro of that macro (record on, transport
+//     running) until that macro has had no SetMacro for one bar (16 steps at the
+//     tempo then), or record goes off, or Stop. A live macro is heard as moved
+//     (stage B's ramps), and every note of the track that starts while it is live
+//     (a step that is on, at its grid time; a live-recorded note too) takes its
+//     current value, rounded to the 63 levels.
+// The engine publishes the heard positions, the motion bits and the live bits
+// per track in EngineStatus. Cost: nothing runs per quantum (two compares); at a
+// step of a track whose pattern has motion a few compares, and at a keyframe or
+// a change a scan of at most two patterns' steps of that track.
 constexpr int kMacroRampMs = 72;      // default glide of a SetMacro
 constexpr int kMacroSettleMs = 50;    // run into / out of the fractional path
 constexpr uint16_t kMacroJump = 1;    // ramp: arrive at the next quantum
@@ -107,8 +142,8 @@ struct Command {
 // SetInstrument: a = track; the id in step.ext[0] (low byte) / step.ext[1]
 // (high byte), the positions in step.note, flagsRaw, vel, gate (macros 0..3).
 Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4]);
-// SetMacro with an explicit ramp (quanta; 0 = kMacroRampMs). The "motion" stage
-// sets ramps that arrive exactly at a note (ramp = quanta until then).
+// SetMacro with an explicit ramp (quanta; 0 = kMacroRampMs). (MOTION's glides are
+// the engine's own ramps, aimed at the next keyframe's quantum, of any length.)
 Command setMacroCommand(int track, int macro, uint8_t position, uint16_t rampQuanta = 0);
 
 struct EngineStatus {
@@ -126,6 +161,12 @@ struct EngineStatus {
   float    duckGain;           // current ducker gain 0..1 (1 = not ducking), for the UI meter
   uint32_t revision;           // bumps whenever the Project is modified
   uint8_t  instrumentRefreshes; // increments (wraps) per RefreshInstruments consumed (applied or discarded)
+  // MOTION (below), per track: where each macro is heard now (rounded; updated at
+  // most every 4 quanta while it moves), bit m = macro m has motion in the playing
+  // pattern (0 while stopped), bit m = macro m is live (motion recording).
+  uint8_t  macroPos[kNumTracks][kTrackMacros];
+  uint8_t  motion[kNumTracks];
+  uint8_t  live[kNumTracks];
 };
 
 // SCOPE TAP (the instrument page's picture, docs/UX.md 10.3): one track's voice

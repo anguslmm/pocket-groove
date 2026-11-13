@@ -13,12 +13,12 @@
 //             given the same effective values (the values reach the voices).
 //   unknown   an id the library does not know plays the stored parameters,
 //             keeps the id, never crashes.
-//   locks     macro lock scope at step time (until the next firing step, also
-//             across the pattern wrap), sound locks ignored on an instrument
-//             track, mixer locks combined; macro locks ignored on CLASSIC.
+//   locks     CLASSIC: a sound lock plays at its step, an old macro lock is
+//             dropped (an instrument track's notes carry macro values instead:
+//             itest_motion_notes).
 //   overlay   a host overlay replacing a built-in takes effect on
 //             RefreshInstruments, counted also when discarded by suspend().
-//   copy      CopyTrack drops macro locks on another track.
+//   copy      CopyTrack drops a note's own macro values on another track.
 //   files     a project with instruments round-trips through pg::io and the
 //             engine binds it again after suspend / load / resume.
 //   stems     the offline bounce (host/common/bounce.h) plays the instrument:
@@ -354,70 +354,11 @@ struct StepWatch {
   }
 };
 
+// CLASSIC locks (an instrument track's notes carry macro values instead: itest_motion_notes).
 void testLocks() {
-  setup();
-  Project& p = g_inst.project();
-  const pm::MacroSet* acid = byName(kTrackBass, "ACID");
-  if (!acid) return;
-  const uint8_t pos[4] = {60, 0, 0, 0};
-  setInstrument(kTrackBass, acid, pos);   // first: a CLASSIC -> instrument change clears the steps' values
-  quanta(1);
-  TrackPattern& tp = p.patterns[0].tracks[kTrackBass];
-  for (int s : {0, 4, 8, 12}) { tp.steps[s] = kDefaultStep; tp.steps[s].setFlags(kStepOn); tp.steps[s].note = 36; }
-  tp.steps[4].setMacroValue(0, 255);          // OPEN at 255 on step 5
-  tp.steps[12].setMacroValue(1, 200);         // BITE at 200 on step 13: its scope wraps
-  quanta(1);
-  uint8_t base[kParamsPerTrack], lk0[kParamsPerTrack], lk1[kParamsPerTrack];
-  derived(*acid, pos, base);
-  uint8_t pl[4];
-  std::memcpy(pl, pos, 4); pl[0] = 255; derived(*acid, pl, lk0);
-  std::memcpy(pl, pos, 4); pl[1] = macroCodeToPos(macroPosToCode(200)); derived(*acid, pl, lk1);
-  it::check(std::memcmp(base, lk0, kSoundParams) != 0 && std::memcmp(base, lk1, kSoundParams) != 0, "locks change something");
   Command play{};
   play.type = CmdType::Play;
-  g_inst.engine().post(play);
-  StepWatch w;
-  int seen = 0, bad = 0;
-  for (int k = 0; k < 40; ++k) {
-    int step;
-    uint8_t eff[kParamsPerTrack];
-    if (!w.next(&step, eff)) break;
-    ++seen;
-    // scope = from the step that fires with the lock until the next step that fires:
-    // 5..8 OPEN locked, 9..12 the CUT lock (ignored: the base), 13..16 BITE locked, wrap: base
-    const uint8_t* want = base;
-    if (step >= 4 && step < 8) want = lk0;
-    if (step >= 12) want = lk1;
-    if (std::memcmp(eff, want, kSoundParams) != 0) ++bad;
-  }
-  it::check(seen >= 32, "steps seen %d", seen);
-  it::check(bad == 0, "macro lock scope: %d steps with the wrong values", bad);
-  // the wrap explicitly: lock only on step 13, steps 1 and 13 on
-  setup();
-  Project& q = g_inst.project();
-  setInstrument(kTrackBass, acid, pos);
-  quanta(1);
-  TrackPattern& t2 = q.patterns[0].tracks[kTrackBass];
-  t2.steps[0] = kDefaultStep; t2.steps[0].setFlags(kStepOn);
-  t2.steps[12] = kDefaultStep; t2.steps[12].setFlags(kStepOn);
-  t2.steps[12].setMacroValue(1, 200);
-  setInstrument(kTrackBass, acid, pos);
-  g_inst.engine().post(play);
-  StepWatch w2;
-  int wrapBad = 0, wraps = 0;
-  bool inLock = false;
-  for (int k = 0; k < 48; ++k) {
-    int step;
-    uint8_t eff[kParamsPerTrack];
-    if (!w2.next(&step, eff)) break;
-    if (step == 12) inLock = true;
-    if (step == 0 && inLock) { inLock = false; ++wraps; }
-    const uint8_t* want = inLock ? lk1 : base;
-    if (std::memcmp(eff, want, kSoundParams) != 0) ++wrapBad;
-  }
-  it::check(wraps >= 2 && wrapBad == 0, "lock across the wrap: %d wraps, %d wrong", wraps, wrapBad);
-
-  // CLASSIC: a macro lock does nothing, a sound lock works as before
+  // CLASSIC: a macro lock (version 2 numbering) is dropped, a sound lock works as before
   setup();
   Project& c = g_inst.project();
   TrackPattern& t4 = c.patterns[0].tracks[kTrackBass];

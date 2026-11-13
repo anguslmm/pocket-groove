@@ -85,7 +85,7 @@ HOT_COMMON = [
     # macro::evaluateFine), once per 11.6 ms per moving track, and the drums'
     # fractional mappings, fed every 11.6 ms, stay in flash: ~2.5 KB of IRAM saved
     # for a cost at 86 Hz that env:profile's MOTION lines measure.
-    r"^pg::engine_detail::State::(fineTick|fineEval)\(",
+    r"^pg::engine_detail::State::(fineTick|fineEval|macroPos)\(",
     r"^pg::Voice::mono\(\) const",
     r"^pg::engine_detail::Delay::readTap\(",
     r"^pg::engine_detail::MasterBus::setParams\(",
@@ -120,7 +120,7 @@ MUST = MUST_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 MUST_NOT = HOT_MONO if STEREO else HOT_STEREO
 # Per-step / per-note paths (tier 2).
 STEP = [
-    r"^pg::engine_detail::State::(fireTrackStep|fireMasterStep|hit|afterNoteOn|buildEff)\(",
+    r"^pg::engine_detail::State::(fireTrackStep|fireMasterStep|hit|afterNoteOn|buildEff|motionStep)\(",
     r"^_ZN2pg13engine_detail5State10decideNext",
     r"^pg::drums::\w+Voice::(noteOn|beginHit|noteOff)\(",
     r"^pg::bass::BassVoice::(noteOn|noteOff)\(",
