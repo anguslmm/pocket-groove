@@ -111,6 +111,7 @@ Cardputer keys by legend as in the manual (`` ` `` `1` ... `del` `tab` `q` ... `
 | Option | |
 |---|---|
 | `--dir PATH` | projects directory (default `./projects`) |
+| `--samples PATH` | the sample pool's folder (default: `samples/` next to the projects directory; below) |
 | `--sd PATH` | also mount `PATH` as the SD card (default: no card, as a Cardputer without one) |
 | `--scale N` | window size: N x 240 by N x 135 points (default 4). The window can be resized; the picture stays sharp at whole multiples |
 | `--buffer N` | audio buffer in frames (default 256 = 5.8 ms at 44.1 kHz). Lower for less latency, higher if you hear clicks |
@@ -218,6 +219,21 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 - *Control+Space switches the input source*, or *Control+arrow / Control+number switches Spaces*: macOS keyboard shortcuts take those before any app; turn them off in System Settings > Keyboard > Keyboard Shortcuts if you need the combination.
 - *`SDL2 not found`*: `brew install sdl2`, then run `tools/pg-desktop` again (it re-runs CMake).
 
+## Samples
+
+The sampler instruments on PERC (CHOP, TAPE, STUTTER; MANUAL.md chapter 20) play one of twelve sample slots. On the desktop the slots are the folder **`samples/`** next to the projects directory (`./samples` with the default `--dir projects`; `--samples PATH` for another), one audio file per slot, named by the slot number:
+
+```
+samples/01-ohyeah.wav     slot 1
+samples/03-hey there.wav  slot 3 (01..12, then '-', '_' or '.', then any name)
+```
+
+- They are loaded when the app starts and the folder is checked every 0.4 s: a new, changed or removed file reloads its slot (a file changed less than 0.7 s ago is left until it has settled, so a copy in progress is not read half). The terminal says what each slot holds (`[samples] slot 3: HEYTHERE 1.42 s`).
+- Any WAV: 8/16/24/32-bit PCM or 32/64-bit float, mono or stereo (or more channels: mixed down), any sample rate. It is converted on load to the slot's format: mono, 22,050 Hz (a windowed-sinc resampler), silence trimmed from both ends (below -48 dB of the peak, keeping 5 ms before and 20 ms after), cut to 6.2 s, levelled to a -1 dBFS peak. The name the screen shows is the file name's, upper case, letters and digits, up to 8 characters.
+- A slot with no file, or a file that does not convert (the terminal says why), plays its **built-in sound**, as an empty slot on the device does.
+- **Drop a file on the window**: it goes into the selected track's slot (the slot SHIFT+`;` / `.` chose on the instrument page). A WAV is copied into `samples/` as `NN-name.wav` (the slot's other files there are removed); on a Mac any other audio file is converted to WAV with `afconvert` first. A toast says `SLOT 3: HEYTHERE`, or what went wrong.
+- The desktop's slots and the device's are separate: `tools/pg sample put 3 samples/03-hey.wav` copies one to the device (MANUAL.md chapter 20). The C++ converter here (`host/common/sample_convert.h`) and the Python one `tools/pg` uses (`tools/pg_sample.py`) are the same algorithm; ctest `test_sample_convert` checks that they give the same samples.
+
 ## How it is built
 
 `host/app/` (target `pocket-groove`, built by the host CMake when SDL2 is found; without SDL2 the rest of `host/` builds as before):
@@ -233,6 +249,7 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 - `dirfs.h`: `pg::FileSystem` over the projects directory.
 - `display.cpp`: integer nearest-neighbour scaling, HiDPI aware; uploads only the rows the UI changed.
 - `script.cpp`: `--script`, which pushes SDL keyboard events so a script takes the same path as real keys.
+- `samples.cpp`: the `samples/` folder (above): polls it, converts with `host/common/sample_convert.h` into one full-size buffer per slot, hands them to the instrument as a `pg::sampler::MemoryPool`, and takes dropped files (`SDL_DROPFILE`; script command `app drop PATH`, `app print-samples`).
 - `lab.cpp`: the macro lab (`--lab`): polls the folder, parses with `pg::macro`, is the instrument library's overlay (`pg::macro::LibraryOverlay`), moves the track's instrument and macros through `Ui::setInstrument` / `Ui::setMacro`, draws its panel, writes the marks.
 
-Tests: `test_desktop_keymap` (map and key logic), `test_desktop_files` (desktop files == device files, session round trip, ghost filter switch), `test_desktop_listen` (the capture conversion for every format, channel count and callback cut; the rate match against two simulated clocks, an hour at +500 and -500 ppm with callback jitter, variable blocks, 32 kHz, the Mac's burst patterns behind sdl2-compat, f32 mono 48 kHz, s32 32 kHz in odd sizes, 6-channel 96 kHz, a pattern that grows while playing, unplug and an output stall: no underrun, overflow or glitch, latency bounded, and a fit of the output: the device's frequency, its level, THD+N below -60 dB) and `test_desktop_app` (`host/app/tests/desktop_check.py`: the app headless under SDL's dummy drivers; its screenshots must be pixel-identical to `ui_shot` for the same keys, also with the strip's controls and the Stems list used in between; the modifier lights; the F9 recording bit-identical to the offline engine; the session saved at quit and resumed; a saved file through the device's transfer protocol; Listen against a simulated device, recording and unplug included, the recording fitted by `listen_analyze` (frequency, level, THD+N) for several obtained specs and burst patterns, the `--listen-dump` file checked against what was delivered, and SDL's real capture path driven by SDL's disk driver reading a sine from a file; the Stems list end to end against `xfer_sim` and its error messages; the macro lab: macros moved by mouse reach the engine, a file rewritten while running is reloaded, a broken one reported and ignored, the marks written, `none` and a deleted file give the values back).
+Tests: `test_desktop_samples` (the samples folder: load, a second file of a slot ignored, a broken file, reload on change, removal, drop and its copy), `test_desktop_keymap` (map and key logic), `test_desktop_files` (desktop files == device files, session round trip, ghost filter switch), `test_desktop_listen` (the capture conversion for every format, channel count and callback cut; the rate match against two simulated clocks, an hour at +500 and -500 ppm with callback jitter, variable blocks, 32 kHz, the Mac's burst patterns behind sdl2-compat, f32 mono 48 kHz, s32 32 kHz in odd sizes, 6-channel 96 kHz, a pattern that grows while playing, unplug and an output stall: no underrun, overflow or glitch, latency bounded, and a fit of the output: the device's frequency, its level, THD+N below -60 dB) and `test_desktop_app` (`host/app/tests/desktop_check.py`: the app headless under SDL's dummy drivers; its screenshots must be pixel-identical to `ui_shot` for the same keys, also with the strip's controls and the Stems list used in between; the modifier lights; the F9 recording bit-identical to the offline engine; the session saved at quit and resumed; a saved file through the device's transfer protocol; Listen against a simulated device, recording and unplug included, the recording fitted by `listen_analyze` (frequency, level, THD+N) for several obtained specs and burst patterns, the `--listen-dump` file checked against what was delivered, and SDL's real capture path driven by SDL's disk driver reading a sine from a file; the Stems list end to end against `xfer_sim` and its error messages; the macro lab: macros moved by mouse reach the engine, a file rewritten while running is reloaded, a broken one reported and ignored, the marks written, `none` and a deleted file give the values back).

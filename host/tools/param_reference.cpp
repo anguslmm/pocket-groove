@@ -53,6 +53,7 @@
 #include <vector>
 
 #include "pg/instrument/instrument.h"
+#include "pg/sampler/sampler_params.h"
 #include "pg/ui/format.h"
 #include "pg/ui/ui_tables.h"
 
@@ -533,6 +534,13 @@ std::string macroList() {
     out += std::string("voice ") + kVoice[t] + "\n";
     for (int i = 0; i < pg::kSoundParams; ++i)
       if (const pg::ParamInfo* in = e.trackParamInfo(t, i)) out += macroLine(in, t, i);
+    // VOICE KINDS: another voice the track hosts (`voice perc sampler`)
+    for (int k = 1; k < pg::kNumVoiceKinds; ++k) {
+      if (!e.hostsKind(t, k)) continue;
+      out += std::string("voice ") + kVoice[t] + " " + pg::voiceKindName(k) + "\n";
+      for (int i = 0; i < pg::kSoundParams; ++i)
+        if (const pg::ParamInfo* in = e.trackParamInfo(t, k, i)) out += macroLine(in, t, i);
+    }
   }
   out += "mixer rows, on every voice (defaults differ per track: the bass's)\n";
   for (int i = pg::kSoundParams; i < pg::kParamsPerTrack; ++i)

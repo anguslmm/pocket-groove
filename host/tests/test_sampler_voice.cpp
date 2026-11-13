@@ -18,6 +18,7 @@
 //             rules): an erased image is empty; begin hides the slot and erases its header
 //             first (an interrupted write leaves it empty); write / commit / read back;
 //             a wrong CRC or a stale mapping is refused; remove; the voice plays from it
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -513,6 +514,39 @@ void testFlash() {
   check(std::fabs(freq(o, 1000, o.size()) / 300.0 - 1.0) < 0.003, "plays the flash slot at pitch", freq(o, 1000, o.size()));
 }
 
+// Host ns per output sample (a regression number, not a device figure; the device
+// estimate is in docs/STATE.md stage F1): a plain chop, and every stage on.
+void bench() {
+  std::printf("bench\n");
+  std::vector<int16_t> s = sine(300.0f, kSlotMaxSamples);
+  for (int worst = 0; worst < 2; ++worst) {
+    Rig g;
+    g.pool.set(0, s.data(), kSlotMaxSamples, "s");
+    g.set(kLoop, 1);
+    if (worst) {
+      g.set(kCutoff, 70);
+      g.set(kReso, 60);
+      g.set(kBits, 60);
+      g.set(kDown, 40);
+      g.set(kDrive, 60);
+      g.set(kPitch, 70);
+    }
+    g.on();
+    float L[kQuantum], R[kQuantum], acc = 0.0f;
+    const int quanta = 100000;
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int q = 0; q < quanta; ++q) {
+      g.v.setParams(g.p);
+      g.v.render(L, R, kQuantum);
+      acc += L[3];
+    }
+    const double ns = double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()) /
+                      (double(quanta) * kQuantum);
+    std::printf("  %s: %.1f ns per sample on this host (%g)\n", worst ? "every stage on" : "plain chop", ns, double(acc) * 0.0);
+    check(ns < 200.0, "not absurdly slow", ns);
+  }
+}
+
 void testGeneration() {
   std::printf("pool generation\n");
   Rig g;
@@ -541,6 +575,7 @@ int main() {
   testFineEqualsBytes();
   testGeneration();
   testFlash();
+  bench();
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

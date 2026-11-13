@@ -328,8 +328,64 @@ Order of work (owner, updated 2026-11-12):
    -> 1116679 / 1054619 -> 1054043 (the demo builders 9754 -> 9581 bytes: the note tables
    became bytes), static RAM unchanged (199580 / 199036), IRAM placement unchanged (checks OK).
    Host: 73/73. Before / after WAVs: build/stageg/wav/ (demo_compare --wav). NOT LISTENED TO.
-   LATER STAGES (not built): (F) a sampler instrument, in progress as F1 (playback and import
-   from the Mac) and F2 (microphone recording).
+   STAGE F1 DONE (2026-11-13, branch of the sampler worktree, not yet on the device): THE
+   SAMPLER INSTRUMENT ("simple processed vocal chops"). A set's voice line may name a voice
+   kind (`voice perc sampler`); PERC hosts a SamplerVoice besides its percussion voice and the
+   engine switches at the quantum edge where the instrument changes kind (Engine::setAltVoice;
+   the old voice is choked and fades). Sample pool: twelve slots of 68 sectors in app1 (stock
+   table; refused unless app1 is at 0x340000 + 0x330000), a 500-byte header per slot (name,
+   peak, CRCs, 232-column overview), up to 6.2 s mono int16 at 22,050 Hz; memory-mapped once
+   at boot (src/platform/sample_flash.*). An empty slot plays one of three synthesised voice
+   phrases (rom_samples_data.cpp, 137 KB of flash, host/tools/gen_rom_samples). The track's
+   slot is TrackSettings' free byte (now `sampleSlot`; Step and Project unchanged, old files
+   load unchanged). SamplerVoice (pg/sampler/sampler.h): one chop per track, 32.32 linear
+   interpolation, region checked before every read, slices / start / length / reverse /
+   speed through stopped into reverse / pitch / attack / release / SVF LP-BP-HP / bit crush /
+   sample-and-hold / drive / tempo-synced repeats with pitch and fade per repeat / loop
+   (20 parameters, docs/MACROLAB.md "The voice line"). Sets: perc CHOP (SLICE PITCH TONE
+   LENGTH), TAPE (SPEED START WORN ECHO), STUTTER (RATE RISE TONE LENGTH), in builtin.txt
+   after TAP and TRAIL (the demos are unchanged). Engine: a sampler note with its own macro
+   values is primed with them before its note-on (primeNote), so CHOP's per-note SLICE is the
+   note's. Desktop: samples/ next to projects/ (01-name.wav .. 12-name.wav, polled, any WAV
+   converted), drop a file on the window. Device: tools/pg sample list | put | get | rm over
+   new transfer requests (SLS SPUT SGET SRM; refused while playing; an interrupted put leaves
+   the slot empty). Converter: host/common/sample_convert.h and tools/pg_sample.py, the same
+   algorithm, checked against each other (identical on this host's test vectors). UI: the
+   waveform in the scope's box (region, slices, playhead, slot and name / BUILT-IN), SHIFT+;
+   / . steps the slot (undo), note keys = the chop's pitch, GATE is a gate (UX.md 10.3
+   "Sampler instruments"; MANUAL.md chapter 20; docs/ux/sampler-*.png).
+   FIGURES (USB / jack, clean builds, warning-free in our sources; before = main 68b6678):
+   flash 1124655 -> 1287235 / 1062159 -> 1224667 (+162.6 KB: the ROM sounds 136.7 KB, the
+   rest code and the three sets); static RAM 200340 -> 200892 / 199796 -> 200364 (+552 / +568);
+   .iram0.text 127163 -> 129807 / 120219 -> 122863 (+2,644 each); _heap_start 0x3FCD4398 ->
+   0x3FCD50C0 / 0x3FCD2678 -> 0x3FCD33B0 (3,368 / 3,384 bytes less heap: expect the ~20 KB
+   minimum free heap to drop by about that); IRAM functions 95 -> 107 / 94 -> 106 (the sampler's
+   render and per-quantum work; its note-on path, updateTone and primeNote stay in flash).
+   CPU (ESTIMATE, not measured): a plain chop ~120 cycles per output sample (the hw-spike's
+   measured 44-46 cycles for a mapped-flash read + interpolation, plus envelope, de-click and
+   bookkeeping; on the host it costs what PERC's tonal model does, 6.1 ns): ~2.2 % of a core
+   at 44.1 kHz while it sounds; with every stage on (filter, crush, hold, drive) ~230 cycles,
+   ~4 %: over the 1-2 % target. env:profile does not have a sampler line yet.
+   Host: 84/84 (76 on main; itest_voice_kind, itest_sampler, itest_ui_sampler, test_sampler_voice, test_desktop_samples,
+   test_sample_convert, macro_audit_test_sample, check_rom_samples new). WAVs (not committed):
+   build/sampler/{chop,tape,stutter}.wav (with kick and hats), build/sampler_solo/ (alone),
+   from host/tools/sampler_demo. NOT LISTENED TO.
+   ONLY THE DEVICE CAN CONFIRM: mapping 3.19 MB of app1 next to the app's own mappings
+   (boot log `[boot] samples: app1 mapped ...`); the CPU cost (and that a chop from mapped
+   flash does not glitch beside the full groove); that esp_partition_write leaves the
+   mapping coherent (commit checks it and answers ERR VERIFY if not); the audio gap while a
+   slot is written (stopped transport only, but notes played by hand stutter); the transfer
+   speed (~273 KB of base64 lines at 128 bytes each, about 2,150 round trips: est. 20-40 s for a
+   full slot); the minimum free heap after the IRAM growth; and all of it by ear.
+   F2 (microphone recording) NEEDS FROM F1: the pool's write side is ready (SampleWriter:
+   begin / write in order / commit, erase per sector as data arrives, header last), so a
+   recorder only has to stream mono int16 at 22,050 Hz into it (resample the codec's 44.1 kHz
+   by 2 with a short half-band filter) and commit; the mic DIN fix (hardware-notes 11.6) and
+   a RAM ring for the flash write stalls (the spike measured 351 us per 256-sample chunk,
+   nothing lost) are F2's. A UI to arm / record / trim, and a decision whether recording is
+   allowed while the transport plays (the spike recorded while streaming fine; writing stalls
+   the CPU, the audio DMA ring must cover it).
+   LATER STAGES (not built): (F2) microphone recording into the sample pool.
    STANDING RULE (owner, 2026-11-13): development does not wait for macro assessment. The owner
    will request macro changes continually and there will be no single final assessment; a
    retuned .pgm is regenerated into the table and committed like any other change.

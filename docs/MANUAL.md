@@ -25,6 +25,7 @@ Headphones first: the jack is driven straight from the codec and the firmware ca
 17. [Known limitations of v1](#17-known-limitations-of-v1)
 18. [Troubleshooting](#18-troubleshooting)
 19. [Parameter reference](#19-parameter-reference)
+20. [Samples: vocal chops](#20-samples-vocal-chops)
 
 ---
 
@@ -222,6 +223,8 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | steps | Tap toggles a step (the strip at the bottom shows them). Hold + a macro key (or `-`/`=`) = that note's own value of the macro (Motion, below; chapter 10); `del` removes it. |
 | `del` held + a macro key | Clear that macro's motion: its values leave every note of this track in this pattern (`ctrl`+`z` brings them back). |
 | `'` | Which 16 steps the strip shows. |
+
+**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER. Their picture is the sample's waveform, and `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays. Chapter 20.
 
 A track with no instrument shows **CLASSIC**: it plays its classic sound (projects from before instruments), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
@@ -1169,3 +1172,46 @@ Key = FX tab (`o` cycles DUCK, SPACE, MASTER) and column key.
 | MASTER `,` | `SCAL` Scale | `CHRO` `MAJ` `MIN` `DOR` `PHRY` `MIXO` `MPEN` `JPEN` `BLUE` `HMIN` | MIN (2) | Scale for the note keys: CHRO (chromatic), MAJ, MIN, DOR (Dorian), PHRY (Phrygian), MIXO (Mixolydian), MPEN and JPEN (minor and major pentatonic), BLUE (blues), HMIN (harmonic minor). Changing it never rewrites notes already written. |
 
 <!-- END PARAM REFERENCE -->
+
+---
+
+## 20. Samples: vocal chops
+
+![CHOP playing slice 1 of a sample](ux/sampler-chop.png)
+
+The PERC track can play a **sample** instead of its percussion sound: step its instrument (`9`, then `.`) past TAP and TRAIL to **CHOP**, **TAPE** or **STUTTER**. The picture becomes the sample's waveform: the part the next note plays is lit in the track colour, dotted lines mark the slices, a white line runs through it while it sounds. Top left: the slot number and the sample's name.
+
+**Twelve slots.** The device keeps up to twelve samples (about 6 seconds each, mono). Each PERC track setting remembers which slot it plays (saved with the project); `shift`+`;` / `shift`+`.` on the instrument page choose the previous / next slot (`ctrl`+`z` takes a run of them back). An **empty slot plays a built-in sound** (three short sung phrases: OHYEAH, HEY and AHOO), and the page says `BUILT-IN`, so the instruments work before you have put anything in.
+
+![Slot 2 holds a sample of your own](ux/sampler-user.png)
+
+**The three instruments**
+
+| Instrument | `z` `x` | `c` `v` | `b` `n` | `m` `,` |
+|---|---|---|---|---|
+| CHOP: the sample cut into 16 slices, each note picks one | SLICE (1 .. 16) | PITCH (two octaves down .. up) | TONE (dark .. open .. thin) | LENGTH (a blip .. the whole slice) |
+| TAPE: the whole sample as tape | SPEED (backwards .. stopped .. normal .. double) | START (head .. tail) | WORN (clean .. crushed and dark) | ECHO (dry .. delay and reverb) |
+| STUTTER: one chop repeated in time | RATE (1/4 .. 1/32) | RISE (each repeat lower .. higher) | TONE (dark .. thin) | LENGTH (tight .. open) |
+
+- **A slice per note (CHOP)**: hold a step and press `z` / `x`: that note gets its own SLICE (chapter 10, "note values"). A row of notes with different slices re-orders the sample.
+- **Pitch**: on a sampler instrument the note keys play the sample at pitches: `z` is the sample as recorded, the others go up the project's scale. In STEP EDIT the note keys set the held note's pitch, `;` / `.` move it a semitone, `ctrl` an octave.
+- **Length**: the note's gate (STEP EDIT, `s`: GATE) is how long the chop is held; then it fades with the instrument's release. STUTTER keeps repeating while the note fades, so a short note gives a short roll and a long one a long roll.
+- **Tape stop (TAPE)**: tilt or move SPEED down while a long note plays and the tape slows, drops in pitch and stops; further down it runs backwards.
+
+**Getting a sound in from the Mac**
+
+*On the desktop app*: the folder `samples/` next to `projects/` holds one file per slot, named by the slot: `01-anything.wav` is slot 1, `12-...` slot 12. Copy WAV files in (any rate, mono or stereo, 16/24-bit or float): they are loaded when the app starts and again whenever a file changes. Or **drop a file on the window**: it goes into the slot of the selected track, replacing what was there (on a Mac any audio file macOS can read works). Files are converted to the slot's format (mono, 22,050 Hz, silence trimmed, at most about 6.2 s, levelled to -1 dBFS).
+
+*On the device*: plug it in, **stop the sequencer**, and from the repository folder on the Mac:
+
+```sh
+tools/pg sample put 3 ~/Music/ohyeah.wav    # convert and put into slot 3 (1-12)
+tools/pg sample list                       # what is in which slot
+tools/pg sample get 3 back.wav             # a slot's audio back as a WAV
+tools/pg sample rm 3                       # empty slot 3 (it plays its built-in sound again)
+```
+
+`put` converts the file on the Mac exactly as the desktop does (any WAV; on a Mac also AIFF, MP3, M4A and anything else `afconvert` reads) and names it after the file (`--name` to choose). The device shows `SAMPLE 3: 45%` while it writes, then `SAMPLE POOL UPDATED`; a sampler instrument plays the new sound from its next note. It refuses while the sequencer plays (writing the device's flash stops the audio for a moment). If a transfer is cut off, that slot is left empty (built-in sound), never half a sample: put it again.
+
+**What is where.** The samples live in a part of the device's flash that projects never use: saving, loading and pushing projects never touches them, and a project only remembers the slot number. A project made with a sample sounds different on a device that has another sample in that slot. Recording from the microphone is not in this version.
+
