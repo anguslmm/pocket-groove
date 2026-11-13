@@ -121,6 +121,8 @@ void Ui::resetForProject(int sel) {
   stepCursor_ = 0;
   songCursor_ = songTop_ = 0;
   undoValid_ = false;
+  undoQueued_ = false;
+  recGest_ = 0;
   clipKind_ = 0;
   outCount_ = 0;
   std::memset(pendSteps_, 0, sizeof(pendSteps_));

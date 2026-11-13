@@ -33,7 +33,7 @@ Each section names what to load: TESTBED, or a factory demo (ACIDJAM, BASSHAUS, 
 
 **Load.** `\` opens PROJECT (LOAD tab); `;` `.` move; Return loads. With unsaved changes it asks: Return discards them, `` ` `` cancels.
 
-**A/B.** Sound and mixer values are not undoable (Control+Z only undoes pattern edits). To compare: note the number, move, come back; or `-` and `=` together for the default; or reload the project you started from (Load, above).
+**A/B.** Sound and mixer values are not undoable (Control+Z only undoes pattern edits: notes, step edits, recording, lengths, cut and paste). To compare: note the number, move, come back; or `-` and `=` together for the default; or reload the project you started from (Load, above).
 
 **Save a snapshot** of anything worth keeping: `\`, `\` again (SAVE AS tab), cursor on `+ NEW NAME...` (top row), Return, Delete to erase the suggested name, type up to 8 characters (A-Z, 0-9, `-`; space types `_`), Return. Write the name in the note. Files land in `projects/NAME.pgv`. After SAVE AS, Control+S saves over that name, so use SAVE AS again for the next snapshot.
 
@@ -562,7 +562,7 @@ SWNG  alive: __-__  dull: __-__  ugly: __-__  dead: _  with: ____  note:
 | DJ filter, bass sweep | `[` `]`; left Shift + `[` `]` |
 | Erase | hold Delete while playing (selected track) |
 | Tempo | hold `tab` + `-` `=`; tap `tab` 3+ times |
-| Copy, paste, undo | Control + `c` / `x` / `v` (track); + left Shift (pattern); Control+`z` undo, again redo (one level, pattern only) |
+| Copy, paste, undo | Control + `c` / `x` / `v` (track); + left Shift (pattern); Control+`z` undo, again redo (one level; every pattern edit, including placing, deleting and editing notes; not sound or mixer values) |
 | Song mode | `p`; `.` to END, step keys append; `-` `=` repeats; `del` removes; `enter` chain on/off from the cursor |
 | Save, load, new | Control+S; SAVE AS and LOAD in `\`; Control+N |
 | Strip | the modifier lights, REC, STATS (Cmd+I) |
