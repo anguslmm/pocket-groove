@@ -24,6 +24,7 @@ namespace audio {
 using RenderFn = void (*)(int16_t* interleavedStereo, int frames, void* user);
 
 constexpr int kBlockFrames = 128;
+constexpr uint32_t kTaskStackBytes = 6144;   // the audio task's stack
 
 enum class Backend : uint8_t { DirectI2S = 0, M5Speaker = 1 };
 
@@ -82,6 +83,16 @@ void  resetStats();
 // Longest render time since the previous takeMaxUs() call (first call: since
 // begin), and resets it. For a periodic stats line; one caller only.
 float takeMaxUs();
+// The report's own window (independent of takeMaxUs): since the previous call,
+// the highest AUD figure (the 64-block moving average, % of one core), the
+// longest single block, and the blocks / underruns / late blocks in it. So
+// "do the thing, then print the report" reads the peak of doing the thing.
+struct Window {
+  float    peakCpuPercent;
+  float    peakBlockUs;
+  uint32_t blocks, underruns, lateBlocks;
+};
+Window takeWindow();
 
 // Profiling: called on the audio task after every block (keep it short, no
 // blocking). Cycle-counter values of the audio core. nullptr removes it.

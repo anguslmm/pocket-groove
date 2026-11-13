@@ -99,9 +99,13 @@ HOT_COMMON = [
     r"^void pg::lead::\(anonymous namespace\)::osc(One|Two)<true>",
     r"^pg::bass::BassVoice::(render|setParams|setParamsFine|mapParams|active|mono)\(",
     r"^pg::bass::\(anonymous namespace\)::mapExp2\(",
-    r"^pg::drums::\w+Voice::(render|renderTonal|renderCowbell|renderShaker|updateCoefs|endBlock|setParams|active|mono)\(",
+    r"^pg::drums::\w+Voice::(render|renderTonal|renderCowbell|renderShaker|endBlock|setParams|active|mono)\(",
     # Not the drums' fractional path (setParamsFine, updateFine): the engine feeds a
     # drum once per evaluation interval (11.6 ms), not per tick, so it stays in flash.
+    # Not updateCoefs either (2.6 KB): DrumVoice::setParams, which runs every quantum,
+    # calls it only when a byte changed (a key, a step's lock: control rate), and at
+    # a hit only when a latched value moved since the last hit; its body calls powf /
+    # expf, which are in flash anyway. The per-quantum compare stays in IRAM.
     # The sampler (stage F1): its per-sample loop and what it runs once per quantum.
     # Not updateTone / setParamsFine (only when a parameter changes: ~1.5 KB) and not
     # its note-on path (startChop, resolve, the pools, the engine's primeNote: once

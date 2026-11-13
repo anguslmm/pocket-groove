@@ -20,8 +20,8 @@ stream-start model); env:cardputer-adv is byte-identical apart from build timest
 Run on the owner's hardware and Mac (2026-11-12, no SD card): AUD mid-40s % with spikes just
 over 50 (jack-only build: about 30), heap 54 KB free / 34 KB minimum-ever (jack-only: 66 / 38),
 0 USB under/overruns, recording free of clicks. It is now the default env (default_envs);
-env:cardputer-adv stays as the jack-only build. Not yet checked on hardware: 32 kHz, unplug and
-sleep, flashing back to the jack-only build, heap with an SD card mounted (expect about 17 KB less).
+env:cardputer-adv stays as the jack-only build. Not yet checked on hardware: DEVICE CHECK
+below, steps 9 and 10 (32 kHz, unplug and sleep, an SD card; flashing back to the jack-only build).
 Stem bounce via tools/pg confirmed working on hardware (2026-11-12).
 
 Desktop app (tools/pg-desktop, host/app, docs/DESKTOP.md): SDL2 window + audio + Mac keyboard
@@ -167,14 +167,7 @@ Order of work (owner, updated 2026-11-12):
    envs warning-free): IRAM functions 85 -> 93 (USB) / 84 -> 92 (jack), .iram0.text +3.9 KB
    (121471 -> 125399, 114535 -> 118467), static RAM +2.5 KB (228212 -> 230700, 227668 ->
    230156), flash +11 KB (1085859 -> 1097103, 1023283 -> 1034595): about 6.4 KB less heap.
-   HARDWARE CHECK (not done): flash env:profile-ram (the shipping IRAM placement; env:profile
-   is the all-flash A/B) and read the MOTION lines (RUN mot-still vs
-   RUN mot-sweep at 44.1 and 32 kHz: the "% of a core" figure should be under ~3, and the
-   sweep's max block should not stand out); then on the instrument hold z/x on ACID's OPEN
-   over a held bass note and compare with stage A (no staircase should be heard), sweep the
-   lab's XY pad, and check the AUD load (`r`) and the minimum-ever heap with two macros
-   moving (the build adds about 6 KB of static RAM + IRAM, so expect the 34 KB minimum to
-   drop by about that).
+   HARDWARE CHECK: DEVICE CHECK below, steps 3 and 10.
    RAM WALL (found 2026-11-13 when stage B and the scope were merged): the USB build's static
    data + IRAM overflowed the linker's data segment (dram0_0_seg, 341.7 KB) by 1.2 KB. Static
    growth costs heap 1:1 until that segment is full, and then the link fails; the rest of the
@@ -217,14 +210,7 @@ Order of work (owner, updated 2026-11-12):
    0x3FCD3FA0 / 0x3FCD1E10 -> 0x3FCD2280, IRAM functions 93 -> 95 / 92 -> 94,
    .iram0.text 125963 -> 126891 / 119023 -> 119951 (motionStep, per step, and macroPos,
    for the published positions, joined the placement lists).
-   HARDWARE CHECK (not done): on the device, ACID on the bass, two notes a bar apart with
-   different OPEN (hold step 1, z z z; hold step 9, x x x): the filter should open in one smooth
-   sweep between them with no steps; the sliders should move with it; a recording pass (enter,
-   hold c/v while playing) should come back on the next loop and undo with ctrl+z; AUD load (`r`)
-   with motion on bass and lead at once (a glide is a moving macro: stage B's ~1.3 % per track by
-   estimate); minimum-ever heap (the build moved _heap_start by about 1.1 KB). The owner's ears:
-   whether 63 levels per note are enough, whether one bar is the right "still" time for live, and
-   whether resting at Stop (instead of returning to the base) feels right.
+   HARDWARE CHECK: DEVICE CHECK below, step 4.
    STAGE D DONE (2026-11-13, branch of the tilt worktree): TILT MOVES THE MACROS. Hold G0 and
    tilt: two macros of the selected track's instrument follow the roll (X) and the tip away /
    toward (Y), from the pose at the press (any holding angle), from every view; release glides
@@ -280,16 +266,7 @@ Order of work (owner, updated 2026-11-12):
    Latency (estimate): reading age ~5 ms + smoothing 6-27 ms + loop wakeup <= 5 ms + the 15 ms
    glide + the audio buffer 17 ms = about 45-70 ms (the spike: 31-36 ms at 200 Hz without the
    UI hop; the stage as first built read at 50 Hz with a 30 ms glide, 65-90 ms).
-   HARDWARE CHECK (not done; only the device can confirm): the chip's orientation (roll right
-   must move X up, tipping the far edge away Y up: else flip kSignX / kSignY or kSwapXY in
-   src/app/tilt_input.cpp; the spike's `rest:` line answers it), the [imu] report line (reads,
-   12-byte read time, stack free of 3072), key events while tilting (none lost: type fast with
-   G0 held), the CPU load of core 1 while held, whether 30 deg from the middle to an end feels
-   right per axis (pitch is less comfortable than roll), whether the fused responses start
-   cleanly from the press without a boot gyro calibration (a creep would show as a slow drift
-   inside the dead zone), the 65-90 ms feel against the spike's, the 150 ms tap threshold
-   against the double tap, and the minimum-ever heap (about 1 KB more static RAM + IRAM, 3.4 KB
-   of task stack and control block from the heap).
+   HARDWARE CHECK: DEVICE CHECK below, steps 5 and 6.
    SHAKE (2026-11-13, branch of the shaker worktree): A SHAKER INSTRUMENT FOR PERC, closing stage
    G's shaker gap. macros/perc/shake.pgm on the voice's SHKR model (the model was always there;
    no instrument used it), in builtin.txt after TAP and TRAIL. Four Opposites macros, each
@@ -392,13 +369,9 @@ Order of work (owner, updated 2026-11-12):
    test_sample_convert, macro_audit_test_sample, check_rom_samples new). WAVs (not committed):
    build/sampler/{chop,tape,stutter}.wav (with kick and hats), build/sampler_solo/ (alone),
    from host/tools/sampler_demo. NOT LISTENED TO.
-   ONLY THE DEVICE CAN CONFIRM: mapping 3.19 MB of app1 next to the app's own mappings
-   (boot log `[boot] samples: app1 mapped ...`); the CPU cost (and that a chop from mapped
-   flash does not glitch beside the full groove); that esp_partition_write leaves the
-   mapping coherent (commit checks it and answers ERR VERIFY if not); the audio gap while a
-   slot is written (stopped transport only, but notes played by hand stutter); the transfer
-   speed (~273 KB of base64 lines at 128 bytes each, about 2,150 round trips: est. 20-40 s for a
-   full slot); the minimum free heap after the IRAM growth; and all of it by ear.
+   Measured on the owner's device (2026-11-13, current main, USB build, a song with STUTTER
+   playing and USB recording): it works, the app1 mapping succeeds; AUD about 50 %, heap 34 KB
+   free, 13 KB minimum-ever (see RAM PASS below). Still open: DEVICE CHECK below, step 7.
    F2 (microphone recording) NEEDS FROM F1: the pool's write side is ready (SampleWriter:
    begin / write in order / commit, erase per sector as data arrives, header last), so a
    recorder only has to stream mono int16 at 22,050 Hz into it (resample the codec's 44.1 kHz
@@ -407,6 +380,91 @@ Order of work (owner, updated 2026-11-12):
    nothing lost) are F2's. A UI to arm / record / trim, and a decision whether recording is
    allowed while the transport plays (the spike recorded while streaming fine; writing stalls
    the CPU, the audio DMA ring must cover it).
+   RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
+   device). Measured on the owner's device just before (current main, USB build, a song with
+   STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at
+   some moment. FOUND (from the code): the SD mount at boot with NO CARD in the slot. Arduino's
+   SD.begin() registers the FAT VFS before it talks to the card, which allocates the volume
+   (FATFS, 4 KB window) and max_files file objects (4 KB sector buffer each, CONFIG_FATFS_PER_FILE
+   _CACHE): ~18.5 KB with the USB build's 3 files, ~27.7 KB with the jack build's 5, on top of the
+   mount task's 8 KB stack; f_mount then finds no card and it is all freed. It matches both
+   earlier measurements: free - min was 28 KB in the jack build and 20 KB in the USB build, and
+   the difference is exactly the two file objects the USB build dropped. FIX (src/platform/
+   storage.cpp): the mount task first runs the step f_mount would fail on, the SD library's own
+   disk_initialize (power-up clocks, CMD0, CRC, IF_COND, ACMD41) with only its card record
+   allocated, and calls SD.begin() only when a card answered. No card: same "no card/failed"
+   state as before, nothing else allocated. With a card: its initialisation runs twice (a few
+   tens of ms at boot, inside the existing 1.5 s SD wait), then everything as before (the volume
+   and file buffers stay allocated while it is mounted, as before). EXPECTED (estimate, not
+   measured): minimum-ever close to the free heap, about 30-35 KB in the owner's situation
+   (34 KB free + 1.7 KB from the build below, minus the mount task's transient 8 KB stack, which
+   overlaps a part of boot where the audio task and its DMA buffers, ~9 KB, do not exist yet).
+   The report's new `[ram] sd mount` line and the boot-phase line say whether that is right.
+   Build savings (certain, from the link maps): the drums' updateCoefs (kick, snare, clap, hat,
+   perc) left IRAM: they run when a parameter byte changes (keys, CLASSIC locks) or once at a
+   hit after a latched value moved, never per quantum, and call powf / expf from flash anyway;
+   the per-quantum compare (DrumVoice::setParams) stays in IRAM. Nothing per-sample moved.
+   Figures, before -> after (clean builds, warning-free in our sources, placement checks OK):
+   USB: flash 1288151 -> 1293031, static RAM 200892 -> 201172, .iram0.text 129807 -> 127791,
+   _heap_start 0x3FCD50C0 -> 0x3FCD49D8 (+1768 B heap), IRAM functions 107 -> 102; jack: flash
+   1225551 -> 1230827, static RAM 200364 -> 200652, .iram0.text 122863 -> 120847, _heap_start
+   0x3FCD33B0 -> 0x3FCD2CD0 (+1760 B), IRAM functions 106 -> 101. (Static +280 B is the new
+   diagnostics' state: the task table's previous run times, the IMU's last reading, the audio
+   report window, the engine's queue peak.) Where the RAM is now (USB build): static 201 KB =
+   engine state 71.6 KB (delay line 33.2, reverb 27.3, command queue 4.1, tracks 5.2, scope 1.0),
+   Instrument 70.8 KB (Project 67.1, voices 3.7), Ui 18.0 KB (two undo / write Patterns and the
+   clipboard 12.5), framework ~41 KB (ISR stacks 4.2, USB IN FIFO 3.1, display strips 2.9, M5
+   2.1, core dump stack 1.9, ...); IRAM 127.8 KB (our audio code 55 KB, IDF / FreeRTOS / flash
+   driver ~63 KB); heap at boot: frame buffer 32.9 KB, loop task 12 KB, esp_timer task 8 KB,
+   audio 6 KB, keys 4 KB, usbd 4 KB, IMU 3 KB, Tmr Svc 3 KB, ipc 2 x 2 KB, USB events 2 KB, idle
+   2 x 1 KB, I2S DMA ~2.5 KB, LittleFS ~1.5 KB. Not changed (need a measured high-water mark
+   first, which the new report prints): every task stack. Options that change behaviour or the
+   format, ranked, are in the lead's report of this pass, not built.
+   The report (serial `r`, both builds) is now one block between `===== POCKET GROOVE REPORT
+   BEGIN` and `===== POCKET GROOVE REPORT END =====`, and its peaks are since the previous
+   report, so "do the thing, then press r" reads the thing. New: `[sys] window`; `[ram]` boot
+   phases in both builds, the SD mount's minimum before / after, and a `[ram] heap min-ever fell`
+   log line whenever the minimum drops at run time (checked every frame, with playing /
+   transfer / tilt); `[task]` one line per FreeRTOS task (core, priority, stack free of its size,
+   CPU share over the window) and `[cpu]` both cores' load over the window (idle-task run time);
+   `[audio] window` (AUD now and peak, longest block, underruns and late blocks in the window);
+   `[engine]` command queue peak (of 256) and dropped commands; `[imu]` work per reading and its
+   share of core 1, core 1's load over the last G0 hold, the last reading of the hold, and the
+   gravity vector now (8 readings while G0 is up: which chip axis points down); `[samples]` one
+   line per filled slot (name, length, rate, peak, CRC). env:profile / profile-ram: SAMPLER
+   lines (ACIDJAM with PERC on CHOP, then STUTTER: the sampler's render cycles per frame while it
+   sounds and as % of a core, its noteOn and setParams cost), with the app1 pool mapped as on the
+   instrument. Cost: flash +4.9 KB, static RAM +280 B, ~1 KB of the loop task's stack while `r`
+   runs, ~80 ms of the UI loop per `r` (the gravity readings); nothing between reports except
+   one heap-counter read per frame and two compares per audio block.
+   DEVICE CHECK (the owner, one flash of env:cardputer-adv-usb, no SD card unless step 10; a
+   serial monitor open the whole time; after each step paste the whole block from `===== POCKET
+   GROOVE REPORT BEGIN` to `END`, plus any `[ram] heap min-ever fell` lines printed since):
+   1. Boot: power on, open the monitor, type `l` (the boot log) and then `r`. Paste both.
+   2. Load: play the song with STUTTER, recording the USB input on the Mac, for a minute; `r`.
+   3. Moving macros: on the bass (ACID) hold `z` / `x` then `c` / `v` for ~10 s while it plays;
+      `r`. Listen: no staircase on the slow sweep.
+   4. Motion: ACID, step 1 + `z z z`, step 9 + `x x x`: the filter should open in one smooth sweep
+      and the sliders move with it; record a pass (enter, hold `c` / `v` while playing), it plays
+      back on the next loop and `ctrl+z` undoes it; give the lead motion too; `r`. Say whether 63
+      levels per note, one bar of "still", and resting at Stop feel right.
+   5. Tilt orientation: lay the device flat, keys up, `r`; hold it with the right side down
+      (rolled ~30 deg), `r`; hold it with the far edge down (tipped away), `r`. Paste the three
+      `[imu] gravity now` lines (they say which chip axis and sign is "roll right" and "away").
+   6. Tilt feel: while playing, hold G0 and tilt for ~10 s, type fast on the pads with G0 held,
+      release; `r`. Say: does roll right move X up and tipping away move Y up, is 30 deg a good
+      range per axis, any slow creep inside the dead zone, any lost keys, does a quick tap or the
+      double tap ever tilt, how the latency feels against the spike.
+   7. Sampler: PERC on CHOP (then STUTTER) playing over the full groove for 30 s; `r`. Stop, then
+      `tools/pg sample put` a WAV into slot 1 and time it; `r`. Say: any glitch of a chop beside
+      the groove, how long the put took.
+   8. Files: save the project, load a demo, load it back, `tools/pg pull` and `push` one
+      project; `r`.
+   9. 32 kHz and USB: boot menu, `1 SAMPLE RATE` 32 kHz, play for a minute; `r`. Pull the cable
+      for 10 s (or let the Mac sleep), plug it in again; `r`.
+   10. Then (optional, separate flashes): an SD card in, reboot, `r` (the `[ram] sd mount` line
+      and the free heap with a card); env:profile-ram, wait ~10 min, paste the PG-PROFILE block
+      (MOTION and SAMPLER lines); env:cardputer-adv once, `r`, then back to the USB build.
    LATER STAGES (not built): (F2) microphone recording into the sample pool.
    STANDING TASTE RULE (owner, 2026-11-13: "get the stupid tag lines for each synth out of there"):
    no descriptive captions for instruments on the screen. `about "..."` stays in the .pgm as an

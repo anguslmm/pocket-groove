@@ -56,8 +56,16 @@ struct Stats {
   uint32_t busAvgUs;   // one 12-byte burst (busy-waited by M5's I2C layer), running average
   uint32_t busMaxUs;
   uint32_t stackFree;  // the task's unused stack, bytes (high-water mark)
+  uint32_t workAvgUs;  // one reading's whole work on the task (bus + tilt tracker), running average:
+                       // workAvgUs * kPollHz / 10000 = % of core 1 the task takes while G0 is held
+  Raw last;            // the newest reading of the last hold
 };
 Stats stats();
+
+// Diagnostics, UI thread, only while the task is asleep (G0 up): reads n bursts
+// (one per sensor period) and averages them. At rest the accelerometer part is
+// the gravity vector in chip axes, which tells how the chip sits in the case.
+bool sampleAtRest(Raw* avg, int n);
 
 }  // namespace imu
 }  // namespace plat

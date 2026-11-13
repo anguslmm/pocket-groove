@@ -396,7 +396,7 @@ The browser flasher from section 3 works the same way with `pocket-groove.bin` a
 | hold **G0** + `-` / `=` | codec (analog) output volume -2 / +2 dB, 0 dB maximum; a bar shows the level. Saved after 2 s, once playback is stopped. At power-on a saved level above -12 dB is restored as -12 dB. The UI's master volume is a separate, digital control. |
 | **G0** double-tap | diagnostics strip at the bottom of the screen on/off: audio CPU % and avg/max/period block time in µs, underruns (`U`), free heap / min-ever free heap, sample rate and backend, keyboard mode (`INT` = interrupt line works, `POLL` = found only by polling, `MIXED`, `NOKBD` = controller missing), UI frame time |
 | any key after the screen dimmed | only wakes the screen (it dims after 60 s without a key while stopped) |
-| serial `r` | full diagnostics report (`===== POCKET GROOVE REPORT` ... `===== END REPORT =====`); `h` prints the serial help |
+| serial `r` | full diagnostics report (`===== POCKET GROOVE REPORT BEGIN` ... `===== POCKET GROOVE REPORT END =====`; peaks since the previous report; docs/STATE.md "DEVICE CHECK"); `h` prints the serial help |
 | serial `m` during the first ~0.3 s of boot | opens the boot menu (same as holding a key; rarely practical, because the USB port re-enumerates at every reset) |
 
 A red line at the bottom means audio did not start (with the reason) or the audio CPU load stayed above 90% for more than a second at 44.1 kHz (switch to 32 kHz in the boot menu). Double-tap G0 to see the details.
@@ -414,7 +414,7 @@ A red line at the bottom means audio did not start (with the reason) or the audi
 
 ### What to report back
 
-1. The serial log from power-on (the `[boot]` lines, including `reset reason`), plus one `r` report after a few minutes of playing (or photos of the screen with the diagnostics strip on). The report's `[stack]` line (free stack per task) and `[keys]` line (`drops`, `fifo ovf`, `i2c err`) matter to us even when everything works.
+1. The serial log from power-on (the `[boot]` lines, including `reset reason`), plus one `r` report after a few minutes of playing (or photos of the screen with the diagnostics strip on). The report's `[task]` lines (free stack per task) and `[keys]` line (`drops`, `fifo ovf`, `i2c err`) matter to us even when everything works.
 2. Did it boot to the demo? Any reboot (the boot menu will tell you the reason)?
 3. Sound: clean? Clicks, crackles or dropouts during normal playing? The `U` (underrun) count in the strip after a minute of play.
 4. Audio CPU % with the demo playing (the strip's first line), at 44.1 kHz and, if you try it, at 32 kHz.

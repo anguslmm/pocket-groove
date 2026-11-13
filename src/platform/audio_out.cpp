@@ -52,7 +52,7 @@ constexpr int      kPinBclk     = 41;
 constexpr int      kPinWs       = 43;
 constexpr int      kPinDout     = 42;
 constexpr int      kTaskPrio    = 20;         // above every app task, below esp_timer (22) and IPC (24)
-constexpr uint32_t kTaskStack   = 6144;       // bytes; high-water mark is reported in Stats
+constexpr uint32_t kTaskStack   = kTaskStackBytes;   // high-water mark is reported in Stats
 constexpr int      kRotBuffers  = 4;          // M5Speaker backend: playRaw keeps pointers (current + 1 queued)
 constexpr uint8_t  kM5MasterVol = 180;        // with magnification 16 this is ~unity gain (-0.17 dB), see begin
 
@@ -81,6 +81,10 @@ struct State {
   // Windowed maxima: takeMaxUs() swaps winMaxCyc out (max since the previous
   // call); recentPrev/recentCur are the max of the last two ~1 s windows.
   std::atomic<uint32_t> winMaxCyc{0};
+  // takeWindow(): the same for the report (its own window), plus the highest
+  // moving average (the AUD figure) seen in it.
+  std::atomic<uint32_t> repMaxCyc{0};
+  std::atomic<uint32_t> repMaxAvgCyc{0};
   volatile uint32_t recentPrev = 0, recentCur = 0;
   uint32_t recentCount = 0;
 };
@@ -209,6 +213,11 @@ void audioTask(void*) {
     const uint32_t gapCyc = havePrev ? t0 - prevStart : 0;
     const float avg = s.avgCyc;
     s.avgCyc = (avg == 0.0f) ? static_cast<float>(dt) : avg + (static_cast<float>(dt) - avg) * (1.0f / 64.0f);
+    if (dt > s.repMaxCyc.load(std::memory_order_relaxed)) s.repMaxCyc.store(dt, std::memory_order_relaxed);
+    {
+      const uint32_t a = static_cast<uint32_t>(s.avgCyc);
+      if (a > s.repMaxAvgCyc.load(std::memory_order_relaxed)) s.repMaxAvgCyc.store(a, std::memory_order_relaxed);
+    }
     if (dt > period) s.lateBlocks = s.lateBlocks + 1;
     if (havePrev) {
       const uint32_t gap = t0 - prevStart;
@@ -551,6 +560,24 @@ Stats stats() {
 float takeMaxUs() {
   const uint32_t c = s.winMaxCyc.exchange(0);
   return static_cast<float>(c) / static_cast<float>(s.cyclesPerUs ? s.cyclesPerUs : 240);
+}
+
+Window takeWindow() {
+  static uint32_t prevBlocks = 0, prevUnder = 0, prevLate = 0;
+  Window w;
+  const float perUs = 1.0f / static_cast<float>(s.cyclesPerUs ? s.cyclesPerUs : 240);
+  const uint32_t mx = s.repMaxCyc.exchange(0), av = s.repMaxAvgCyc.exchange(0);
+  w.peakBlockUs = static_cast<float>(mx) * perUs;
+  w.peakCpuPercent = s.periodCycles ? 100.0f * static_cast<float>(av) / static_cast<float>(s.periodCycles) : 0.0f;
+  const uint32_t b = s.blocks, u = s_underruns, l = s.lateBlocks;
+  // A restart of the audio task resets its counters: count from zero then.
+  w.blocks = b >= prevBlocks ? b - prevBlocks : b;
+  w.underruns = u >= prevUnder ? u - prevUnder : u;
+  w.lateBlocks = l >= prevLate ? l - prevLate : l;
+  prevBlocks = b;
+  prevUnder = u;
+  prevLate = l;
+  return w;
 }
 
 void setBlockObserver(void (*fn)(const BlockInfo&, void*), void* user) {

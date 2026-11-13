@@ -149,6 +149,7 @@ struct State {
   Command queue[kQueueSize];
   std::atomic<uint32_t> qHead;        // consumer (audio thread)
   std::atomic<uint32_t> qTail;        // producer (UI thread)
+  uint32_t qPeak;                     // UI thread: most commands waiting at once (Engine::queuePeak)
 
   // ---- audio -> UI status ----
   std::atomic<bool> aPlaying, aRecording;
@@ -2970,8 +2971,11 @@ bool Engine::post(const Command& c) {
   if (t - h >= uint32_t(engine_detail::kQueueSize)) return false;
   s.queue[t & (engine_detail::kQueueSize - 1)] = c;
   s.qTail.store(t + 1, std::memory_order_release);
+  if (t + 1 - h > s.qPeak) s.qPeak = t + 1 - h;
   return true;
 }
+
+uint32_t Engine::queuePeak() const { return impl_->qPeak; }
 
 bool Engine::isPlaying() const { return impl_->aPlaying.load(std::memory_order_relaxed); }
 

@@ -95,6 +95,23 @@ uint32_t staticDramBytes();
 // Unused stack of the calling task, in bytes, since it started.
 uint32_t stackFreeMinSelf();
 
+// ---- tasks and CPU load (FreeRTOS run-time stats, esp_timer microseconds) ----
+struct TaskRow {
+  char     name[20];
+  int8_t   core;            // pinned core, -1 = either
+  uint8_t  prio;
+  uint32_t stackFree;       // bytes never used since the task started (high-water mark)
+  uint32_t stackSize;       // bytes, 0 = not known here (the caller knows its own tasks')
+  uint32_t runUs;           // run time since the previous taskTable() call (first call: since boot)
+};
+// Every task that exists now, sorted by name; returns how many were written (at
+// most cap). Each call measures run times from the previous call (*elapsedUs =
+// the wall time between the two). Not real-time: walks the scheduler's lists.
+int taskTable(TaskRow* rows, int cap, uint32_t* elapsedUs);
+// Time the idle task of `core` has run since boot (microseconds): the share of a
+// stretch NOT spent in it is that core's load.
+uint64_t idleRunUs(int core);
+
 // ---- reset cause -------------------------------------------------------------
 // true if the previous run ended in a crash, a watchdog reset or a brownout
 // (anything the firmware did not ask for): panic, int/task/other WDT, brownout.

@@ -277,6 +277,9 @@ class Engine {
 
   // ---- UI thread ----------------------------------------------------------
   bool post(const Command& c);       // false if the queue is full
+  // Diagnostics: the most commands that were ever waiting in the queue at once
+  // (seen by post(); the queue holds 256), so its size can be judged on the device.
+  uint32_t queuePeak() const;
   EngineStatus status();             // snapshot; resets peak hold
   bool isPlaying() const;            // transport running? No side effects (status() resets the peak hold)
   uint8_t instrumentRefreshes() const;   // as in status(), without its side effects

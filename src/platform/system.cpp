@@ -265,6 +265,67 @@ uint32_t staticDramBytes() {
 }
 uint32_t stackFreeMinSelf() { return static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr)); }
 
+namespace {
+// Stack sizes of the tasks this firmware does not create itself (the prebuilt
+// sdkconfig and the Arduino core's sources); the app knows its own.
+struct KnownStack { const char* name; uint32_t bytes; };
+constexpr KnownStack kKnownStacks[] = {
+    {"usbd", 4096},    // cores/esp32/esp32-hal-tinyusb.c
+    {"arduino_usb_events", CONFIG_ARDUINO_SERIAL_EVENT_TASK_STACK_SIZE},
+    {"esp_timer", CONFIG_ESP_TIMER_TASK_STACK_SIZE},
+    {"Tmr Svc", CONFIG_FREERTOS_TIMER_TASK_STACK_DEPTH},
+    {"ipc0", CONFIG_ESP_IPC_TASK_STACK_SIZE},
+    {"ipc1", CONFIG_ESP_IPC_TASK_STACK_SIZE},
+    {"IDLE0", CONFIG_FREERTOS_IDLE_TASK_STACKSIZE},
+    {"IDLE1", CONFIG_FREERTOS_IDLE_TASK_STACKSIZE},
+};
+constexpr int kMaxTasks = 24;
+struct PrevRun { UBaseType_t num; uint32_t rt; };
+PrevRun s_prevRun[kMaxTasks] = {};
+uint32_t s_prevTotal = 0;
+}  // namespace
+
+int taskTable(TaskRow* rows, int cap, uint32_t* elapsedUs) {
+  // ~1 KB of the caller's stack for this call only (static would cost heap for
+  // good; a heap block would show up in the minimum-ever the report prints).
+  TaskStatus_t st[kMaxTasks];
+  configRUN_TIME_COUNTER_TYPE total = 0;
+  const UBaseType_t n = uxTaskGetSystemState(st, kMaxTasks, &total);
+  const uint32_t tot = static_cast<uint32_t>(total);
+  if (elapsedUs) *elapsedUs = tot - s_prevTotal;
+  s_prevTotal = tot;
+  PrevRun now[kMaxTasks] = {};
+  int out = 0;
+  for (UBaseType_t i = 0; i < n; ++i) {
+    const TaskStatus_t& t = st[i];
+    const uint32_t rt = static_cast<uint32_t>(t.ulRunTimeCounter);
+    uint32_t before = 0;
+    for (const PrevRun& p : s_prevRun)
+      if (p.num != 0 && p.num == t.xTaskNumber) before = p.rt;
+    now[i] = {t.xTaskNumber, rt};
+    if (out >= cap) continue;
+    TaskRow& r = rows[out++];
+    strlcpy(r.name, t.pcTaskName ? t.pcTaskName : "?", sizeof(r.name));
+    r.core = t.xCoreID == tskNO_AFFINITY ? -1 : static_cast<int8_t>(t.xCoreID);
+    r.prio = static_cast<uint8_t>(t.uxBasePriority);
+    r.stackFree = static_cast<uint32_t>(t.usStackHighWaterMark);   // bytes on this port (StackType_t is uint8_t)
+    r.stackSize = 0;
+    for (const KnownStack& k : kKnownStacks)
+      if (strcmp(k.name, r.name) == 0) r.stackSize = k.bytes;
+    r.runUs = rt - before;
+  }
+  memcpy(s_prevRun, now, sizeof(s_prevRun));
+  for (int i = 1; i < out; ++i)   // by name, so the table reads the same every time
+    for (int j = i; j > 0 && strcmp(rows[j - 1].name, rows[j].name) > 0; --j) {
+      const TaskRow tmp = rows[j - 1];
+      rows[j - 1] = rows[j];
+      rows[j] = tmp;
+    }
+  return out;
+}
+
+uint64_t idleRunUs(int core) { return static_cast<uint64_t>(ulTaskGetIdleRunTimeCounterForCore(core)); }
+
 bool resetWasAbnormal() {
   switch (esp_reset_reason()) {
     case ESP_RST_PANIC:

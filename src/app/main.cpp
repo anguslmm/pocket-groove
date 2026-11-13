@@ -21,7 +21,8 @@
 //   G0 double-tap         diagnostics strip on/off (a tap never tilts: Ui::kTiltEngageMs)
 //   first key after the backlight dimmed: only wakes the screen
 // Boot menu: hold any key at power-on (or after a crash: automatic).
-// Serial (USB CDC): 'r' full report, 'h' help; a stats line every 5 s.
+// Serial (USB CDC): 'r' full report (peaks since the previous one; docs/STATE.md "DEVICE
+// CHECK"), 'h' help; a stats line every 5 s.
 // Project transfer on the same port (tools/pg ls / pull / push): lines that
 // start with "~PGX ", handled by pg::io::Xfer (protocol in pg/io/xfer.h).
 //
@@ -138,7 +139,6 @@ bool g_overloadWarn = false, g_overloadAck = false;
 float g_frameUs = 0, g_frameMaxUs = 0;
 uint32_t g_lastDiagMs = 0, g_lastStatsMs = 0, g_lastBattMs = 0;
 int g_battPct = -1, g_battMv = -1;
-uint32_t g_loopStackFree = 0;
 #if PG_USB_AUDIO
 namespace usb = plat::usbaudio;
 uint32_t g_usbRate = 0;               // the rate in the USB descriptor (fixed for this boot)
@@ -148,14 +148,26 @@ bool g_hostWasListening = false, g_bootLogReplayed = false;
 std::atomic<bool> g_dlReq{false};     // 1200-baud touch (USB event task) -> loop
 char g_pending = 0;                   // 'm' or 'B' waiting for 'y'
 uint32_t g_pendingMs = 0;
-// Heap minimum-ever as boot went on, to find what takes the heap at its low
-// point: [0] after sys::begin, [1] storage, [2] USB, [3] boot menu + SD,
-// [4] UI boot (session load), [5] audio. Runtime drops are logged.
-uint32_t g_minAt[6] = {};
-uint32_t g_minSeen = 0, g_minDropMs = 0;
 // For the strip: counters one second ago, so the colour shows what is happening now.
 uint32_t g_usbPrevBad = 0, g_usbBadMs = 0;
 #endif
+// Heap minimum-ever as boot went on, to find what takes the heap at its low
+// point: [0] after sys::begin, [1] storage, [2] USB (= [1] in the jack build),
+// [3] boot menu + SD, [4] UI boot (session load), [5] audio. Runtime drops are
+// logged with the time and what was going on.
+uint32_t g_minAt[6] = {};
+uint32_t g_minSeen = 0, g_minDropMs = 0;
+// The report's window (audio peaks, task run times) starts at the previous report.
+uint32_t g_lastReportMs = 0;
+#if PG_USB_AUDIO
+constexpr const char* kBuildName = "USB audio";
+#else
+constexpr const char* kBuildName = "jack only";
+#endif
+// Tilt: the load of core 1 while G0 was held (all its tasks: UI loop, keys, IMU,
+// USB), from the idle task's run time over the hold.
+uint64_t g_holdIdle1 = 0, g_holdT0 = 0;
+uint32_t g_holdPct10 = 0, g_holdMaxPct10 = 0, g_holdMs = 0, g_holds = 0;
 
 void sp(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void sp(const char* fmt, ...) {
@@ -238,6 +250,16 @@ void handleKey(const keys::Event& e, uint32_t now) {
       } else {
         g_g0HaveTap = false;     // a hold (or a volume gesture) in between cancels a pending first tap
       }
+      if (g_g0Held && g_holdT0) {
+        const uint64_t dt = sys::micros() - g_holdT0, idle = sys::idleRunUs(1) - g_holdIdle1;
+        if (dt >= 300000) {   // a tap says nothing about the load
+          g_holdPct10 = idle >= dt ? 0u : static_cast<uint32_t>((dt - idle) * 1000u / dt);
+          if (g_holdPct10 > g_holdMaxPct10) g_holdMaxPct10 = g_holdPct10;
+          g_holdMs = static_cast<uint32_t>(dt / 1000u);
+          ++g_holds;
+        }
+      }
+      g_holdT0 = 0;
       g_g0Held = false;
       g_ui.tiltRelease(now);
       app::tilt::release();
@@ -262,6 +284,8 @@ void handleKey(const keys::Event& e, uint32_t now) {
     g_g0Held = true;
     g_g0UsedForVol = false;
     g_g0DownUs = e.tIntUs;
+    g_holdT0 = sys::micros();
+    g_holdIdle1 = sys::idleRunUs(1);
     if (g_imuOk) g_ui.tiltPress(now);   // the pose now is the zero; it engages after a tap's time
     if (g_ui.tiltHeld()) {
       const pg::ui::Ui::TiltSpec ts = g_ui.tiltSpec();
@@ -366,47 +390,99 @@ void enterDownloadMode(const char* why) {
 void onDownloadRequest(void*) { g_dlReq.store(true); }
 #endif
 
+// Stack sizes of the tasks this file starts (the platform layer knows the framework's).
+uint32_t ourStackSize(const char* name) {
+  if (strcmp(name, "pg_audio") == 0) return audio::kTaskStackBytes;
+  if (strcmp(name, "pg_keys") == 0) return keys::kTaskStackBytes;
+  if (strcmp(name, "pg_imu") == 0) return plat::imu::kTaskStack;
+  if (strcmp(name, "loopTask") == 0) return static_cast<uint32_t>(getArduinoLoopTaskStackSize());
+  if (strcmp(name, "pg_sdmount") == 0) return 8192;
+  return 0;
+}
+
+// 'r': everything the hardware checks need, between the BEGIN / END lines
+// (docs/STATE.md "Device check"). Peaks are since the previous report, so
+// "do the thing, then press r" reads the thing. Costs nothing between reports.
 void printReport() {
+  const uint32_t nowMs = sys::millis();
+  const uint32_t winMs = nowMs - g_lastReportMs;
+  g_lastReportMs = nowMs;
   const audio::Stats as = audio::stats();
+  const audio::Window aw = audio::takeWindow();
   const sys::HeapInfo h = sys::heap();
   const keys::Stats ks = keys::stats();
   const disp::Stats ds = disp::stats();
   storage::refreshUsage();   // walks the LittleFS metadata: on request only, never per frame
   const storage::Info si = storage::info();
-  sp("\n===== POCKET GROOVE REPORT %s =====\n", PG_VERSION);
-  sp("[sys] uptime %lus, reset %s%s, board %s, %s %luMHz, PSRAM %s, IDF %s, arduino %s\n",
-     static_cast<unsigned long>(sys::millis() / 1000), g_chip.resetReason, g_abnormal ? " (ABNORMAL)" : "",
+  sp("\n===== POCKET GROOVE REPORT BEGIN %s =====\n", PG_VERSION);
+  sp("[sys] uptime %lus, reset %s%s, board %s, %s %luMHz, PSRAM %s, IDF %s, arduino %s, build %s\n",
+     static_cast<unsigned long>(nowMs / 1000), g_chip.resetReason, g_abnormal ? " (ABNORMAL)" : "",
      sys::bootInfo().boardName, g_chip.model, static_cast<unsigned long>(g_chip.cpuMhz),
-     g_chip.psramFound ? "yes" : "no", g_chip.idfVersion, g_chip.coreVersion);
-  sp("[ram] static DRAM %lu B (instrument %lu, ui %lu, fb %lu); heap total %lu\n",
+     g_chip.psramFound ? "yes" : "no", g_chip.idfVersion, g_chip.coreVersion, kBuildName);
+  sp("[sys] window: %lu.%lu s since the previous report (peaks and run times below are over it)\n",
+     static_cast<unsigned long>(winMs / 1000), static_cast<unsigned long>(winMs % 1000 / 100));
+  // ---- memory
+  sp("[ram] static DRAM %lu B (instrument %lu, ui %lu, fb %lu on the heap); heap total %lu\n",
      static_cast<unsigned long>(sys::staticDramBytes()), static_cast<unsigned long>(pg::Instrument::staticRamBytes()),
      static_cast<unsigned long>(sizeof(g_ui)), static_cast<unsigned long>(sizeof(g_fb)),
      static_cast<unsigned long>(h.totalBytes));
-  sp("[ram] heap free %lu, min-ever %lu, largest %lu (boot %lu, after init %lu)\n",
+  sp("[ram] heap free %lu, min-ever %lu, largest block %lu (boot %lu, after init %lu)\n",
      static_cast<unsigned long>(h.freeBytes), static_cast<unsigned long>(h.minEverFree),
      static_cast<unsigned long>(h.largestBlock), static_cast<unsigned long>(g_heapBoot.freeBytes),
      static_cast<unsigned long>(g_heapReady.freeBytes));
-#if PG_USB_AUDIO
   sp("[ram] min-ever free during boot: begin %lu, storage %lu, usb %lu, menu+sd %lu, ui %lu, audio %lu; "
      "last runtime drop at t=%lus\n",
      static_cast<unsigned long>(g_minAt[0]), static_cast<unsigned long>(g_minAt[1]),
      static_cast<unsigned long>(g_minAt[2]), static_cast<unsigned long>(g_minAt[3]),
      static_cast<unsigned long>(g_minAt[4]), static_cast<unsigned long>(g_minAt[5]),
      static_cast<unsigned long>(g_minDropMs / 1000));
-#endif
-  sp("[stack] free min: audio %lu, keys %lu, loop %lu (of 6144 / 4096 / 12288)\n",
-     static_cast<unsigned long>(as.stackFreeMin), static_cast<unsigned long>(keys::taskStackFree()),
-     static_cast<unsigned long>(g_loopStackFree));
+  sp("[ram] sd mount at boot: card %s, heap min-ever %lu when it began, %lu when it ended (%lu ms)\n",
+     si.sdProbed ? "answered (mounted: its FAT volume and 3-5 file buffers stay on the heap)" : "did not answer (nothing mounted)",
+     static_cast<unsigned long>(si.sdMinHeapBefore), static_cast<unsigned long>(si.sdMinHeapAfter),
+     static_cast<unsigned long>(si.sdMountMs));
+  // ---- tasks: stacks and run time over the window
+  {
+    sys::TaskRow rows[24];
+    uint32_t elUs = 0;
+    const int n = sys::taskTable(rows, 24, &elUs);
+    uint32_t idle[2] = {0, 0};
+    for (int i = 0; i < n; ++i) {
+      sys::TaskRow& r = rows[i];
+      if (!r.stackSize) r.stackSize = ourStackSize(r.name);
+      if (strcmp(r.name, "IDLE0") == 0) idle[0] = r.runUs;
+      if (strcmp(r.name, "IDLE1") == 0) idle[1] = r.runUs;
+      const int pct10 = elUs ? static_cast<int>(static_cast<uint64_t>(r.runUs) * 1000u / elUs) : 0;
+      char size[12];
+      if (r.stackSize) snprintf(size, sizeof(size), "%lu", static_cast<unsigned long>(r.stackSize));
+      else snprintf(size, sizeof(size), "?");
+      sp("[task] %-18s core %c prio %2u stack free %5lu of %-5s cpu %d.%d%%\n", r.name,
+         r.core < 0 ? '-' : static_cast<char>('0' + r.core), r.prio, static_cast<unsigned long>(r.stackFree), size,
+         pct10 / 10, pct10 % 10);
+    }
+    int busy[2];
+    for (int c = 0; c < 2; ++c)
+      busy[c] = elUs ? 1000 - static_cast<int>(static_cast<uint64_t>(idle[c] < elUs ? idle[c] : elUs) * 1000u / elUs) : 0;
+    sp("[cpu] busy over the window: core 0 (audio) %d.%d%%, core 1 (UI, keys, IMU, USB) %d.%d%%\n", busy[0] / 10,
+       busy[0] % 10, busy[1] / 10, busy[1] % 10);
+  }
+  // ---- audio
   char db[12];
   fmtDb(db, sizeof(db), g_volReg);
   sp("[audio] %s, %lu Hz, %s, core %d, codec %s, vol 0x%02X (%s dB)%s%s\n", g_audioOk ? "RUNNING" : "NOT RUNNING",
      static_cast<unsigned long>(sampleRate()), app::backendName(g_set.backend), as.taskCore,
      audio::codecPresent() ? "ACK" : "NO-ACK", g_volReg, db, g_audioErr[0] ? " err: " : "", g_audioErr);
-  sp("[audio] block avg %dus max %dus (ever) recent %dus period %dus cpu %d.%d%% | blocks %lu underruns %lu%s late %lu wrErr %lu "
+  {
+    const int pk = tenths(aw.peakCpuPercent);
+    const int now10 = tenths(as.cpuPercent);
+    sp("[audio] window: AUD now %d.%d%% peak %d.%d%%, longest block %dus of %dus, blocks %lu, underruns %lu, late %lu\n",
+       now10 / 10, now10 % 10, pk / 10, pk % 10, static_cast<int>(aw.peakBlockUs), static_cast<int>(as.blockPeriodUs),
+       static_cast<unsigned long>(aw.blocks), static_cast<unsigned long>(aw.underruns),
+       static_cast<unsigned long>(aw.lateBlocks));
+  }
+  sp("[audio] since boot: block avg %dus max %dus recent %dus period %dus | blocks %lu underruns %lu%s late %lu wrErr %lu "
      "yields %lu maxGap %dus latency %lu fr\n",
      static_cast<int>(as.avgUs), static_cast<int>(as.maxUs), static_cast<int>(as.recentMaxUs),
-     static_cast<int>(as.blockPeriodUs), tenths(as.cpuPercent) / 10, tenths(as.cpuPercent) % 10,
-     static_cast<unsigned long>(as.blocks),
+     static_cast<int>(as.blockPeriodUs), static_cast<unsigned long>(as.blocks),
      static_cast<unsigned long>(as.underruns), as.underrunsValid ? "" : "(n/a)",
      static_cast<unsigned long>(as.lateBlocks), static_cast<unsigned long>(as.writeErrors),
      static_cast<unsigned long>(as.overloadYields), static_cast<int>(as.maxPeriodUs),
@@ -417,25 +493,53 @@ void printReport() {
     audio::placementLine(pl, sizeof(pl));
     sp("%s", pl);
   }
+  sp("[engine] command queue peak %lu of 256, UI dropped commands %lu, playing %s\n",
+     static_cast<unsigned long>(g_inst.engine().queuePeak()), static_cast<unsigned long>(g_ui.droppedCommands()),
+     g_playing ? "yes" : "no");
+  // ---- tilt
   {
     const plat::imu::Stats is = plat::imu::stats();
+    const uint32_t task10 = is.workAvgUs * plat::imu::kPollHz / 1000u;   // tenths of a percent of core 1
     sp("[imu] %s @0x%02X err 0x%02X, %s, reads %lu, bus errors %lu, 12-byte read avg %luus max %luus, "
-       "stack free %lu of %lu (heap)\n",
+       "work per reading %luus = %lu.%lu%% of core 1 at %lu Hz, stack free %lu of %lu (heap)\n",
        is.present ? "BMI270" : "NONE", is.addr, is.err, is.running ? "reading (G0 held)" : "asleep",
        static_cast<unsigned long>(is.reads), static_cast<unsigned long>(is.errors),
        static_cast<unsigned long>(is.busAvgUs), static_cast<unsigned long>(is.busMaxUs),
+       static_cast<unsigned long>(is.workAvgUs), static_cast<unsigned long>(task10 / 10),
+       static_cast<unsigned long>(task10 % 10), static_cast<unsigned long>(plat::imu::kPollHz),
        static_cast<unsigned long>(is.stackFree), static_cast<unsigned long>(plat::imu::kTaskStack));
+    sp("[imu] core 1 busy while G0 was held: last hold %lu.%lu%% over %lu ms, highest %lu.%lu%% (%lu holds over 0.3 s)\n",
+       static_cast<unsigned long>(g_holdPct10 / 10), static_cast<unsigned long>(g_holdPct10 % 10),
+       static_cast<unsigned long>(g_holdMs), static_cast<unsigned long>(g_holdMaxPct10 / 10),
+       static_cast<unsigned long>(g_holdMaxPct10 % 10), static_cast<unsigned long>(g_holds));
+    auto mg = [](int16_t v) { return static_cast<int>(v) * 1000 / static_cast<int>(plat::imu::kAccLsbPerG); };
+    auto dps10 = [](int16_t v) { return static_cast<int>(static_cast<int32_t>(v) * 10000 / 32768); };
+    sp("[imu] last reading of the last hold: acc x %+d y %+d z %+d mg, gyr x %+d y %+d z %+d (0.1 deg/s)\n",
+       mg(is.last.acc[0]), mg(is.last.acc[1]), mg(is.last.acc[2]), dps10(is.last.gyr[0]), dps10(is.last.gyr[1]),
+       dps10(is.last.gyr[2]));
+    plat::imu::Raw rest;
+    if (plat::imu::sampleAtRest(&rest, 8)) {
+      int big = 0;
+      for (int k = 1; k < 3; ++k)
+        if ((rest.acc[k] < 0 ? -rest.acc[k] : rest.acc[k]) > (rest.acc[big] < 0 ? -rest.acc[big] : rest.acc[big])) big = k;
+      sp("[imu] gravity now (G0 up, 8 readings): acc x %+d y %+d z %+d mg, gyr x %+d y %+d z %+d (0.1 deg/s); "
+         "pointing down: chip %c%c\n",
+         mg(rest.acc[0]), mg(rest.acc[1]), mg(rest.acc[2]), dps10(rest.gyr[0]), dps10(rest.gyr[1]), dps10(rest.gyr[2]),
+         rest.acc[big] < 0 ? '-' : '+', static_cast<char>('x' + big));
+    } else {
+      sp("[imu] gravity now: not read (%s)\n", is.present ? "G0 is held" : "no IMU");
+    }
   }
+  // ---- keys, UI, files, battery
   sp("[keys] controller %s, mode %s, events %lu, INT drains %lu, polled events %lu, drops %lu, fifo ovf %lu, "
      "i2c err %lu, INT->read max %luus\n",
      ks.controllerPresent ? "OK" : "MISSING", keyMode(), static_cast<unsigned long>(ks.events),
      static_cast<unsigned long>(ks.intLowDrains), static_cast<unsigned long>(ks.polledEvents),
      static_cast<unsigned long>(ks.queueDrops), static_cast<unsigned long>(ks.fifoOverflows),
      static_cast<unsigned long>(ks.i2cErrors), static_cast<unsigned long>(ks.maxIntToReadUs));
-  sp("[ui] frame avg %dus max %dus, full redraws %lu, status redraws %lu, dropped cmds %lu, panel push avg %dus\n",
+  sp("[ui] frame avg %dus max %dus, full redraws %lu, status redraws %lu, panel push avg %dus\n",
      static_cast<int>(g_frameUs), static_cast<int>(g_frameMaxUs), static_cast<unsigned long>(g_ui.fullRedraws()),
-     static_cast<unsigned long>(g_ui.statusRedraws()), static_cast<unsigned long>(g_ui.droppedCommands()),
-     static_cast<int>(ds.avgUs));
+     static_cast<unsigned long>(g_ui.statusRedraws()), static_cast<int>(ds.avgUs));
   sp("[fs] /int %s%s %lu/%lu B used (mount %lu ms); /sd %s %s (mount %lu ms, %lu MB, %lu MB used)\n",
      si.intMounted ? "mounted" : "NOT MOUNTED", si.intFormatted ? " (formatted this boot)" : "",
      static_cast<unsigned long>(si.intUsedBytes), static_cast<unsigned long>(si.intTotalBytes),
@@ -443,12 +547,23 @@ void printReport() {
      static_cast<unsigned long>(si.sdMountMs), static_cast<unsigned long>(si.sdTotalBytes >> 20),
      static_cast<unsigned long>(si.sdUsedBytes >> 20));
   sp("[batt] %d%% %dmV, backlight %s\n", g_battPct, g_battMv, g_dimmed ? "dim" : "full");
+  // ---- sampler
   {
-    const plat::samples::Info& si = plat::samples::info();
+    const plat::samples::Info& pi = plat::samples::info();
     int used = 0;
     for (int i = 0; i < pg::sampler::kPoolSlots; ++i) used += plat::samples::pool().header(i) ? 1 : 0;
-    sp("[samples] %s%s, app1 0x%lx+0x%lx, %d of 12 slots hold a sample\n", si.ok ? "pool mapped" : "no pool: ",
-       si.ok ? "" : si.why, static_cast<unsigned long>(si.partAddr), static_cast<unsigned long>(si.partSize), used);
+    sp("[samples] %s%s, app1 0x%lx+0x%lx mapped in %lu ms, %d of %d slots hold a sample (the others play a built-in "
+       "sound)\n", pi.ok ? "pool mapped" : "no pool: ", pi.ok ? "" : pi.why, static_cast<unsigned long>(pi.partAddr),
+       static_cast<unsigned long>(pi.partSize), static_cast<unsigned long>(pi.mapMs), used, pg::sampler::kPoolSlots);
+    for (int i = 0; i < pg::sampler::kPoolSlots; ++i) {
+      const pg::sampler::SlotHeader* sh = plat::samples::pool().header(i);
+      if (!sh) continue;
+      const uint32_t cs = sh->rate ? sh->samples * 100u / sh->rate : 0;
+      sp("[samples] slot %2d %-8.8s %6lu samples %lu.%02lu s at %lu Hz, peak %u, data crc %08lx\n", i + 1, sh->name,
+         static_cast<unsigned long>(sh->samples), static_cast<unsigned long>(cs / 100),
+         static_cast<unsigned long>(cs % 100), static_cast<unsigned long>(sh->rate), static_cast<unsigned>(sh->peak),
+         static_cast<unsigned long>(sh->dataCrc));
+    }
   }
   {
     const pg::io::Xfer::Stats& xs = g_xfer.stats();
@@ -461,7 +576,7 @@ void printReport() {
 #if PG_USB_AUDIO
   printUsbReport();
 #endif
-  sp("===== END REPORT =====\n");
+  sp("===== POCKET GROOVE REPORT END =====\n");
 }
 
 void printStatsLine() {
@@ -769,8 +884,9 @@ void setup() {
   const bool setOk = app::loadSettings(fs, &g_set);
   sp("[boot] firmware settings: %s (%lu Hz, %s, vol 0x%02X)\n", setOk ? "loaded" : "defaults",
      static_cast<unsigned long>(sampleRate()), app::backendName(g_set.backend), g_set.volReg);
-#if PG_USB_AUDIO
   g_minAt[1] = sys::heap().minEverFree;
+  g_minAt[2] = g_minAt[1];
+#if PG_USB_AUDIO
   // The USB stack, now that the rate for the audio descriptor is known. The
   // interrupt lands on this core (1), away from the audio task.
   g_usbRate = sampleRate();
@@ -817,8 +933,8 @@ void setup() {
   while (storage::sdState() == storage::SdState::Mounting && sys::millis() - tSd < 1500) sys::delayMs(10);
   sp("[boot] /sd: %s\n", storage::sdStateName(storage::sdState()));
 
-#if PG_USB_AUDIO
   g_minAt[3] = sys::heap().minEverFree;
+#if PG_USB_AUDIO
   if (sampleRate() != g_usbRate) {
     // The boot menu changed the rate: the USB descriptor carries the old one.
     sp("[boot] sample rate changed in the boot menu: restarting so that USB audio uses %lu Hz\n",
@@ -847,9 +963,7 @@ void setup() {
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards
   g_ui.boot(sys::millis());
   sp("[boot] UI up, project \"%s\"\n", g_ui.projectName());
-#if PG_USB_AUDIO
   g_minAt[4] = sys::heap().minEverFree;
-#endif
 
   // Audio last: the session is loaded, so the first block is already the real thing.
   startAudio();
@@ -862,11 +976,12 @@ void setup() {
   g_battMv = b.millivolts;
   g_lastKeyMs = sys::millis();
   g_lastBattMs = g_lastKeyMs;
-  g_loopStackFree = sys::stackFreeMinSelf();
-#if PG_USB_AUDIO
   g_minAt[0] = g_heapBoot.minEverFree;
   g_minAt[5] = g_heapReady.minEverFree;
   g_minSeen = g_heapReady.minEverFree;
+  g_lastReportMs = sys::millis();
+  audio::takeWindow();   // the first report's window starts now, not at boot
+#if PG_USB_AUDIO
   sys::bootLogEnd();
 #endif
 }
@@ -953,16 +1068,18 @@ void loop() {
     const sys::Battery b = sys::battery();
     g_battPct = b.percent;
     g_battMv = b.millivolts;
-    g_loopStackFree = sys::stackFreeMinSelf();
-#if PG_USB_AUDIO
+  }
+  {
+    // Every frame (one read of the allocator's counter), so the line says what
+    // was going on when the minimum fell.
     const uint32_t m = sys::heap().minEverFree;
     if (m < g_minSeen) {
       g_minSeen = m;
       g_minDropMs = now;
-      sp("[ram] heap min-ever fell to %lu B at t=%lus\n", static_cast<unsigned long>(m),
-         static_cast<unsigned long>(now / 1000));
+      sp("[ram] heap min-ever fell to %lu B at t=%lus (%s%s%s)\n", static_cast<unsigned long>(m),
+         static_cast<unsigned long>(now / 1000), g_playing ? "playing" : "stopped",
+         g_xfer.busy() ? ", transfer running" : "", g_ui.tiltHeld() ? ", tilt held" : "");
     }
-#endif
   }
 #if PG_USB_AUDIO
   if (g_dlReq.load()) enterDownloadMode("1200-baud touch from the computer");
