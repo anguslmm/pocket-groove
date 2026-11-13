@@ -23,6 +23,8 @@
 voice perc
 name TRAIL
 about "Tom, rim, cowbell, clave, zap."
+tilt x DROP                   # TRAIL switches between five drums
+tilt y DIRT
 base tone=64 harm=64 noise=48 drive=28 bend=40
 
 macro TRAIL 0.25

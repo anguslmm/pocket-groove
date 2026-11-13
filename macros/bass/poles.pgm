@@ -14,6 +14,7 @@
 voice bass
 name POLES
 about "Round house bass. Push either way."
+tilt y DIRT                   # TONE and DIRT: the two that change a held note (TOUCH, LENGTH: the next)
 base wave=36 cutoff=48 reso=50 envmod=50 decay=48 accent=70 sub=60 fmix=0 lfodepth=0 slide=50 ktrk=40
 
 macro TONE 0.5 "DARK" "BRIGHT" "a muffled dub thump .. an open pluck"

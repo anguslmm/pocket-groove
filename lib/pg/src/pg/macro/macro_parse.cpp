@@ -109,7 +109,11 @@ bool validName(const char* s) {
   return true;
 }
 
-inline bool isString(const char* w) { return w[0] == '"'; }   // a quoted word (the tokenizer keeps the opening quote)
+inline bool isString(const char* w) { return w[0] == '"'; }
+
+// The tilt responses as the format writes them (pg/tilt/tilt.h, same order).
+const char* const kTiltResponseNames[4] = {"fast", "smooth", "fine", "wide"};
+const char* const kTiltAxisNames[2] = {"x", "y"};   // a quoted word (the tokenizer keeps the opening quote)
 
 constexpr int kMaxTokens = 40;
 
@@ -132,6 +136,9 @@ struct Parser {
   char moPatch[kMaxMorphs][kPatchNameLen + 1];
   int moLine[kMaxMorphs];
   int paLine[kMaxPatches];
+  char tiltName[2][kMacroNameLen + 1];   // the macro each tilt line names ("" = none / not given)
+  int tiltLine[2];                       // 0 = no tilt line for that axis
+  uint8_t tiltResp[2];
 
   explicit Parser(const ParamTable& p, MacroSet* s, ParseError* e, Warnings* w) : pt(p), set(s), err(e), warn(w) {
     std::memset(tBy, 0, sizeof(tBy));
@@ -142,6 +149,9 @@ struct Parser {
     std::memset(moPatch, 0, sizeof(moPatch));
     std::memset(moLine, 0, sizeof(moLine));
     std::memset(paLine, 0, sizeof(paLine));
+    std::memset(tiltName, 0, sizeof(tiltName));
+    std::memset(tiltLine, 0, sizeof(tiltLine));
+    std::memset(tiltResp, 0, sizeof(tiltResp));
   }
 
   bool fail(const char* fmt, const char* a = "", const char* b = "") {
@@ -252,10 +262,36 @@ struct Parser {
     if (ieq(kw, "macro")) return macro(w, n);
     if (ieq(kw, "morph")) return curveLine(w, n, Kind::Morph, -1);
     if (ieq(kw, "trim")) return curveLine(w, n, Kind::Trim, -1);
+    if (ieq(kw, "tilt")) return tilt(w, n);
     if (cur < 0) return fail("'%s': a target line needs a 'macro NAME' line above it", w[0]);
     const int p = param(w[0]);
     if (p < 0) return false;
     return curveLine(w, n, Kind::Target, p);
+  }
+
+  // tilt x|y NAME [fast|smooth|fine|wide]   or   tilt x|y none   (NAME resolved at the end)
+  bool tilt(char** w, int n) {
+    if (n < 3 || n > 4) return fail("write 'tilt x MACRO [fast|smooth|fine|wide]' or 'tilt y none'");
+    const int a = ieq(w[1], "x") ? 0 : (ieq(w[1], "y") ? 1 : -1);
+    if (a < 0) return fail("'tilt %s': the axis is x (roll left/right) or y (tilt away/toward)", w[1]);
+    if (tiltLine[a]) return fail("'tilt %s' given twice", kTiltAxisNames[a]);
+    int r = kTiltDefaultResponse;
+    if (n == 4) {
+      r = -1;
+      for (int k = 0; k < 4; ++k)
+        if (ieq(w[3], kTiltResponseNames[k])) r = k;
+      if (r < 0) return fail("'%s' is not a tilt response (fast, smooth, fine, wide)", w[3]);
+    }
+    if (ieq(w[2], "none")) {
+      if (n == 4) return fail("'tilt %s none' takes no response", kTiltAxisNames[a]);
+      tiltName[a][0] = 0;
+    } else {
+      if (std::strlen(w[2]) > size_t(kMacroNameLen)) return fail("'tilt %s %s': no macro has that name", w[1], w[2]);
+      for (size_t i = 0; i <= std::strlen(w[2]); ++i) tiltName[a][i] = upper(w[2][i]);
+    }
+    tiltLine[a] = line;
+    tiltResp[a] = uint8_t(r);
+    return true;
   }
 
   bool base(char** w, int n) {
@@ -521,6 +557,23 @@ struct Parser {
         if (set->morphs[q].macro == set->morphs[k].macro && set->morphs[q].patch == pa)
           return fail("'morph %s' given twice in macro %s", moPatch[k], set->macros[set->morphs[k].macro].name);
     }
+    for (int a = 0; a < 2; ++a) {
+      if (!tiltLine[a]) continue;
+      line = tiltLine[a];
+      int m = -1;
+      if (tiltName[a][0]) {
+        m = set->findMacro(tiltName[a]);
+        if (m < 0) return fail("'tilt %s %s': no macro has that name", kTiltAxisNames[a], tiltName[a]);
+      }
+      set->tilt[a] = packTilt(m, tiltResp[a]);
+    }
+    if (tiltLine[0] && tiltLine[1]) {
+      const TiltAssign x = set->tiltAssign(0), y = set->tiltAssign(1);
+      if (x.macro >= 0 && x.macro == y.macro) {
+        line = tiltLine[1];
+        return fail("both tilt axes move %s: give one of them another macro or none", set->macros[x.macro].name);
+      }
+    }
     // the about line repeats the set name: "ACID -- family: ..." -> "family: ..."
     const size_t nl = std::strlen(set->name);
     if (nl && std::strlen(set->about) > nl + 4) {
@@ -779,6 +832,24 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
     o.put("about \"");
     o.put(set.tagline);
     o.put("\"");
+    o.nl();
+  }
+  for (int a = 0; a < 2; ++a) {   // only what the file gave (0 = the default)
+    if (!(set.tilt[a] & kTiltGiven)) continue;
+    const int m = set.tilt[a] & 0x0F;
+    o.put("tilt ");
+    o.put(kTiltAxisNames[a]);
+    o.put(" ");
+    if (m >= set.numMacros || m >= kMaxMacros) {
+      o.put("none");
+    } else {
+      o.put(set.macros[m].name);
+      const int r = (set.tilt[a] >> 4) & 3;
+      if (r != kTiltDefaultResponse) {
+        o.put(" ");
+        o.put(kTiltResponseNames[r]);
+      }
+    }
     o.nl();
   }
   if (set.baseMask) {

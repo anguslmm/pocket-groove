@@ -14,6 +14,7 @@ extern const int kBuiltinCount = 24;
 extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
     {0, 4, 21, 60, 0, 0, 0, 0,
+     {0x00, 0x93},   // tilt x, y
      0xe7c9, "BOOM",
      "family: MATERIAL / BODY.",
      "Choose the drum: size, skin, wood.",
@@ -39,6 +40,7 @@ extern const MacroSet kBuiltin[] = {
       0x021340fau, 0x052083e8u, 0x00000000u, 0x002ee3e8u}},
     // kick/trio.pgm
     {0, 2, 1, 3, 2, 16, 2, 0,
+     {0x00, 0x00},   // tilt x, y
      0xef00, "TRIO",
      "family: MORPH.",
      "808, 909 and gabber, blended.",
@@ -54,6 +56,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00000000u, 0x002ee1f4u, 0x000003e8u}},
     // kick/push.pgm
     {0, 3, 13, 26, 0, 0, 0, 0,
+     {0x00, 0x92},   // tilt x, y
      0xece5, "PUSH",
      "family: GESTURE.",
      "Push it harder, hold it longer.",
@@ -73,6 +76,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0x00fa03e8u}},
     // snare/crack.pgm
     {1, 3, 13, 39, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0x7da7, "CRACK",
      "family: OPPOSITES.",
      "A 909-ish snare. Pitch it, rattle it.",
@@ -93,6 +97,7 @@ extern const MacroSet kBuiltin[] = {
       0x06d603e8u, 0x01b58000u, 0x03e801f4u, 0x065903e8u, 0x001f4000u, 0x000001f4u, 0xffa243e8u}},
     // snare/wood.pgm
     {1, 3, 13, 36, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0xf33e, "WOOD",
      "family: MATERIAL / BODY.",
      "Wood or metal, piccolo or field.",
@@ -113,6 +118,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0x00dac3e8u, 0x00000000u, 0x011943e8u}},
     // snare/bite.pgm
     {1, 3, 13, 26, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0xfd8e, "BITE",
      "family: INTERACTION.",
      "Low and growling, or high and wiry.",
@@ -132,6 +138,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0x027103e8u}},
     // clap/hype.pgm
     {2, 2, 14, 29, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0x1ba2, "HYPE",
      "family: ENERGY.",
      "More hands, or a calm far crowd.",
@@ -150,6 +157,7 @@ extern const MacroSet kBuiltin[] = {
       0x000643e8u, 0x02af8000u, 0x065903e8u, 0x00000000u, 0xffc183e8u}},
     // clap/swarm.pgm
     {2, 3, 9, 29, 0, 0, 0, 0,
+     {0x91, 0x9f},   // tilt x, y
      0xc06d, "SWARM",
      "family: ODD (stepped, and a pair that only makes sense together",
      "Count the hands, play the pitch.",
@@ -169,6 +177,7 @@ extern const MacroSet kBuiltin[] = {
       0x0733c320u, 0x00bb8000u, 0x003e80c8u, 0x00000190u, 0x00bb8320u}},
     // chh/tick.pgm
     {3, 3, 11, 33, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0x9410, "TICK",
      "family: OPPOSITES.",
      "Dark or bright, short or long.",
@@ -189,6 +198,7 @@ extern const MacroSet kBuiltin[] = {
       0xffe0c3e8u}},
     // chh/alloy.pgm
     {3, 3, 13, 35, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0xe0f0, "ALLOY",
      "family: MATERIAL / BODY.",
      "From seed shaker to metal bell.",
@@ -209,6 +219,7 @@ extern const MacroSet kBuiltin[] = {
       0x01d4c3e8u, 0x00000000u, 0x004e23e8u}},
     // ohh/blast.pgm
     {4, 2, 13, 26, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0x5bbe, "BLAST",
      "family: ENERGY.",
      "Brighter and harder, or a far wash.",
@@ -227,6 +238,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0x003e83e8u}},
     // ohh/swish.pgm
     {4, 3, 12, 28, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0xfcf3, "SWISH",
      "family: MOVEMENT.",
      "Open the pedal, let echoes ride.",
@@ -246,6 +258,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0x00fa03e8u, 0x00000000u, 0xffc183e8u}},
     // perc/tap.pgm
     {5, 3, 13, 26, 0, 0, 0, 0,
+     {0x81, 0x90},   // tilt x, y
      0x088c, "TAP",
      "family: GESTURE.",
      "A hand drum: tap, slap, let it ring.",
@@ -265,6 +278,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0xffd123e8u}},
     // perc/trail.pgm
     {5, 3, 11, 40, 0, 0, 0, 0,
+     {0x91, 0x92},   // tilt x, y
      0x865d, "TRAIL",
      "family: JOURNEY.",
      "Tom, rim, cowbell, clave, zap.",
@@ -285,6 +299,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0xfec783e8u, 0x00fa0000u, 0x06b6c3e8u, 0x00000000u, 0x027103e8u, 0x00000000u, 0xffa243e8u}},
     // bass/acid.pgm
     {6, 4, 19, 43, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0xd9d2, "ACID",
      "family: INTERACTION.",
      "The 303 squelch. Open it, then bite.",
@@ -308,6 +323,7 @@ extern const MacroSet kBuiltin[] = {
       0x017703e8u, 0x04e20000u, 0x06b6c3e8u}},
     // bass/poles.pgm
     {6, 4, 22, 64, 0, 0, 0, 0,
+     {0x00, 0x93},   // tilt x, y
      0x66f0, "POLES",
      "family: OPPOSITES.",
      "Round house bass. Push either way.",
@@ -333,6 +349,7 @@ extern const MacroSet kBuiltin[] = {
       0x013881f4u, 0x013883e8u, 0x00151800u, 0x000fa1f4u, 0x000c83e8u, 0x00000000u, 0x000001f4u, 0xffb1e3e8u}},
     // bass/surge.pgm
     {6, 2, 16, 39, 0, 0, 0, 0,
+     {0x00, 0x9f},   // tilt x, y
      0x0752, "SURGE",
      "family: ENERGY.",
      "More and more, or deep and calm.",
@@ -352,6 +369,7 @@ extern const MacroSet kBuiltin[] = {
       0x057e43e8u, 0x00000000u, 0xffd123e8u, 0x00000000u, 0x000001c2u, 0xffd121f4u, 0xffb1e3e8u}},
     // bass/road.pgm
     {6, 3, 15, 53, 0, 0, 0, 0,
+     {0x00, 0x00},   // tilt x, y
      0x1b3a, "ROAD",
      "family: JOURNEY.",
      "One road from deep to screaming.",
@@ -374,6 +392,7 @@ extern const MacroSet kBuiltin[] = {
       0x06b6c3e8u, 0x003e8000u, 0x006d615eu, 0x007d02bcu, 0x008ca384u}},
     // bass/dice.pgm
     {6, 3, 14, 46, 0, 0, 0, 0,
+     {0x82, 0x9f},   // tilt x, y
      0x1a31, "DICE",
      "family: ODD (stepped, and a macro that only comes alive combined",
      "Roll for a flavour and an interval.",
@@ -395,6 +414,7 @@ extern const MacroSet kBuiltin[] = {
       0x00000000u, 0x075303e8u, 0x006d6000u, 0x008ca1f4u, 0x009c4320u, 0x00abe3e8u}},
     // lead/hands.pgm
     {7, 4, 22, 49, 0, 0, 0, 0,
+     {0x00, 0x92},   // tilt x, y
      0xfd8f, "HANDS",
      "family: GESTURE.",
      "Open your hand, push, shake, hold.",
@@ -419,6 +439,7 @@ extern const MacroSet kBuiltin[] = {
       0x01d4c3e8u}},
     // lead/keys.pgm
     {7, 2, 0, 0, 2, 16, 2, 0,
+     {0x00, 0x9f},   // tilt x, y
      0x233a, "KEYS",
      "family: MORPH.",
      "Organ, pluck and bell in one.",
@@ -434,6 +455,7 @@ extern const MacroSet kBuiltin[] = {
      {}},
     // lead/drift.pgm
     {7, 3, 16, 39, 0, 0, 0, 0,
+     {0xb1, 0xa0},   // tilt x, y
      0xccff, "DRIFT",
      "family: MOVEMENT.",
      "Long notes that bloom and wander.",
@@ -454,6 +476,7 @@ extern const MacroSet kBuiltin[] = {
       0x065903e8u, 0x00000000u, 0x023283e8u, 0x00000000u, 0x01d4c3e8u, 0x00000000u, 0x005dc3e8u}},
     // lead/voyage.pgm
     {7, 3, 16, 63, 0, 0, 0, 0,
+     {0x91, 0xb2},   // tilt x, y
      0xd6b1, "VOYAGE",
      "family: JOURNEY.",
      "From flute to metal in one sweep.",
@@ -477,6 +500,7 @@ extern const MacroSet kBuiltin[] = {
       0x057e43e8u, 0x01770000u, 0x061a83e8u, 0x00000000u, 0x027103e8u, 0x00000000u, 0xff63c3e8u}},
     // lead/swap.pgm
     {7, 3, 13, 63, 0, 0, 0, 0,
+     {0x82, 0x9f},   // tilt x, y
      0x14b4, "SWAP",
      "family: ODD (stepped flavours, and a macro that is dull alone).",
      "Six leads, six intervals. Click!",

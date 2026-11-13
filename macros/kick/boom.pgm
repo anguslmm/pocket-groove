@@ -14,6 +14,7 @@
 voice kick
 name BOOM
 about "Choose the drum: size, skin, wood."
+tilt y FAR                    # tip it away: the kick goes far
 base lvl=100 drive=26 tone=100 harm=34 cton=56
 
 macro SIZE 0.45 "SMALL" "BIG"

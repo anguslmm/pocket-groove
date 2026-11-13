@@ -15,6 +15,7 @@
 voice lead
 name HANDS
 about "Open your hand, push, shake, hold."
+tilt y SHAKE                  # open the filter left/right, shake (vibrato) away/toward
 base wave=saw osc2=saw intv=24 mix=64 flt=lp sus=56 decay=72 release=40 attack=0 fatk=0 lfoshape=0 ktrk=64 glide=50
 
 macro OPEN 0.3
