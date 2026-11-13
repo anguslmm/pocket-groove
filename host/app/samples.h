@@ -39,6 +39,11 @@ class Samples {
   // Puts `path` into slot 0..11 (see above). msg: what happened, for a toast.
   bool drop(const std::string& path, int slot, std::string* msg);
 
+  // The microphone (mic.h): a recording, mono int16 at 22,050 Hz, becomes the slot's
+  // file "NN-recNN.wav" (the slot's other files removed) and is loaded now;
+  // clearSlot() removes the slot's files (it plays its built-in sound again).
+  bool putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg);
+  bool clearSlot(int slot, std::string* msg);
   std::string fileOf(int slot) const;   // "" when the slot has no file
   int reloads() const { return reloads_; }
 
@@ -50,6 +55,7 @@ class Samples {
     bool loaded = false;
   };
   void load(int slot);
+  void removeSlotFiles(int slot, const std::string& keep);
 
   std::string dir_;
   pg::sampler::MemoryPool pool_;

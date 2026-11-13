@@ -244,6 +244,16 @@ void testPutRefusals() {
   CHECK(g.one("WR 256 " + b64(d.data() + 256, Xfer::kChunk)) == "ERR PLAYING");
   g.env.playing = false;
   CHECK(*g.fs.get("/int/pg/SONG.pgv") == old && !g.fs.has("/int/pg/_xfer.tmp"));
+  // A microphone recording streams into the sample pool: no flash write, forced or not.
+  g.env.recording = true;
+  CHECK(put(g, "int", "SONG", d) == "ERR RECORDING");
+  CHECK(put(g, "int", "SONG", d, true) == "ERR RECORDING");
+  g.env.recording = false;
+  CHECK(put(g, "int", "SONG", d, false, 256) == "STOPPED");
+  g.env.recording = true;
+  CHECK(g.one("WR 256 " + b64(d.data() + 256, Xfer::kChunk)) == "ERR RECORDING");
+  g.env.recording = false;
+  CHECK(*g.fs.get("/int/pg/SONG.pgv") == old && !g.fs.has("/int/pg/_xfer.tmp"));
   // Names, sizes, mounts.
   CHECK(put(g, "int", "_last", d) == "ERR BAD_NAME _last");
   CHECK(put(g, "int", "lower", d) == "ERR BAD_NAME lower");

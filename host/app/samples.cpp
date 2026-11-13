@@ -11,6 +11,7 @@
 #include <ctime>
 
 #include "common/sample_convert.h"
+#include "common/wav.h"
 
 namespace desk {
 
@@ -209,15 +210,7 @@ bool Samples::drop(const std::string& path, int slot, std::string* msg) {
     }
   }
   // the slot's other files go (one file per slot), then the new one takes its name
-  if (DIR* d = opendir(dir_.c_str())) {
-    std::vector<std::string> old;
-    while (dirent* e = readdir(d)) {
-      const std::string n = e->d_name;
-      if (n[0] != '.' && sconv::slotOfName(n, nullptr) == slot && dir_ + "/" + n != tmp) old.push_back(n);
-    }
-    closedir(d);
-    for (const std::string& n : old) std::remove((dir_ + "/" + n).c_str());
-  }
+  removeSlotFiles(slot, tmp);
   if (std::rename(tmp.c_str(), dest.c_str()) != 0) {
     *msg = "cannot write " + dest;
     return false;
@@ -229,6 +222,61 @@ bool Samples::drop(const std::string& path, int slot, std::string* msg) {
   msgs_.clear();
   load(slot);
   *msg = msgs_.empty() ? base : msgs_.back();
+  return slots_[slot].loaded;
+}
+
+void Samples::removeSlotFiles(int slot, const std::string& keep) {
+  if (DIR* d = opendir(dir_.c_str())) {
+    std::vector<std::string> old;
+    while (dirent* e = readdir(d)) {
+      const std::string n = e->d_name;
+      if (n[0] != '.' && sconv::slotOfName(n, nullptr) == slot && dir_ + "/" + n != keep) old.push_back(n);
+    }
+    closedir(d);
+    for (const std::string& n : old) std::remove((dir_ + "/" + n).c_str());
+  }
+}
+
+bool Samples::clearSlot(int slot, std::string* msg) {
+  if (slot < 0 || slot >= pg::sampler::kPoolSlots) {
+    *msg = "no such slot";
+    return false;
+  }
+  removeSlotFiles(slot, "");
+  Slot& s = slots_[slot];
+  s.file.clear();
+  s.mtimeNs = 0;
+  s.size = -1;
+  s.loaded = false;
+  pool_.clear(slot);
+  *msg = "slot " + std::to_string(slot + 1) + ": empty";
+  return true;
+}
+
+bool Samples::putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg) {
+  if (slot < 0 || slot >= pg::sampler::kPoolSlots || !data || samples < pg::sampler::kMinSamples) {
+    *msg = "nothing to keep";
+    return false;
+  }
+  char base[32];
+  std::snprintf(base, sizeof base, "%02d-rec%02d.wav", slot + 1, slot + 1);
+  const std::string dest = dir_ + "/" + base, tmp = dest + ".in.wav";
+  const std::vector<int16_t> x(data, data + samples);
+  if (!wav::write(tmp.c_str(), x, sconv::kRate, 1)) {
+    std::remove(tmp.c_str());
+    *msg = "cannot write " + dest;
+    return false;
+  }
+  removeSlotFiles(slot, tmp);
+  if (std::rename(tmp.c_str(), dest.c_str()) != 0) {
+    *msg = "cannot write " + dest;
+    return false;
+  }
+  slots_[slot].file = base;
+  statFile(dest, &slots_[slot].mtimeNs, &slots_[slot].size);
+  msgs_.clear();
+  load(slot);
+  *msg = msgs_.empty() ? std::string(base) : msgs_.back();
   return slots_[slot].loaded;
 }
 

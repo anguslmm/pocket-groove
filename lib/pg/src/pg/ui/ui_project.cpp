@@ -196,6 +196,7 @@ void Ui::doLoadRow(int r) {
 void Ui::doSave(int mount, const char* name) {
   dialog_ = Dialog::None;
   if (!fs_) { toast("NO STORAGE", 2); return; }
+  if (micBusy()) { toast("RECORDING: SAVE AFTER", 2); return; }   // the mic streams to flash now
   if (mount == kPmSd && !fs_->mounted(io::kMountSd)) { toast("NO SD CARD", 2); return; }
   // The name field mirrors the file name (13.2). The audio thread never reads it.
   char old[16];
