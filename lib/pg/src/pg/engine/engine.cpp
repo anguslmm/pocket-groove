@@ -41,6 +41,8 @@ constexpr int64_t kHalfQuantumFP = int64_t(kQuantum / 2) << 32;
 constexpr int kHalf = kQuantum / 2;             // FX block (half-rate samples per quantum)
 constexpr int kSuspendFadeQuanta = 8;           // ~3 ms fade to silence on suspend()
 constexpr uint8_t kNoPattern = 0xFF;
+constexpr int kMacroSlots = 2 * kTrackMacros;   // a base and a tilt offset per macro
+constexpr int kOffSlot = kTrackMacros;          // slot of macro m's offset: kOffSlot + m
 
 inline bool isSynthTrack(int t) { return t >= kNumDrumTracks; }
 inline int sanitizeLength(int len) { return len == 0 ? 16 : (len > kMaxSteps ? kMaxSteps : len); }
@@ -84,16 +86,19 @@ struct TrackRt {
   uint8_t standOn;                    // lkSound / lkMix are in use (stand[] differs from the stored bytes)
   uint8_t dMix[macro::kMixRows];      // mixer defaults, the reference of the mixer rule
   // ---- macro motion (engine.h "MACRO MOTION") ----
-  float mFrom[kTrackMacros], mTo[kTrackMacros];   // ramp in position units 0..255; mTo = where it is / goes
-  uint32_t mStart[kTrackMacros];      // qCount when the ramp began
-  uint32_t mDur[kTrackMacros];        // ramp length, quanta (a motion glide can be 128 steps at 60 BPM: 32 s)
-  uint8_t moving;                     // bit m: macro m is on a ramp
+  // Trajectory slots: 0..3 = macro m's base (or motion), 4..7 = macro m's tilt offset
+  // (engine.h "TILT OFFSET"; signed, 0 when unused). What is heard: macroPos().
+  float mFrom[kMacroSlots], mTo[kMacroSlots];   // ramp in position units; mTo = where it is / goes
+  uint32_t mStart[kMacroSlots];       // qCount when the ramp began
+  uint32_t mDur[kMacroSlots];         // ramp length, quanta (a motion glide can be 128 steps at 60 BPM: 32 s)
+  uint8_t moving;                     // bit s: slot s is on a ramp (bits 0..3 a base, 4..7 an offset)
   uint8_t fine;                       // the voice plays fractional values (fineTick), not eff[0..23]
   uint8_t anchor;                     // start an interval at the next quantum: 1 from the values now, 2 jump, 3 entering
   uint8_t settling;                   // the motion ended: the interval runs into the stored bytes
   // ---- motion (engine.h "MOTION"): the notes' own macro values ----
   uint8_t kfMask;                     // bit m: macro m has keyframes in the playing pattern (motion owns it)
   uint8_t live;                       // bit m: motion recording: the player's hand moves macro m (heard, written)
+  uint8_t tiltLive;                   // bit m: live because the tilt gesture holds it (ends at its release)
   uint32_t liveUntil[kTrackMacros];   // qCount after which a still hand stops being live (one bar)
   // The values the voice hears move linearly from fA (at iStart) to fB (at iStart + iLen):
   // fB is the instrument evaluated where the macros will be at the interval's end, so
@@ -172,6 +177,7 @@ struct State {
   uint8_t pubMask;                    // bit t: publish track t's macro positions at the end of the quantum
   uint16_t rampQ;                     // kMacroRampMs in quanta
   uint16_t settleQ;                   // kMacroSettleMs in quanta
+  float qPerMs;                       // quanta per millisecond (SetMacroOffset ramps)
   uint32_t qCount;                    // quanta processed (record timing)
   uint32_t absStep;                   // master steps fired since Play (roll phase lock)
   int masterPos, masterNext;
@@ -283,6 +289,14 @@ struct State {
   void updateStand(int t);
   // macro motion
   float macroPos(const TrackRt& r, int m, uint32_t q) const;
+  // Where trajectory slot s is at quantum q: macro m's base (s = m) or its tilt
+  // offset (s = kOffSlot + m). Inline everywhere: no function of its own on the audio thread.
+  __attribute__((always_inline)) float slotPos(const TrackRt& r, int s, uint32_t q) const {
+    if (!((r.moving >> s) & 1u)) return r.mTo[s];
+    const uint32_t e = q - r.mStart[s];
+    if (e >= r.mDur[s]) return r.mTo[s];
+    return r.mFrom[s] + (r.mTo[s] - r.mFrom[s]) * (float(e) / float(r.mDur[s]));
+  }
   void startRamp(int t, int m, uint8_t target, uint16_t quanta);
   void rampTo(int t, int m, float from, float to, uint32_t quanta);
   // motion
@@ -361,6 +375,7 @@ void State::init(float sampleRate, Project* p) {
   gainK = 1.0f - expf(-1.0f / (0.004f * quantaPerSec));     // 4 ms; init is not real-time
   rampQ = uint16_t(float(kMacroRampMs) * 0.001f * quantaPerSec + 0.5f);
   settleQ = uint16_t(float(kMacroSettleMs) * 0.001f * quantaPerSec + 0.5f);
+  qPerMs = quantaPerSec * 0.001f;
   duck.init(sr, kQuantum);
   delay.init(sr * 0.5f);
   reverb.init(sr * 0.5f);
@@ -420,7 +435,7 @@ void State::resetRuntime() {
     r.bindValid = 0;                  // a new project may be in place: bind at the next quantum
     r.inst = nullptr;
     r.standOn = 0;
-    r.kfMask = r.live = 0;
+    r.kfMask = r.live = r.tiltLive = 0;
     r.moving = 0;
     r.fine = r.anchor = r.settling = 0;
     for (int i = 0; i < kSoundParams + 3; ++i) r.fA[i] = r.fB[i] = 0;
@@ -428,7 +443,7 @@ void State::resetRuntime() {
     r.iLen = 1;
     r.lerp = 0;
     r.fMix[0] = r.fMix[1] = r.fMix[2] = 0.0f;
-    for (int m = 0; m < kTrackMacros; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;
+    for (int m = 0; m < kMacroSlots; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;
   }
   fineTracks = 0;
   motDirty = 0;
@@ -844,6 +859,7 @@ void State::apply(const Command& c) {
       if (!recording)
         for (int t = 0; t < kNumTracks; ++t) {
           tr[t].recHeld = 0;
+          tr[t].tiltLive = 0;
           if (tr[t].live) {   // the hands let go: the recorded motion plays
             tr[t].live = 0;
             motDirty = uint8_t(motDirty | (1u << t));
@@ -949,6 +965,42 @@ void State::apply(const Command& c) {
       // number of moves; the voice follows the macro's trajectory (MACRO MOTION).
       startRamp(c.a, c.b, c.c, uint16_t(c.step.ext[0] | (c.step.ext[1] << 8)));
       break;
+    case CmdType::SetMacroOffset: {
+      // engine.h "TILT OFFSET". Never touches the Project.
+      const int m = c.b & 3;
+      if (c.a >= kNumTracks) break;
+      TrackRt& r = tr[c.a];
+      const uint8_t bit = uint8_t(1u << m);
+      const bool hold = (c.b & kOffsetHold) != 0;
+      if (hold && playing && recording && r.inst && m < r.inst->numMacros) {
+        if (!(r.live & bit)) {
+          // The hand takes the macro: it stays where it is now (a motion glide stops
+          // there), the notes it passes take what is heard. No key bar is pending.
+          const float here = slotPos(r, m, qCount);
+          rampTo(c.a, m, here, here, 0);
+          r.live = uint8_t(r.live | bit);
+          r.liveUntil[m] = qCount;
+          publishMotion(c.a);
+        }
+        r.tiltLive = uint8_t(r.tiltLive | bit);
+      } else if (!hold && (r.tiltLive & bit)) {
+        // Released: live ends here, unless a key moved the macro within the last bar.
+        r.tiltLive = uint8_t(r.tiltLive & ~bit);
+        if (int32_t(qCount - r.liveUntil[m]) >= 0) {
+          r.live = uint8_t(r.live & ~bit);
+          motDirty = uint8_t(motDirty | (1u << c.a));
+          publishMotion(c.a);
+        }
+      }
+      const int16_t raw = int16_t(uint16_t(c.step.note | (c.step.vel << 8)));
+      // CLASSIC, or a macro the set lacks: nothing to offset (it stays 0)
+      const bool has = r.inst && m < r.inst->numMacros;
+      const float to = has ? clampf(float(raw) * (1.0f / float(kOffsetScale)), -255.0f, 255.0f) : 0.0f;
+      const uint32_t ms = uint32_t(c.step.ext[0] | (c.step.ext[1] << 8));
+      const uint32_t q = uint32_t(float(ms) * qPerMs + 0.5f);
+      rampTo(c.a, kOffSlot + m, slotPos(r, kOffSlot + m, qCount), to, q);
+      break;
+    }
     case CmdType::RefreshInstruments:
       for (int t = 0; t < kNumTracks; ++t)
         if (c.a == 0xFF || c.a == t) {
@@ -1142,10 +1194,10 @@ void State::stop() {
     TrackRt& r = tr[t];
     for (uint8_t b = r.kfMask; b; b = uint8_t(b & (b - 1))) {
       const int m = __builtin_ctz(b);
-      jumpMacro(t, m, macroPos(r, m, qCount));
+      jumpMacro(t, m, slotPos(r, m, qCount));
     }
     r.kfMask = 0;
-    r.live = 0;
+    r.live = r.tiltLive = 0;
     publishMotion(t);
     pubMask = uint8_t(pubMask | (1u << t));
     tr[t].recHeld = 0;
@@ -1248,8 +1300,8 @@ void State::updateStand(int t) {
   const uint8_t* base = proj->tracks[t].macro;
   uint8_t want[kTrackMacros];
   bool diff = false;
-  for (int m = 0; m < kTrackMacros; ++m) {
-    want[m] = uint8_t(clampi(int(r.mTo[m] + 0.5f), 0, 255));
+  for (int m = 0; m < kTrackMacros; ++m) {   // where they stand, with a tilt offset held still
+    want[m] = uint8_t(clampi(int(clampf(r.mTo[m] + r.mTo[kOffSlot + m], 0.0f, 255.0f) + 0.5f), 0, 255));
     diff |= want[m] != base[m];
   }
   if (!r.inst || !diff) {
@@ -1287,14 +1339,17 @@ void State::ensureParams(int t) {
 // values run there from where they are. One evaluation per 11.6 ms per moving
 // track; a new target joins at the next interval (it only changes the speed).
 
-// Where macro m of the track is at quantum q (on its ramp, or where it stands).
+// Where macro m of the track is HEARD at quantum q: its base or motion (on its ramp,
+// or where it stands) plus its tilt offset, within 0..255. Without an offset exactly
+// the base (one more compare).
 float State::macroPos(const TrackRt& r, int m, uint32_t q) const {
-  if (!((r.moving >> m) & 1u)) return r.mTo[m];
-  const uint32_t e = q - r.mStart[m];
-  if (e >= r.mDur[m]) return r.mTo[m];
-  return r.mFrom[m] + (r.mTo[m] - r.mFrom[m]) * (float(e) / float(r.mDur[m]));
+  const float base = slotPos(r, m, q);
+  const float off = slotPos(r, kOffSlot + m, q);
+  if (off == 0.0f) return base;
+  return clampf(base + off, 0.0f, 255.0f);
 }
 
+// Slot m (a macro's base 0..3, or kOffSlot + the macro for its offset) jumps to `to`.
 void State::jumpMacro(int t, int m, float to) {
   TrackRt& r = tr[t];
   r.mFrom[m] = r.mTo[m] = to;
@@ -1308,6 +1363,7 @@ void State::jumpMacro(int t, int m, float to) {
 void State::resetMotion(int t) {
   TrackRt& r = tr[t];
   for (int m = 0; m < kTrackMacros; ++m) r.mFrom[m] = r.mTo[m] = float(proj->tracks[t].macro[m]);
+  for (int m = kOffSlot; m < kMacroSlots; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;   // a tilt offset ends too
   r.moving = 0;
   pubMask = uint8_t(pubMask | (1u << t));
   if (r.fine) exitFine(t);
@@ -1321,14 +1377,18 @@ void State::resetMotion(int t) {
 // without a bound instrument, or a macro the set does not have: jump.
 void State::startRamp(int t, int m, uint8_t target, uint16_t quanta) {
   TrackRt& r = tr[t];
-  rampTo(t, m, macroPos(r, m, qCount), float(target), quanta == 0 ? rampQ : quanta);
+  rampTo(t, m, slotPos(r, m, qCount), float(target), quanta == 0 ? rampQ : quanta);
 }
 
 // A straight line from `from` (where the macro is now, or a note's exact value) to
-// `to` in `quanta`; 1 or less: a jump.
+// `to` in `quanta`; 1 or less: a jump. m is a trajectory slot (a base, or kOffSlot +
+// the macro for its tilt offset).
 void State::rampTo(int t, int m, float from, float to, uint32_t quanta) {
   TrackRt& r = tr[t];
-  if (!r.inst || m >= r.inst->numMacros || quanta <= kMacroJump) { jumpMacro(t, m, to); return; }
+  if (!r.inst || (m & (kTrackMacros - 1)) >= r.inst->numMacros || quanta <= kMacroJump) {
+    jumpMacro(t, m, to);
+    return;
+  }
   pubMask = uint8_t(pubMask | (1u << t));
   if (from == to) {   // already there: it stops
     r.mFrom[m] = r.mTo[m] = to;
@@ -1458,7 +1518,7 @@ __attribute__((noinline)) bool State::fineInterval(int t, float* cur) {
     if (r.anchor == 2) fineValues(t, qCount, cur);          // a jump: the values are what the set says now
     const bool first = r.anchor == 3;                       // the start, from the bytes
     r.anchor = 0;
-    for (int m = 0; m < kTrackMacros; ++m)
+    for (int m = 0; m < kMacroSlots; ++m)
       if (((r.moving >> m) & 1u) && qCount - r.mStart[m] >= r.mDur[m]) {
         r.mFrom[m] = r.mTo[m];
         r.moving = uint8_t(r.moving & ~(1u << m));
@@ -1586,7 +1646,7 @@ void State::aimMotion(int t, uint8_t which, uint32_t minQuanta) {
   }
   for (uint8_t b = which; b; b = uint8_t(b & (b - 1))) {
     const int m = __builtin_ctz(b);
-    rampTo(t, m, macroPos(r, m, qCount), float(val[m]), fireQuanta(when[m], minQuanta));
+    rampTo(t, m, slotPos(r, m, qCount), float(val[m]), fireQuanta(when[m], minQuanta));
   }
 }
 
@@ -1664,7 +1724,7 @@ void State::motionStep(int t, bool fresh) {
 // that starts here; a hand still for a bar is no longer live (its motion plays).
 void State::liveStep(int t) {
   TrackRt& r = tr[t];
-  for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
+  for (uint8_t b = uint8_t(r.live & ~r.tiltLive); b; b = uint8_t(b & (b - 1))) {   // a held tilt stays live
     const int m = __builtin_ctz(b);
     if (int32_t(qCount - r.liveUntil[m]) >= 0) {
       r.live = uint8_t(r.live & ~(1u << m));
@@ -2781,6 +2841,20 @@ Command setMacroCommand(int track, int macro, uint8_t position, uint16_t rampQua
   c.b = uint8_t(macro);
   c.c = position;
   c.step.setLock(uint8_t(rampQuanta & 0xFF), uint8_t(rampQuanta >> 8));
+  return c;
+}
+
+Command macroOffsetCommand(int track, int macro, int offset16, uint16_t rampMs, bool hold) {
+  Command c;
+  std::memset(&c, 0, sizeof(c));
+  c.type = CmdType::SetMacroOffset;
+  c.a = uint8_t(track);
+  c.b = uint8_t((macro & 3) | (hold ? kOffsetHold : 0));
+  const int lim = 255 * kOffsetScale;
+  const uint16_t v = uint16_t(int16_t(offset16 < -lim ? -lim : (offset16 > lim ? lim : offset16)));
+  c.step.note = uint8_t(v & 0xFF);
+  c.step.vel = uint8_t(v >> 8);
+  c.step.setLock(uint8_t(rampMs & 0xFF), uint8_t(rampMs >> 8));
   return c;
 }
 

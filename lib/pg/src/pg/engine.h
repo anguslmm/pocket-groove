@@ -51,6 +51,8 @@ enum class CmdType : uint8_t {
                     //   library (macro::findInstrument) and re-derive. The host's overlay (the lab)
                     //   sends it after replacing a set; the old set's memory must stay valid until
                     //   instrumentRefreshes() has counted this command (applied or discarded).
+  SetMacroOffset,   // a = track, b = macro 0..3 | kOffsetHold: the macro's TILT OFFSET (below) moves to
+                    //   a signed target in a ramp. Build it with macroOffsetCommand().
 };
 
 // INSTRUMENTS (docs/MACROLAB.md): a track whose TrackSettings name an
@@ -127,6 +129,25 @@ enum class CmdType : uint8_t {
 // per track in EngineStatus. Cost: nothing runs per quantum (two compares); at a
 // step of a track whose pattern has motion a few compares, and at a keyframe or
 // a change a scan of at most two patterns' steps of that track.
+// TILT OFFSET (docs/UX.md 10.3 "Tilt"): per track and macro the engine also keeps
+// a signed offset, a second trajectory of its own (SetMacroOffset: a straight line
+// from where the offset is to the target in the command's ramp). What the voice
+// hears, what the page's sliders show (EngineStatus::macroPos) and what motion
+// recording writes is
+//     clamp(where the macro would otherwise be (its base, or the MOTION) + offset, 0, 255).
+// The offset is momentary: it never touches the Project (the base byte, the
+// derived parameters, the notes) and is not saved; an instrument change, a
+// RefreshInstruments and a new project set it to 0. With every offset at 0 the
+// engine plays bit for bit what it played without them (one compare per read).
+// Recording: a SetMacroOffset with kOffsetHold (the player holds the gesture and
+// has moved it), record on and the transport running makes that macro LIVE as a
+// key move does (MOTION, below): every note that starts meanwhile takes the heard
+// value. Where the macro had motion it stays where the motion had it at that
+// moment (the hand took it), and the offset moves it from there. Live ends when a
+// SetMacroOffset without kOffsetHold arrives (the release), unless a key moved the
+// macro within the last bar (then the keys' rule ends it), or with record off or Stop.
+constexpr uint8_t kOffsetHold = 0x80;
+constexpr int kOffsetScale = 16;      // offsets travel in 1/16 of a position unit
 constexpr int kMacroRampMs = 72;      // default glide of a SetMacro
 constexpr int kMacroSettleMs = 50;    // run into / out of the fractional path
 constexpr uint16_t kMacroJump = 1;    // ramp: arrive at the next quantum
@@ -145,6 +166,9 @@ Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4])
 // SetMacro with an explicit ramp (quanta; 0 = kMacroRampMs). (MOTION's glides are
 // the engine's own ramps, aimed at the next keyframe's quantum, of any length.)
 Command setMacroCommand(int track, int macro, uint8_t position, uint16_t rampQuanta = 0);
+// SetMacroOffset: offset in 1/kOffsetScale position units (clamped to +-255 units),
+// ramp in milliseconds (0 = a jump), hold: the player holds the gesture (TILT OFFSET).
+Command macroOffsetCommand(int track, int macro, int offset16, uint16_t rampMs, bool hold);
 
 struct EngineStatus {
   bool     playing;
