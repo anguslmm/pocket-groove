@@ -13,6 +13,10 @@
 #include <LittleFS.h>
 #include <SD.h>
 #include <SPI.h>
+#include <sd_diskio.h>
+#include <diskio.h>
+
+#include <esp_heap_caps.h>
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -47,6 +51,8 @@ volatile SdState s_sd = SdState::Idle;
 volatile uint32_t s_sdMountMs = 0;
 TaskHandle_t s_sdTask = nullptr;
 bool s_spiStarted = false;
+volatile bool s_sdProbed = false;                // the card answered the probe (a mount was attempted)
+volatile uint32_t s_sdMinBefore = 0, s_sdMinAfter = 0;   // heap minimum-ever around the mount attempt
 
 bool mkdirsVfs(const char* vpath, bool lastIsFile);
 
@@ -62,14 +68,35 @@ void sdMountTask(void*) {
     s_spiStarted = true;
   }
   SD.end();
+  s_sdMinBefore = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  // Probe first. SD.begin() registers the FAT VFS before it talks to the card:
+  // that allocates the volume (FATFS with its 4 KB window) and max_files file
+  // objects (4 KB sector buffer each), about 18.5 KB here (27.7 KB with 5 files),
+  // and frees them again when f_mount finds no card. With no card in the slot
+  // that transient set the heap's minimum-ever at every boot. The probe is the
+  // exact step f_mount would fail on (disk_initialize = the SD library's
+  // ff_sd_initialize: power-up clocks, CMD0 twice, CRC, IF_COND, ACMD41), run
+  // with only the library's card record allocated (~40 B); a card that does not
+  // answer it would have failed SD.begin() the same way. Cost with a card: its
+  // initialisation runs twice (sdcard_uninit puts it back to idle first).
+  bool answered = false;
+  {
+    const uint8_t pdrv = sdcard_init(kSdCs, &SPI, kSdHz);
+    if (pdrv != 0xFF) {
+      answered = (disk_initialize(pdrv) & STA_NOINIT) == 0;
+      sdcard_uninit(pdrv);
+    }
+  }
+  s_sdProbed = answered;
+  bool ok = false;
 #if PG_USB_AUDIO
   // FatFs here keeps a 4 KB sector buffer in every file object, and the VFS
   // allocates max_files of them at mount: 3 (= kMaxHandles, the most this
   // module ever has open) instead of 5 saves 8.2 KB of heap while a card is
   // mounted (the USB audio build is short of RAM).
-  bool ok = SD.begin(kSdCs, SPI, kSdHz, "/sd", 3, false);   // >= kMaxHandles (checked below)
+  if (answered) ok = SD.begin(kSdCs, SPI, kSdHz, "/sd", 3, false);   // >= kMaxHandles (checked below)
 #else
-  bool ok = SD.begin(kSdCs, SPI, kSdHz, "/sd", 5, false);
+  if (answered) ok = SD.begin(kSdCs, SPI, kSdHz, "/sd", 5, false);
 #endif
   SdState st;
   if (!ok) st = SdState::Failed;
@@ -91,6 +118,7 @@ void sdMountTask(void*) {
     s_sdCard = s_sdTotal = s_sdUsed = 0;
   }
   s_sdMountMs = millis() - t0;
+  s_sdMinAfter = static_cast<uint32_t>(heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   s_sd = st;
   s_sdTask = nullptr;
   vTaskDelete(nullptr);
@@ -421,6 +449,9 @@ Info info() {
   in.sdCardBytes = m ? s_sdCard : 0;
   in.sdTotalBytes = m ? s_sdTotal : 0;
   in.sdUsedBytes = m ? s_sdUsed : 0;
+  in.sdProbed = s_sdProbed;
+  in.sdMinHeapBefore = s_sdMinBefore;
+  in.sdMinHeapAfter = s_sdMinAfter;
   return in;
 }
 

@@ -37,6 +37,8 @@ struct Info {
   uint32_t sdMountMs;        // duration of the last mount attempt
   const char* sdType;        // "MMC", "SDSC", "SDHC", "none", "?"
   uint64_t sdCardBytes, sdTotalBytes, sdUsedBytes;
+  bool     sdProbed;                         // a card answered the probe, so SD.begin() ran
+  uint32_t sdMinHeapBefore, sdMinHeapAfter;  // heap minimum-ever when the mount attempt began / ended
 };
 
 // Mounts "/int" and creates "/int/pg". Blocking; can take many seconds on the
