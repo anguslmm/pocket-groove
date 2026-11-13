@@ -37,7 +37,7 @@ void Resampler::start(Recorder* rec, RecordSink* sink, int16_t* ring, uint32_t r
 void Resampler::push(int16_t v) {
   if (head_ - tail_.load(std::memory_order_acquire) > mask_) {
     dropped_.fetch_add(1, std::memory_order_relaxed);
-    if (!endSet_) setEnd(0, kOverrun);
+    setEnd(0, kOverrun);   // the timing is lost: over, whatever it was doing
     return;
   }
   ring_[head_ & mask_] = v;
@@ -111,7 +111,14 @@ void Resampler::quantum(const int16_t* st, int frames, uint8_t flags) {
         setEnd(d + (d & 1), kReleased);   // even: whole decimated samples
       }
     }
-    for (int i = 0; i < frames; ++i) push(m[i]);
+    // the quantum into the ring: one check for room, then a plain copy
+    if (head_ + uint32_t(frames) - tail_.load(std::memory_order_acquire) > mask_ + 1) {
+      dropped_.fetch_add(uint32_t(frames), std::memory_order_relaxed);
+      setEnd(0, kOverrun);   // the timing is lost: over, whatever it was doing
+    } else {
+      for (int i = 0; i < frames; ++i) ring_[(head_ + uint32_t(i)) & mask_] = m[i];
+      head_ += uint32_t(frames);
+    }
     n_ += uint32_t(frames);
   }
   if (!endSet_ && n_ - s_ >= maxF_) {

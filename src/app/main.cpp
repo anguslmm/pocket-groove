@@ -11,8 +11,8 @@
 //             codec volume (I2C), files, serial. Sleeps in keys::waitEvent()
 //             between ~30 fps frames, so keys are handled as they arrive.
 //   pg_sdmount core 1, prio 1, 8 KB, transient (plat::storage), at boot.
-//   pg_mic    core 1, prio 8, 3 KB from the heap, only while a microphone recording runs
-//             (plat::mic: the ring -> the Recorder -> 512-byte flash writes).
+//   pg_mic    core 1, prio 8, 3 KB from the heap, only while a microphone recording or a
+//             resample (SHIFT+L) runs (plat::mic: the ring -> the Recorder -> 512-byte flash writes).
 // Big objects are static (.bss/.data): Instrument (+ the engine's state block),
 // Ui, Framebuffer. Nothing large is allocated on the heap or a task stack.
 //
@@ -966,6 +966,8 @@ void setup() {
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
   g_ui.setMic(&plat::mic::input());   // L on a sampler page (stage F2); it says why when it cannot
+  // SHIFT+L: resampling, the engine's own output (docs/UX.md 10.3 "Resampling")
+  g_ui.setResample(&plat::mic::resampleInput(&g_inst.engine(), &g_inst.sampler(), sampleRate()));
   g_xfer.init(&fs, PG_VERSION);
   g_xfer.setSamples(plat::samples::info().ok ? &plat::samples::writer() : nullptr);
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards

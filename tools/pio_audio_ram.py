@@ -114,6 +114,9 @@ HOT_COMMON = [
     r"^pg::sampler::SamplerVoice::(render|setParams|updateRate|updateRegion|edge|endChop|active|mono)\(",
     r"^pg::sampler::\(anonymous namespace\)::(endOf|minRegion)\(",
     r"^pg::sampler::SamplePool::generation\(",
+    # Resampling (SHIFT+L): the engine's output tap, once per quantum while a resample
+    # runs (a mono sum and a ring copy); its writer side (pump) runs on the writer task.
+    r"^pg::sampler::Resampler::(quantum|push|setEnd)\(",
 ]
 # The variants only one output layout runs.
 HOT_MONO = [
@@ -131,7 +134,7 @@ HOT = HOT_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 # Placement checks (regexes on demangled names, see the header).
 MUST_COMMON = [r"^pg::Engine::process\(", r"^pg::lead::LeadVoice::render\(", r"^pg::bass::BassVoice::render\(",
                r"^pg::engine_detail::State::fineEval\(", r"^pg::bass::BassVoice::mapParams\(",
-               r"^pg::sampler::SamplerVoice::render\("]
+               r"^pg::sampler::SamplerVoice::render\(", r"^pg::sampler::Resampler::quantum\("]
 MUST = MUST_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 MUST_NOT = HOT_MONO if STEREO else HOT_STEREO
 # Per-step / per-note paths (tier 2).
@@ -148,7 +151,8 @@ RAM_RODATA = ["bass/bass_tables_data.cpp"]
 
 AUDIO_OBJS = ("/pg/drums/", "/pg/bass/bass.cpp", "/pg/lead/lead.cpp", "/pg/engine/engine.cpp",
               "/pg/engine/delay.cpp", "/pg/engine/reverb.cpp", "/pg/engine/master.cpp",
-              "/pg/sampler/sampler.cpp", "/pg/sampler/sample_pool.cpp", "/pg/sampler/flash_pool.cpp")
+              "/pg/sampler/sampler.cpp", "/pg/sampler/sample_pool.cpp", "/pg/sampler/flash_pool.cpp",
+              "/pg/sampler/resampler.cpp")
 
 _hot = [re.compile(p) for p in HOT + (STEP if TIER >= 2 else [])]
 

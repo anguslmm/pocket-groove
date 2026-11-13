@@ -22,6 +22,7 @@
 //             starts where step n's audio starts in the recording (within the engine's
 //             half-quantum grid), and the chop at step n plays from there
 //   mono      the device's mono output (L == R): the same path
+//   overrun   the writer falls behind: Failed, never a take with a hole in it
 //   bit-identical: the output with a tap installed equals the output without one
 //   cost      the tap's work per quantum on the host (printed)
 #include <chrono>
@@ -530,6 +531,26 @@ void testMono() {
   it::check(mismatches(tk.sink.v, tk.rs.length(), s.mono, tk.startAt()) == 0, "mono: sample-exact");
 }
 
+// The writer falls behind (a ring of 512 frames, never pumped while it plays): the
+// take fails (OVERRUN) instead of keeping a recording with a hole in its timing.
+void testOverrun() {
+  fresh(124, 8);
+  Stream s;
+  play();
+  render(s, 128 * 20);
+  sampler::Recorder rec;
+  hostrs::VecSink sink;
+  std::vector<int16_t> ring(512);
+  Resampler rs;
+  rs.start(&rec, &sink, ring.data(), 512, false);
+  inst().engine().setOutputTap(&rs);
+  render(s, 128 * 40);   // no pump
+  for (int i = 0; i < 20 && !rs.ended(); ++i) render(s, 128, &rs);
+  inst().engine().setOutputTap(nullptr);
+  it::check(rs.ended() && rs.state() == RecState::Failed && rs.endReason() == Resampler::kOverrun && rs.dropped() > 0,
+            "overrun: Failed (%s), %u frames dropped", sampler::recStateName(rs.state()), unsigned(rs.dropped()));
+}
+
 void testCost() {
   Resampler rs;
   sampler::Recorder rec;
@@ -561,6 +582,7 @@ int main() {
   testOwnSlot();
   testSlices();
   testMono();
+  testOverrun();
   testCost();
   return it::finish("itest_resample");
 }

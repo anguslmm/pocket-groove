@@ -17,11 +17,27 @@
 // erase(): the slot's 68 sectors in one call with the output faded out first (both
 // cores stall for the whole erase: the groove pauses; USB audio gets a gap).
 //
+// RESAMPLING (SHIFT+L, docs/UX.md 10.3 "Resampling"): resampleInput() is the same
+// session with the engine's output as the source (pg/sampler/resampler.h): the
+// audio task, through Engine's output tap, sums each quantum to mono and copies it
+// into the ring (its whole share: no RX, no ADC, the mic is never started); the
+// writer task pumps the ring into the Recorder (direct mode) and the flash; the UI
+// thread commits it the same way (named RESnn) and the slot plays again. One
+// recording at a time, of either kind (busy()). Works on either audio backend; at
+// 32 kHz it says RESAMPLE: 44.1K ONLY.
+//
 // UI thread only. No Arduino / ESP types in this header.
 #pragma once
 #include <cstdint>
 
 #include "pg/sampler/recorder.h"
+
+namespace pg {
+class Engine;
+namespace sampler {
+class SamplerVoice;
+}
+}  // namespace pg
 
 namespace plat {
 namespace mic {
@@ -31,6 +47,9 @@ constexpr uint32_t kTaskStack = 3072;
 constexpr int kTaskPrio = 8;                 // above the UI loop (1), below keys (10) and IMU (9)
 
 pg::sampler::MicInput& input();
+// The engine-output recorder for SHIFT+L. engine / voice: the instrument's (the
+// voice silences the slot being recorded); sampleRate: the engine's.
+pg::sampler::MicInput& resampleInput(pg::Engine* engine, pg::sampler::SamplerVoice* voice, uint32_t sampleRate);
 bool busy();                                 // a recording session exists (flash is being written)
 
 // The report's [mic] section (serial `r`): codec registers, GPIO46, a one-second
