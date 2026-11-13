@@ -120,7 +120,7 @@ Order of work (owner, updated 2026-11-12):
    test_desktop_lab, test_desktop_app part 8); not run on the device or the owner's Mac yet.
    Firmware: both envs build warning-free; static RAM +840 B (USB 227372 -> 228212, jack
    226828 -> 227668), flash +61 KB (1024603 -> 1085859, 962039 -> 1023283; the table is 44 KB);
-   the IRAM placement is unchanged (85 / 84 functions, its checks OK). Note: an incremental pio
+   the IRAM placement is unchanged (85 / 84 functions, its checks OK). Note (fixed 2026-11-13 in tools/pio_audio_ram.py): an incremental pio
    build after editing lib/pg can trip the placement check (an object not recompiled); clean
    the env (`pio run -e ENV -t clean`) and build again.
    LATER STAGES (not built, not designed out): (B) finer-than-7-bit, smoothed parameter motion

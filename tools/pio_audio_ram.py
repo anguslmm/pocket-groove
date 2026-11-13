@@ -185,6 +185,7 @@ def _demangle(cxxfilt, names):
 
 
 _moved = []
+_kept = []     # functions an earlier build already moved (objects not recompiled this time)
 _step = ["starting"]   # what the placement step is doing right now (for the watchdog)
 
 
@@ -204,7 +205,11 @@ def _relocate(target, source, env):
         if any(o in rel for o in AUDIO_OBJS):
             _step[0] = "c++filt " + short
             fns = sorted({s.split(".", 2)[2] for s in secs if s.startswith((".text.", ".literal."))})
-            dm = _demangle(cxxfilt, fns)
+            # An object that was not recompiled still carries the names an
+            # earlier build gave it: count those as placed, do not rename again.
+            old = sorted({s[len(".iram1.pg."):] for s in secs if s.startswith(".iram1.pg.")})
+            dm = _demangle(cxxfilt, fns + old)
+            _kept.extend(dm.get(f, f) for f in old)
             _step[0] = "matching " + short
             pick = {f for f in fns if any(h.search(dm.get(f, f)) or h.search(f) for h in _hot)}
             for s in secs:
@@ -273,16 +278,18 @@ def _relocate_all_body(target, source, env):
             if "/pg/pg/" in o.replace("\\", "/")]
     _relocate([type("N", (), {"__str__": lambda self, o=o: o})() for o in objs], None, env)
     # Fail the build rather than ship an image that silently stayed in flash.
-    # (On a re-link without recompiling, the sections are already renamed and
-    # nothing is moved now: only check when this run did the renaming.)
-    if _moved:
+    # An incremental build recompiles only some objects: the others were
+    # renamed by an earlier build (_kept) and count as placed.
+    placed = _moved + _kept
+    if placed:
         for must in MUST:
-            if not any(re.search(must, m) for m in _moved):
-                raise RuntimeError("[audio-ram] %s was not moved to IRAM (%d functions matched)" % (must, len(_moved)))
+            if not any(re.search(must, m) for m in placed):
+                raise RuntimeError("[audio-ram] %s was not moved to IRAM (%d functions matched)" % (must, len(placed)))
         for nope in MUST_NOT:
-            if any(re.search(nope, m) for m in _moved):
+            if any(re.search(nope, m) for m in placed):
                 raise RuntimeError("[audio-ram] %s was moved to IRAM, but this build does not run it" % nope)
-        print("[audio-ram] total: %d functions -> IRAM" % len(_moved), flush=True)
+        print("[audio-ram] total: %d functions -> IRAM (%d moved now, %d already placed)"
+              % (len(placed), len(_moved), len(_kept)), flush=True)
     elif not objs:
         raise RuntimeError("[audio-ram] found no lib/pg objects under " + env.subst("$BUILD_DIR"))
     return 0
