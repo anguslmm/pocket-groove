@@ -119,15 +119,15 @@ Where the USB build's static RAM goes, against the default build: audio driver +
 
 ### 6.3 The 28 KB between free and minimum-ever
 
-Not found from the sources alone, so the USB build measures it: `r` prints `[ram] min-ever free during boot: begin / storage / usb / menu+sd / ui / audio`, and every later drop is logged as `[ram] heap min-ever fell to N B at t=Ns`. Candidates read from the code: the transient `pg_sdmount` task (8 KB stack) at boot, overlapping the SD mount; FatFs at mount (with a card: about 25 KB in the default build, 16.7 KB in this one, permanent); the LittleFS file caches (512 B each) during save/load; `printf` with floats (small). Note: if the 66 / 38 KB were measured **without** an SD card, inserting one costs about 25 KB of heap in the default build (17 KB in this one).
+**Found (2026-11-13, docs/STATE.md "RAM PASS"): the SD mount at boot with no card.** `SD.begin()` registers the FAT VFS (the volume and max_files file objects, 4 KB buffer each: ~18.5 KB here, ~27.7 KB in the default build) before it finds there is no card, then frees it; with the 8 KB mount task on top this set the minimum. The firmware now probes the card first (the SD library's own `disk_initialize`) and mounts only when one answers. Before that was found, the USB build measured it this way: `r` prints `[ram] min-ever free during boot: begin / storage / usb / menu+sd / ui / audio`, and every later drop is logged as `[ram] heap min-ever fell to N B at t=Ns`. Candidates read from the code: the transient `pg_sdmount` task (8 KB stack) at boot, overlapping the SD mount; FatFs at mount (with a card: about 25 KB in the default build, 16.7 KB in this one, permanent); the LittleFS file caches (512 B each) during save/load; `printf` with floats (small). Note: if the 66 / 38 KB were measured **without** an SD card, inserting one costs about 25 KB of heap in the default build (17 KB in this one).
 
 ### 6.4 Not done, for the owner to decide
 
 | Option | Saves | Cost / risk |
 |---|---|---|
 | SD: 2 FatFs file objects instead of 3 | 4.1 KB heap with a card | an SD save during an SD transfer would fail cleanly (error, no data loss); review the open patterns first |
-| Loop task stack 12 KB -> 8 KB (`getArduinoLoopTaskStackSize`) | 4 KB heap | needs the measured high-water mark (`[stack]` line of `r`) after a session of saving, loading and transfers |
-| Audio task stack 6 KB -> 4 KB | 2 KB heap | same: read `[stack] audio` while ACIDJAM plays with all FX |
+| Loop task stack 12 KB -> 8 KB (`getArduinoLoopTaskStackSize`) | 4 KB heap | needs the measured high-water mark (`[task] loopTask` line of `r`) after a session of saving, loading and transfers |
+| Audio task stack 6 KB -> 4 KB | 2 KB heap | same: read `[task] pg_audio` while ACIDJAM plays with all FX |
 | Keys task 4 KB -> 3 KB | 1 KB | same |
 | Compile our own copy of `audio_device.c` (MIT) with EP OUT off and a 2048 B IN FIFO | 1 KB more static, and the 1 kHz ISR path could go to IRAM (+1 KB IRAM) | 1900 lines of vendored code; re-run the flow-control simulation with the new depth (jitter margin drops from about 8 to about 5 ms) |
 | Display strips 2 x 1 row | 1.9 KB | 135 DMA transfers per full frame; measure the UI frame time first |
