@@ -5,6 +5,15 @@ Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
 (build/firmware/pocket-groove-smoke.bin), first boot of the instrument
 (build/firmware/pocket-groove.bin), and listening feedback on renders.
 
+Live record of long held notes (2026-11-13, owner report "long held legato notes came back as
+stabs"): fixed and host-verified (itest_live_record). Legato in live record now gives the
+previous step SLD plus a gate reaching the new note (it used to keep the default half-step gate:
+a slide into a note 16+ steps away played as a stab); the new step no longer gets SLD from being
+played legato; a step's gate runs to the release of the last key that landed on it; recorded
+gates are capped at the step's loop (so a note rings through the loop point and ends by its own
+next trigger); a recorded step does not retrigger under a key still held past the loop; STEP
+EDIT's GATE field runs to 63.75 steps (it clamped any edit back to 16). Not yet heard on hardware.
+
 Stem bounce + USB project transfer (tools/pg, docs/MANUAL.md chapter 15): host-verified
 (itest_bounce, itest_golden, test_io_xfer, test_pg_client: the Python client against the
 device protocol code on a pty); the firmware side (src/app glue, real USB-Serial/JTAG timing,

@@ -125,10 +125,15 @@ static void testRecord() {
   CHECKF(d.flags() == (kStepOn | (2 << kStepRatchetShift)) && d.vel == 93 && d.note == 55 && d.lockParam() == 3 && d.lockValue() == 9 && d.prob() == 80 && d.gate == pre.gate,
          "drum record wrote flags %02x vel %d note %d", d.flags(), d.vel, d.note);
   const Step& s = rig.step(0, kTrackLead, 4);
-  CHECKF(s.flags() == (kStepOn | kStepAccent | kStepSlide | (2 << kStepRatchetShift)) && s.vel == 93 && s.note == 72 && s.chord() == kChordSus4 && s.gate == kDefaultStep.gate,
+  // The slide played with the key (another key held) is not written on this step: a
+  // step's slide means "runs into the next note" (engine.cpp recordNote, legato).
+  CHECKF(s.flags() == (kStepOn | kStepAccent | (2 << kStepRatchetShift)) && s.vel == 93 && s.note == 72 && s.chord() == kChordSus4 && s.gate == kDefaultStep.gate,
          "synth record wrote flags %02x vel %d note %d chord %d gate %d", s.flags(), s.vel, s.note, s.chord(), s.gate);
   CHECK(rig.eng.status().revision == rev0 + 2);
   CHECK(rig.v[kTrackLead].ons().size() == 1);
+  // Released before the next pass (a step held under the player's hand does not fire).
+  rig.post(cmd(CmdType::NoteOff, kTrackLead, 72));
+  rig.run(2);
   rig.proj.patterns[0].tracks[kTrackLead].steps[4].setFlags(kStepOn);   // drop ratchet for a simple count
   rig.proj.patterns[0].tracks[kTrackLead].steps[4].setProb(100);
   rig.runSamples(long(20.5 * L) - rig.time);

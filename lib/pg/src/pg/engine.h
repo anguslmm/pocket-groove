@@ -22,9 +22,12 @@ enum class CmdType : uint8_t {
   NoteOn,           // live play: a = track, b = note, c = velocity, step.chord()/flags honoured.
                     //   If recording and playing, the engine also writes it to the nearest step.
                     //   A NoteOn that arrives while the previous recorded note on that synth track
-                    //   is still held (legato) sets kStepSlide on the PREVIOUS note's step.
-  NoteOff,          // a = track, b = note. When recording, sets the recorded step's gate from
-                    //   the held duration (min 1 quarter-step).
+                    //   is still held (legato) sets kStepSlide on the PREVIOUS note's step and
+                    //   gives it the gate that reaches the new note (the recorded step itself
+                    //   gets no kStepSlide from the NoteOn's flags).
+  NoteOff,          // a = track, b = note. When recording, the release of the last key that
+                    //   landed on the recorded step sets its gate from the held duration (min 1
+                    //   quarter-step, at most the step's loop: engine.cpp recordGateCap).
   QueuePattern,     // a = pattern: switch at the next pattern boundary (immediately if stopped)
   SetSongMode,      // c = 0/1, a = slot to start from when switching on
   SetSongSlot,      // a = slot, b = pattern, c = repeats

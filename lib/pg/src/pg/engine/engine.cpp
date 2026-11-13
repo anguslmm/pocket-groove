@@ -71,9 +71,9 @@ struct TrackRt {
   int64_t rollCd;                     // Q32 samples until the next roll hit
   int64_t rollInt;                    // Q32 samples between hits
   NoteEvent rollEv;
-  // ---- live recording: the last recorded note, while its key is held ----
-  uint8_t recHeld, recNote, recPattern, recStep;
-  uint32_t recStartQ;                 // quantum counter at its note-on
+  // ---- live recording: the last recorded step, while a key that landed on it is held ----
+  uint8_t recHeld, recPattern, recStep;
+  uint32_t recStartQ;                 // quantum counter at its (first) note-on
   uint32_t liveHeld[4];               // live keys down (NoteOn without NoteOff yet), bit per MIDI note
   // ---- instrument (engine.h "INSTRUMENTS") ----
   const macro::MacroSet* inst;        // the bound set, nullptr = CLASSIC or unknown id
@@ -129,6 +129,9 @@ struct TrackRt {
   uint64_t mixKey;                    // raw mixer bytes 24..28 + mute the gains above were computed from
   uint8_t settled;                    // gains reached their targets: nothing to recompute until mixKey or the ducker moves
   uint8_t hasSends;                   // a send gain is non-zero (valid while settled)
+  // ---- live recording, the held step (cold: last, so the hot fields keep their offsets) ----
+  int32_t recOffT;                    // the step's own (ideal) time relative to recStartQ's quantum, ticks
+  uint32_t recKeys[4];                // the keys (MIDI notes) down that landed on it
 };
 
 }  // namespace
@@ -297,6 +300,8 @@ struct State {
   void liveNoteOn(const Command& c);
   void liveNoteOff(const Command& c);
   void recordNote(int t, const NoteEvent& ev);
+  int recordGateCap(int t, int p) const;
+  void setRecordedGate(int t, int64_t quarterSteps);
   void startRoll(int t, const Command& c);
   void rollTick();
   void writeTrack(int pattern, int track, const TrackPattern* src);
@@ -1947,7 +1952,10 @@ void State::hit(int t, NoteEvent ev, int32_t offCd, bool armSlide) {
 
 void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, int32_t dur) {
   TrackRt& r = tr[t];
-  const bool suppressed = r.supValid && r.supPattern == curPattern && r.supStep == stepIndex;
+  // A step recorded while its key is still down does not fire under the player's
+  // hand (a note held longer than the loop): the live note wins until release.
+  const bool suppressed = (r.supValid && r.supPattern == curPattern && r.supStep == stepIndex) ||
+                          (r.recHeld && r.recPattern == curPattern && r.recStep == stepIndex);
   r.supValid = 0;
   r.ratLeft = 0;                                   // ratchets never spill into the next step
 
@@ -2184,28 +2192,53 @@ void State::liveNoteOn(const Command& c) {
   if (playing && recording) recordNote(t, ev);
 }
 
-// DECISION (record gate): only synth tracks track the held key (drums are
+// DECISION (record gate): only synth tracks track the held keys (drums are
 // one-shots). The gate is the held time in quarter-steps of the current tempo,
-// rounded, 1..255. A NoteOff for any other note (e.g. the earlier key of a
-// legato pair released late) changes nothing. Recording stopping or the
-// transport stopping forgets the held note.
+// rounded, from the first note-on that landed on the step to the release of the
+// LAST key down that landed on it (a hand-played chord: whatever the release
+// order). A NoteOff for any other note (e.g. the earlier key of a legato pair,
+// whose step already got its gate when the next note landed) changes nothing.
+// Every recorded gate is capped at the loop the step lives in (recordGateCap):
+// a note cannot be longer than the pattern that repeats it, so on playback it
+// ends no later than its own next trigger. Recording stopping or the transport
+// stopping forgets the held step.
 void State::liveNoteOff(const Command& c) {
   const int t = c.a;
   const uint8_t note = uint8_t(c.b & 127);
   vOff(t, note);
   TrackRt& r = tr[t];
   r.liveHeld[note >> 5] &= ~(1u << (note & 31));
-  if (!r.recHeld || r.recNote != note) return;
+  if (!r.recHeld || !(r.recKeys[note >> 5] & (1u << (note & 31)))) return;
+  r.recKeys[note >> 5] &= ~(1u << (note & 31));
+  if (r.recKeys[0] | r.recKeys[1] | r.recKeys[2] | r.recKeys[3]) return;   // another key of the step is down
   r.recHeld = 0;
   if (!playing || !recording) return;
   int64_t held = int64_t(uint32_t(qCount - r.recStartQ)) * kQuantumTicks;   // ticks
   if (held > (int64_t(1) << 40)) held = int64_t(1) << 40;
   const int64_t unit = stepTicks > 0 ? stepTicks : 1;                       // ticks per step
-  int64_t g = (held * kGateUnitsPerStep + unit / 2) / unit;
+  setRecordedGate(t, (held * kGateUnitsPerStep + unit / 2) / unit);
+}
+
+// The longest gate a step of track t in pattern p records: the loop it repeats
+// in (the shorter of the track's and the pattern's length), at most the byte
+// (63.75 steps).
+int State::recordGateCap(int t, int p) const {
+  const Pattern& pat = proj->patterns[p];
+  int len = sanitizeLength(pat.tracks[t].length);
+  const int plen = sanitizeLength(pat.length);
+  if (plen < len) len = plen;
+  const int cap = len * kGateUnitsPerStep;
+  return cap > 255 ? 255 : cap;
+}
+
+// The held step's gate, in quarter-steps, capped (recordGateCap).
+void State::setRecordedGate(int t, int64_t g) {
+  TrackRt& r = tr[t];
+  const int cap = recordGateCap(t, r.recPattern);
+  if (g > cap) g = cap;
   if (g < 1) g = 1;
-  if (g > 255) g = 255;
   Step& s = proj->patterns[r.recPattern].tracks[t].steps[r.recStep];
-  if (s.gate != uint8_t(g)) {
+  if ((s.flags() & kStepOn) && s.gate != uint8_t(g)) {
     s.gate = uint8_t(g);
     bump();
   }
@@ -2219,16 +2252,23 @@ void State::liveNoteOff(const Command& c) {
 // the upcoming step is step 0 of whatever pattern plays next (queued pattern /
 // song slot), because that is the downbeat the player was aiming at.
 // Drums: step on + velocity (tuning, p-lock, prob, ratchet untouched).
-// Synths: note, velocity, accent/slide as played, default gate (replaced by
-// the held time at NoteOff), chord (lead). Legato: if the previously recorded
-// note on this synth track is still held and the new note lands on a
-// different step, that previous step gets kStepSlide.
+// Synths: note, velocity, accent as played, default gate (replaced by the held
+// time when the last key on the step is released), chord (lead), no slide.
+// Several keys landing on one step (a hand-played chord): the last one pressed
+// is the step's note; the gate runs until the last of them is released.
+// Legato: if a key of the previously recorded step is still down when the new
+// note lands on a different step, that previous step gets kStepSlide and the
+// gate that reaches the new note (from its own grid time to the new note's,
+// swing, pages and the loop point included, rounded up), so it plays back as
+// one connected line. kStepSlide on a step means "this note runs into the
+// next", so the new step gets no slide from being played legato.
 void State::recordNote(int t, const NoteEvent& ev) {
   TrackRt& r = tr[t];
   const int len = curPatternLen();
   const int nextMaster = masterNext >= len ? 0 : masterNext;
   const int32_t toNext = int32_t((gridCd + swingOffFP(nextMaster)) >> 24);
   int pattern = curPattern, step = r.pos;
+  int32_t offT = -sinceFire;                     // the chosen step's grid time relative to now, ticks
   if (sinceFire > toNext) {
     if (masterNext >= len) {
       pattern = decideNext(false);
@@ -2237,31 +2277,43 @@ void State::recordNote(int t, const NoteEvent& ev) {
       step = r.next;
       if (step >= sanitizeLength(proj->patterns[pattern].tracks[t].length)) step = 0;
     }
+    offT = toNext;
     r.supValid = 1;
     r.supPattern = uint8_t(pattern);
     r.supStep = uint8_t(step);
   }
-  if (isSynthTrack(t) && r.recHeld && (r.recPattern != pattern || r.recStep != step)) {
+  const bool sameStep = r.recHeld && r.recPattern == pattern && r.recStep == step;
+  if (isSynthTrack(t) && r.recHeld && !sameStep) {
     Step& prev = proj->patterns[r.recPattern].tracks[t].steps[r.recStep];
-    if (prev.flags() & kStepOn) prev.addFlags(kStepSlide);
+    if (prev.flags() & kStepOn) {
+      prev.addFlags(kStepSlide);
+      // Rounded up (past 1/8 of a quarter-step): a slide must still be sounding
+      // when the new note fires, or it plays as a release and a fresh attack.
+      const int64_t dist = int64_t(uint32_t(qCount - r.recStartQ)) * kQuantumTicks + offT - r.recOffT;   // ticks
+      const int64_t unit = stepTicks > 0 ? stepTicks : 1;
+      setRecordedGate(t, dist < (int64_t(1) << 40) ? (dist * kGateUnitsPerStep + unit * 7 / 8) / unit : 255);
+    }
   }
   Step& s = proj->patterns[pattern].tracks[t].steps[step];
   s.vel = ev.vel;
   if (isSynthTrack(t)) {
     s.note = ev.note;
-    s.setFlags(uint8_t((s.flags() & kStepRatchetMask) | kStepOn | (ev.accent ? kStepAccent : 0) |
-                      (ev.slide ? kStepSlide : 0)));
+    s.setFlags(uint8_t((s.flags() & kStepRatchetMask) | kStepOn | (ev.accent ? kStepAccent : 0)));
     s.gate = kDefaultStep.gate;
     s.setChord(ev.chord);
-    r.recHeld = 1;
     for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {   // a live hand: the note takes its values
       const int m = __builtin_ctz(b);
       s.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
     }
-    r.recNote = ev.note;
-    r.recPattern = uint8_t(pattern);
-    r.recStep = uint8_t(step);
-    r.recStartQ = qCount;
+    if (!sameStep) {
+      std::memset(r.recKeys, 0, sizeof(r.recKeys));
+      r.recPattern = uint8_t(pattern);
+      r.recStep = uint8_t(step);
+      r.recStartQ = qCount;
+      r.recOffT = offT;
+    }
+    r.recKeys[ev.note >> 5] |= 1u << (ev.note & 31);
+    r.recHeld = 1;
   } else {
     s.addFlags(kStepOn);
     for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
