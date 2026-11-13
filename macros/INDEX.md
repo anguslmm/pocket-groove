@@ -2,12 +2,14 @@
 
 Round 1 is not trying to be right. Every set on a voice is built on a different idea of what a macro *is*, so that your GOOD / BAD marks tell us which kinds are fun. Start the lab with `tools/pg-desktop --lab`, pick the track, step through the sets with `<` `>`. The first two macros of every set are the natural pair for the XY pad (the lab puts X and Y on them). Each file's header says the idea and what it should feel like if it works. Full format: [docs/MACROLAB.md](../docs/MACROLAB.md).
 
+Model v2 (2026-11-13) changed five sets to use its new features, so marks on them made before that date name the old version (the mark's `@hash` says which): KEYS and TRIO are native morphs (the pad's edges sound as before, the inside mixes the patches), POLES and CRACK carry their words as end labels and have readable macro names (POLES sounds the same; CRACK's PITCH now also lengthens or shortens the body, which round 1 meant but a later line undid), and VOYAGE covers its last wave jump. Every other set sounds exactly as in round 1; TICK, BOOM, WOOD and ALLOY gained end labels only.
+
 ## Bass
 
 | set | file | family | idea | macros | try first |
 |---|---|---|---|---|---|
 | ACID | bass/acid.pgm | Interaction | OPEN is the 303 filter (cutoff + resonance); BITE growls when OPEN is low and squeals when OPEN is high | OPEN BITE WOBL SLIDE | OPEN and BITE on the pad, a slow line with slides |
-| POLES | bass/poles.pgm | Opposites | four word-axes, neutral in the middle, a usable bass at every end | DK-BRT SF-HRD SH-LNG CL-DRT | start in the centre, push the pad to each edge |
+| POLES | bass/poles.pgm | Opposites | four word-axes, neutral in the middle, a usable bass at every end (the words are end labels) | TONE TOUCH LENGTH DIRT (were DK-BRT SF-HRD SH-LNG CL-DRT) | start in the centre, push the pad to each edge |
 | SURGE | bass/surge.pgm | Energy | MORE = brighter, driven, faster wobble, all at once; CALM = deep, round, sub an octave down, gliding | MORE CALM | ride MORE up over four bars, snap to CALM |
 | ROAD | bass/road.pgm | Journey | ROAD travels DEEP > ACID > HOLLOW > GROWL > SCREAM | ROAD DIRT MOVE | a one-note groove, walk ROAD slowly left to right |
 | DICE | bass/dice.pgm | Odd | stepped: five flavours, five intervals over a fixed sub root; GLITCH only wakes up with the later flavours | FLAV INTV GLITCH | click around the pad on the beat |
@@ -18,8 +20,8 @@ Round 1 is not trying to be right. Every set on a voice is built on a different 
 |---|---|---|---|---|---|
 | HANDS | lead/hands.pgm | Gesture | macros named for the hand: opening brightens and loosens, pushing drives and shortens | OPEN PUSH SHAKE HOLD | OPEN and PUSH on the pad with chords; SHAKE on a held note |
 | DRIFT | lead/drift.pgm | Movement | how the sound moves: BLOOM = longer notes with vibrato fading in (vibrato + decay), WANDER = LFO depth + speed, SWELL = pluck to swell | BLOOM WANDER SWELL | a slow line of long notes, BLOOM up |
-| KEYS | lead/keys.pgm | Morph | three patches on the pad: organ, pulse pluck, FM bell | OR-PLK BELL | chords, sweep slowly round the pad |
-| VOYAGE | lead/voyage.pgm | Journey | TRIP goes FLUTE > SAW LEAD > HOLLOW BP > SUPERSAW > FM METAL | TRIP GRIT SPACE | hold a chord, walk TRIP over eight bars |
+| KEYS | lead/keys.pgm | Morph | three patches on the pad: organ, pulse pluck, FM bell (native morph; top right mixes pluck and bell) | PLUCK BELL (was OR-PLK BELL) | chords, sweep slowly round the pad |
+| VOYAGE | lead/voyage.pgm | Journey | TRIP goes FLUTE > SAW LEAD > HOLLOW BP > SUPERSAW > FM METAL; every wave jump now covered by osc 2 | TRIP GRIT SPACE | hold a chord, walk TRIP over eight bars |
 | SWAP | lead/swap.pgm | Odd | stepped: six whole leads, six parallel intervals; WARP is dull alone, wild on the FM / organ / bell steps | FLAV INTV WARP | click on the beat; then WARP with FLAV past the middle |
 
 ## Kick
@@ -27,14 +29,14 @@ Round 1 is not trying to be right. Every set on a voice is built on a different 
 | set | file | family | idea | macros | try first |
 |---|---|---|---|---|---|
 | BOOM | kick/boom.pgm | Material | what drum it is: SIZE, SKIN tight/loose, WOOD-METAL, NEAR-FAR | SIZE SKIN WD-MTL FAR | four on the floor, SIZE x SKIN |
-| TRIO | kick/trio.pgm | Morph | 808, 909 and gabber kicks on the pad | 8-TO-9 GABBA | drag a slow circle |
+| TRIO | kick/trio.pgm | Morph | 808, 909 and gabber kicks on the pad (native morph; top edge goes 909 to gabber) | 909 GABBA (was 8-TO-9 GABBA) | drag a slow circle |
 | PUSH | kick/push.pgm | Gesture | PUSH = drive + punch + shorter, HOLD = held body, FLICK = sharper click | PUSH HOLD FLICK | ride PUSH into a break |
 
 ## Snare
 
 | set | file | family | idea | macros | try first |
 |---|---|---|---|---|---|
-| CRACK | snare/crack.pgm | Opposites | low-high, dry-rattle, soft-hard, a 909-ish snare in the middle | LO-HI DR-RTL SF-HRD | the backbeat, LO-HI x DR-RTL |
+| CRACK | snare/crack.pgm | Opposites | low-high, dry-rattle, soft-hard, a 909-ish snare in the middle (the words are end labels; PITCH now also moves the body) | PITCH WIRES TOUCH (were LO-HI DR-RTL SF-HRD) | the backbeat, PITCH x WIRES |
 | WOOD | snare/wood.pgm | Material | what it is made of: wood knock to metal ring, piccolo to field drum, tight to loose | WD-MTL SIZE LOOSE | WD-MTL x SIZE on the backbeat |
 | BITE | snare/bite.pgm | Interaction | BITE = distortion on a low drum, wires and brightness on a high one | PITCH BITE ROOM | sweep the pad diagonally |
 

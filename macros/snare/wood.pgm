@@ -12,7 +12,7 @@ voice snare
 name WOOD
 base snappy=60 drive=20 decay=50
 
-macro WD-MTL 0.35
+macro WD-MTL 0.35 "WOOD" "METAL"
   ring     0:10 0.35:50 1:122
   dtun     0:20 0.35:45 1:118        # 1.2 .. 2.5: from almost harmonic to clangy
   body     0:14 0.35:44 1:104        # metal rings on
@@ -20,13 +20,13 @@ macro WD-MTL 0.35
   snappy   add 0:-36 0.35:0 1:-14     # wood: the wires go quiet
   lvl      0:102 0.35:98 1:88         # the ring is loud
 
-macro SIZE 0.4
+macro SIZE 0.4 "PICCOLO" "FIELD"
   tune     0:110 0.4:66 1:18
   body     add 0:-14 0.4:0 1:24
   decay    add 0:-20 0.4:0 1:40
   lvl      add 0:-2 0.4:0 1:2
 
-macro LOOSE
+macro LOOSE "TIGHT" "LOOSE"
   bend     0:6 1:120
   body     add 0:0 1:14
   drive    add 0:0 1:18

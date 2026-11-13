@@ -1,0 +1,33 @@
+# PUSH -- family: GESTURE.
+# Idea: macros named for what the hand does to a drum, each a coupled move:
+#   PUSH   pressing harder: more drive and punch, a shorter, tighter body
+#   HOLD   keeping the press: the body holds at full level and rings longer,
+#          sagging slightly in pitch
+#   FLICK  a flick of the finger: a sharper, louder, brighter click and a
+#          faster sweep
+# The base is a plain round techno kick.
+# Feel if it works: tilting forward makes the kick lean in like a fist on a
+# table; you play the kick's attitude, not its settings.
+# Try: PUSH on X, HOLD on Y, four on the floor; ride PUSH into a break.
+voice kick
+name PUSH
+base tune=54 decay=50 punch=72 sweep=56 click=56 drive=24 tone=96 hold=24 harm=36 cton=50 lvl=100
+
+macro PUSH
+  drive    0:12 1:104
+  punch    0:60 1:110
+  decay    add 0:8 1:-24
+  tone     add 0:-10 1:20
+  lvl      0:102 1:90             # drive is louder than its own compensation
+
+macro HOLD
+  hold     0:0 1:96
+  decay    add 0:-6 1:30
+  tune     add 0:4 1:-8           # a held, heavier body sags in pitch
+  lvl      add 0:2 1:-4
+
+macro FLICK
+  click    add 0:-30 1:60
+  cton     0:70 1:10              # the tick, not the thwack
+  sweep    add 0:10 1:-28
+  tone     add 0:0 1:16

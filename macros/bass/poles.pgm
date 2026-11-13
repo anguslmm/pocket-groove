@@ -2,18 +2,20 @@
 # Idea: each macro is an axis between two words; the middle (where every macro
 # starts) is a plain round house bass, and both ends of every axis are a
 # usable sound of their own, not "off" and "max".
-#   DK-BRT  dark (a muffled dub thump)      .. bright (an open, keytracked pluck)
-#   SF-HRD  soft (slow attack, round, sub)  .. hard (instant, accented, driven, resonant)
-#   SH-LNG  short (a staccato blip)         .. long (held notes that glide)
-#   CL-DRT  clean (pure, sub-heavy)         .. dirty (folded and driven)
+#   TONE    DARK (a muffled dub thump)        .. BRIGHT (an open, keytracked pluck)
+#   TOUCH   SOFT (slow attack, round, sub)    .. HARD (instant, accented, driven, resonant)
+#   LENGTH  SHORT (a staccato blip)           .. LONG (held notes that glide)
+#   DIRT    CLEAN (pure, sub-heavy)           .. DIRTY (folded and driven)
+# The words are the macros' end labels (round 1 had to spell them into the
+# names: DK-BRT, SF-HRD, SH-LNG, CL-DRT). The sound is unchanged.
 # Feel if it works: you think in words ("darker and softer") and the hands go
 # there; no axis has a wrong end.
-# Try: DK-BRT and SF-HRD on the pad, start in the centre and push to each edge.
+# Try: TONE and TOUCH on the pad, start in the centre and push to each edge.
 voice bass
 name POLES
 base wave=36 cutoff=48 reso=50 envmod=50 decay=48 accent=70 sub=60 fmix=0 lfodepth=0 slide=50 ktrk=40
 
-macro DK-BRT 0.5
+macro TONE 0.5 "DARK" "BRIGHT" "a muffled dub thump .. an open pluck"
   cutoff   0:19 0.5:48 1:96 smooth
   envmod   0:22 0.5:50 1:84
   ktrk     0:10 0.5:40 1:90
@@ -22,7 +24,7 @@ macro DK-BRT 0.5
                                    # bright: square, hollow and present
   lvl      0:110 0.5:100 1:94      # the dark end loses level through the closed filter
 
-macro SF-HRD 0.5
+macro TOUCH 0.5 "SOFT" "HARD" "slow, round, sub .. instant, driven"
   attack   0:80 0.5:18 1:0
   accent   0:10 0.5:70 1:127
   drive    0:0 0.5:28 1:84
@@ -30,13 +32,13 @@ macro SF-HRD 0.5
   sub      add 0:30 0.5:0 1:-24
   lvl      add 0:4 0.5:0 1:-8      # drive is louder than its own compensation
 
-macro SH-LNG 0.5
+macro LENGTH 0.5 "SHORT" "LONG" "a staccato blip .. held notes that glide"
   adcy     0:20 0.5:82 1:127
   decay    0:12 0.5:48 1:96
   release  0:4 0.5:32 1:84
   slide    0:6 0.5:50 1:118
 
-macro CL-DRT 0.5
+macro DIRT 0.5 "CLEAN" "DIRTY" "pure and sub-heavy .. folded and driven"
   fold     0.5:0 1:84
   drive    add 0:-20 0.5:0 1:34
   fmix     0:64 0.5:0                # clean: half the tone is the FM pair at depth 0, a pure sine

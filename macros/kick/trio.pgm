@@ -1,35 +1,26 @@
 # TRIO -- family: MORPH.
 # Idea: three whole kicks at the corners of the pad, every parameter
 # crossfading between them:
-#   A (bottom left)  808    low, long, soft-edged, almost no click
-#   B (X = 1)        909    tighter, punchy, a bright click on top
-#   C (Y = 1)        GABBA  distorted, held, hard click: the rave kick
-# X goes A to B; Y pulls every value toward C ("set ... by GABBA").
+#   base   (bottom left)  808    low, long, soft-edged, almost no click
+#   909    (X = 1)        tighter, punchy, a bright click on top
+#   GABBA  (Y = 1)        distorted, held, hard: the rave kick
+# Each macro morphs from the base toward its patch (model v2 "morph"); with
+# both up the pad mixes the two (top right: half 909, half gabber), so the
+# top edge is a real 909-to-gabber road, not only a click control as in
+# round 1.
 # Feel if it works: one move takes the groove from hip-hop to house to
 # hardcore, and the halfway kicks are real hybrids, not mush.
-# Try: 8-TO-9 on X, GABBA on Y, four on the floor; drag a slow circle. At the
-# top edge X only moves the click (the gabber owns everything else there).
-# audit: allow-dead 8-TO-9
+# Try: 909 on X, GABBA on Y, four on the floor; drag a slow circle.
 voice kick
 name TRIO
-base lvl=100 harm=30
+base tune=44 decay=96 punch=52 sweep=74 click=18 cton=24 tone=70 hold=44 drive=16 harm=30 lvl=100   # the 808
 
-macro 8-TO-9
-  tune     0:44 1:62
-  decay    0:96 1:46
-  punch    0:52 1:88
-  sweep    0:74 1:44
-  click    0:18 1:92
-  cton     0:24 1:62
-  tone     0:70 1:108
-  hold     0:44 1:20
+patch 909   tune=62 decay=46 punch=88 sweep=44 click=92 cton=62 tone=108 hold=20
+patch GABBA tune=56 decay=66 punch=112 sweep=26 drive=118 hold=70 harm=80 lvl=88   # distortion is louder than its compensation
 
-macro GABBA
-  tune     set 0:56 1:56 by GABBA
-  decay    set 0:66 1:66 by GABBA
-  punch    set 0:112 1:112 by GABBA
-  sweep    set 0:26 1:26 by GABBA
-  drive    0:16 0.5:70 1:118
-  hold     set 0:70 1:70 by GABBA
-  harm     set 0:80 1:80 by GABBA
-  lvl      0:100 1:88                 # distortion is louder than its compensation
+macro 909 "808" "909" "long, soft .. tight, a bright click"
+  morph 909
+
+macro GABBA "808" "GABBA" "toward the distorted, held rave kick"
+  morph GABBA
+  drive    add 0:0 0.5:3 1:0          # round 1's drive bulged a little above a straight line

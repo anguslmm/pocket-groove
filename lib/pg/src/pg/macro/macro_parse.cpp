@@ -1,7 +1,8 @@
 // The .pgm text format (docs/MACROLAB.md): parser and canonical writer.
-// No heap, no libc number parsing (strtod is double): numbers are read and
-// written here, with at most kMaxDecimals digits after the point, so that
-// parse(format(set)) reproduces every float exactly.
+// No heap, no libc number parsing (strtod is double): numbers are read as
+// exact thousandths here (at most kMaxDecimals digits after the point) and
+// written back the same way, so parse(format(set)) reproduces every value.
+#include <cstdarg>
 #include <cstdio>
 #include <cstring>
 
@@ -53,11 +54,11 @@ bool loosePrefix(const char* a, const char* b) {
   }
 }
 
-// [+-]digits[.digits] with at most kMaxDecimals decimals. Exact for what format() writes.
-bool parseNum(const char* s, float* out) {
+// [+-]digits[.digits] with at most kMaxDecimals decimals, as exact thousandths.
+bool parseMilli(const char* s, int32_t* out) {
   bool neg = false;
   if (*s == '+' || *s == '-') neg = *s++ == '-';
-  int32_t ip = 0, fp = 0, scale = 1, digits = 0, decimals = 0;
+  int32_t ip = 0, fp = 0, digits = 0, decimals = 0;
   while (*s >= '0' && *s <= '9') {
     if (ip > 100000) return false;
     ip = ip * 10 + (*s++ - '0');
@@ -68,25 +69,24 @@ bool parseNum(const char* s, float* out) {
     while (*s >= '0' && *s <= '9') {
       if (++decimals > kMaxDecimals) return false;
       fp = fp * 10 + (*s++ - '0');
-      scale *= 10;
       ++digits;
     }
   }
   if (*s || digits == 0) return false;
-  const float v = float(ip) + float(fp) / float(scale);
+  for (int d = decimals; d < kMaxDecimals; ++d) fp *= 10;
+  const int32_t v = ip * 1000 + fp;
   *out = neg ? -v : v;
   return true;
 }
 
-// Writes v with up to kMaxDecimals decimals, trailing zeros trimmed.
-int fmtNum(float v, char* o) {
-  const bool neg = v < 0.0f;
-  const float a = neg ? -v : v;
-  const int32_t milli = int32_t(a * 1000.0f + 0.5f);
-  int32_t ip = milli / 1000, fp = milli % 1000;
+// Writes thousandths m as a number, trailing zeros trimmed.
+int fmtMilli(int32_t m, char* o) {
+  const bool neg = m < 0;
+  const int32_t a = neg ? -m : m;
+  int32_t ip = a / 1000, fp = a % 1000;
   char tmp[24];
   int n = 0;
-  if (neg && milli) tmp[n++] = '-';
+  if (neg && a) tmp[n++] = '-';
   char d[12];
   int dn = 0;
   do { d[dn++] = char('0' + ip % 10); ip /= 10; } while (ip);
@@ -103,22 +103,45 @@ int fmtNum(float v, char* o) {
   return n;
 }
 
+bool validName(const char* s) {
+  for (const char* c = s; *c; ++c)
+    if (!isAlnum(*c) && *c != '_' && *c != '-') return false;
+  return true;
+}
+
+inline bool isString(const char* w) { return w[0] == '"'; }   // a quoted word (the tokenizer keeps the opening quote)
+
 constexpr int kMaxTokens = 40;
+
+enum class Kind { Target, Morph, Trim };
 
 struct Parser {
   const ParamTable& pt;
   MacroSet* set;
   ParseError* err;
+  Warnings* warn;
   int line = 0;
   bool haveVoice = false, haveName = false;
   int cur = -1;   // macro being filled
-  // "by" names, resolved at the end of the file (forward references allowed)
-  char byName[kMaxMacros][kMaxTargets][kMacroNameLen + 1];
-  int byLine[kMaxMacros][kMaxTargets];
+  // resolved at the end of the file (forward references allowed)
+  char tBy[kMaxTargets][kMacroNameLen + 1];
+  int tLine[kMaxTargets];
+  uint8_t tMacro[kMaxTargets];
+  char trBy[kMaxTrims][kMacroNameLen + 1];
+  int trLine[kMaxTrims];
+  char moPatch[kMaxMorphs][kPatchNameLen + 1];
+  int moLine[kMaxMorphs];
+  int paLine[kMaxPatches];
 
-  explicit Parser(const ParamTable& p, MacroSet* s, ParseError* e) : pt(p), set(s), err(e) {
-    std::memset(byName, 0, sizeof(byName));
-    std::memset(byLine, 0, sizeof(byLine));
+  explicit Parser(const ParamTable& p, MacroSet* s, ParseError* e, Warnings* w) : pt(p), set(s), err(e), warn(w) {
+    std::memset(tBy, 0, sizeof(tBy));
+    std::memset(tLine, 0, sizeof(tLine));
+    std::memset(tMacro, 0, sizeof(tMacro));
+    std::memset(trBy, 0, sizeof(trBy));
+    std::memset(trLine, 0, sizeof(trLine));
+    std::memset(moPatch, 0, sizeof(moPatch));
+    std::memset(moLine, 0, sizeof(moLine));
+    std::memset(paLine, 0, sizeof(paLine));
   }
 
   bool fail(const char* fmt, const char* a = "", const char* b = "") {
@@ -126,25 +149,43 @@ struct Parser {
     std::snprintf(err->msg, sizeof(err->msg), fmt, a, b);
     return false;
   }
+  bool failN(const char* fmt, int n, const char* a = "") {   // fmt has %s for a, then %d
+    char c[12];
+    std::snprintf(c, sizeof(c), "%d", n);
+    return fail(fmt, a, c);
+  }
+
+  void warnf(int ln, const char* fmt, ...) {
+    if (!warn) return;
+    if (warn->count < kMaxWarnings) {
+      ParseError& w = warn->w[warn->count];
+      w.line = ln;
+      va_list ap;
+      va_start(ap, fmt);
+      std::vsnprintf(w.msg, sizeof(w.msg), fmt, ap);
+      va_end(ap);
+    }
+    ++warn->count;
+  }
 
   const ParamInfo* info(int p) const { return pt.info[set->track][p]; }
 
-  // A parameter value (set targets, base patch): an enum name, or a number in range.
-  bool paramValue(int p, const char* tok, float* out) {
+  // A parameter value (set targets, base and patch values): an enum name, or a number in range.
+  bool paramValue(int p, const char* tok, int32_t* out) {
     const ParamInfo* in = info(p);
     if (in->fmt == ParamFormat::Enum && in->enumNames) {
       for (int v = in->min; v <= in->max; ++v)
         if (in->enumNames[v - in->min] && ieq(in->enumNames[v - in->min], tok)) {
-          *out = float(v);
+          *out = v * 1000;
           return true;
         }
     }
-    float v;
-    if (!parseNum(tok, &v)) {
+    int32_t v;
+    if (!parseMilli(tok, &v)) {
       if (in->fmt == ParamFormat::Enum) return fail("'%s' is not a value of %s (see docs/MACROLAB.md)", tok, in->name);
       return fail("'%s' is not a number (at most 3 decimals)", tok);
     }
-    if (v < float(in->min) || v > float(in->max)) {
+    if (v < in->min * 1000 || v > in->max * 1000) {
       char r[24];
       std::snprintf(r, sizeof(r), "%d..%d", in->min, in->max);
       return fail("%s is out of range (%s)", tok, r);
@@ -152,6 +193,7 @@ struct Parser {
     *out = v;
     return true;
   }
+  static uint8_t roundValue(int32_t milli) { return uint8_t(int(milliToFloat(milli) + 0.5f)); }
 
   int param(const char* tok) {
     const int p = findParam(pt, set->track, tok);
@@ -162,17 +204,24 @@ struct Parser {
 
   bool name(const char* tok, char* dst, int cap, const char* what) {
     const size_t n = std::strlen(tok);
-    if (n > size_t(cap)) {
-      char c[8];
-      std::snprintf(c, sizeof(c), "%d", cap);
-      return fail(what, tok, c);
-    }
+    if (n > size_t(cap)) return failN(what, cap, tok);
     for (size_t i = 0; i <= n; ++i) dst[i] = upper(tok[i]);
+    return true;
+  }
+
+  // a quoted word into dst (as written), 1..cap characters
+  bool str(const char* w, char* dst, int cap, const char* what) {
+    const char* s = w + 1;
+    const size_t n = std::strlen(s);
+    if (n == 0) return fail("an empty string \"\" (%s)", what);
+    if (n > size_t(cap)) return failN("%s is longer than %s characters", cap, what);
+    std::memcpy(dst, s, n + 1);
     return true;
   }
 
   bool statement(char** w, int n) {
     const char* kw = w[0];
+    if (isString(kw)) return fail("a line cannot start with a string");
     if (!haveVoice) {
       if (!ieq(kw, "voice")) return fail("the first line must be 'voice <track>' (kick snare clap chh ohh perc bass lead)");
       if (n != 2) return fail("'voice' takes one track name");
@@ -182,6 +231,8 @@ struct Parser {
       haveVoice = true;
       return true;
     }
+    for (int i = 1; i < n; ++i)
+      if (isString(w[i]) && !ieq(kw, "macro")) return fail("'%s': only a 'macro' line takes strings", w[i] + 1);
     if (ieq(kw, "voice")) return fail("'voice' given twice");
     if (ieq(kw, "name")) {
       if (haveName) return fail("'name' given twice");
@@ -189,125 +240,249 @@ struct Parser {
       haveName = true;
       return name(w[1], set->name, kSetNameLen, "set name '%s' is longer than %s characters");
     }
-    if (ieq(kw, "base")) {
-      if (n < 2) return fail("'base' needs param=value pairs");
-      for (int i = 1; i < n; ++i) {
-        char* eq = std::strchr(w[i], '=');
-        if (!eq || eq == w[i] || !eq[1]) return fail("'%s': write base values as param=value, no spaces", w[i]);
-        *eq = 0;
-        const int p = param(w[i]);
-        if (p < 0) return false;
-        if ((set->baseMask >> p) & 1) return fail("base value for %s given twice", info(p)->name);
-        float v;
-        if (!paramValue(p, eq + 1, &v)) return false;
-        set->base[p] = uint8_t(int(v + 0.5f));
-        set->baseMask |= 1u << p;
-      }
-      return true;
-    }
-    if (ieq(kw, "macro")) {
-      if (n < 2 || n > 3) return fail("write 'macro NAME' or 'macro NAME START' (START 0..1)");
-      if (set->numMacros >= kMaxMacros) {
-        char c[8];
-        std::snprintf(c, sizeof(c), "%d", kMaxMacros);
-        return fail("more than %s macros", c);
-      }
-      if (set->findMacro(w[1]) >= 0) return fail("macro '%s' declared twice", w[1]);
-      for (const char* c = w[1]; *c; ++c)
-        if (!isAlnum(*c) && *c != '_' && *c != '-') return fail("macro name '%s': letters, digits, - and _ only", w[1]);
-      Macro& m = set->macros[set->numMacros];
-      if (!name(w[1], m.name, kMacroNameLen, "macro name '%s' is longer than %s characters")) return false;
-      m.start = 0.0f;
-      if (n == 3 && (!parseNum(w[2], &m.start) || m.start < 0.0f || m.start > 1.0f))
-        return fail("macro start '%s' must be a number 0..1", w[2]);
-      cur = set->numMacros++;
-      return true;
-    }
-    return target(w, n);
-  }
-
-  bool target(char** w, int n) {
+    if (ieq(kw, "base")) return base(w, n);
+    if (ieq(kw, "patch")) return patch(w, n);
+    if (ieq(kw, "macro")) return macro(w, n);
+    if (ieq(kw, "morph")) return curveLine(w, n, Kind::Morph, -1);
+    if (ieq(kw, "trim")) return curveLine(w, n, Kind::Trim, -1);
     if (cur < 0) return fail("'%s': a target line needs a 'macro NAME' line above it", w[0]);
-    Macro& m = set->macros[cur];
-    if (m.numTargets >= kMaxTargets) {
-      char c[8];
-      std::snprintf(c, sizeof(c), "%d", kMaxTargets);
-      return fail("macro %s has more than %s targets", m.name, c);
-    }
     const int p = param(w[0]);
     if (p < 0) return false;
-    Target& t = m.targets[m.numTargets];
-    std::memset(&t, 0, sizeof(t));
-    t.param = uint8_t(p);
-    t.op = Op::Set;
-    t.by = kNoMacro;
-    const ParamInfo* in = info(p);
-    t.curve.interp = in->fmt == ParamFormat::Enum ? Interp::Step : Interp::Linear;
-    bool haveOp = false, haveInterp = false, haveBy = false;
-    // words first (the op decides how point values read), then the points in order
+    return curveLine(w, n, Kind::Target, p);
+  }
+
+  bool base(char** w, int n) {
+    if (n < 2) return fail("'base' needs param=value pairs");
     for (int i = 1; i < n; ++i) {
+      char* eq = std::strchr(w[i], '=');
+      if (!eq || eq == w[i] || !eq[1]) return fail("'%s': write base values as param=value, no spaces", w[i]);
+      *eq = 0;
+      const int p = param(w[i]);
+      if (p < 0) return false;
+      if ((set->baseMask >> p) & 1) return fail("base value for %s given twice", info(p)->name);
+      int32_t v;
+      if (!paramValue(p, eq + 1, &v)) return false;
+      set->base[p] = roundValue(v);
+      set->baseMask |= 1u << p;
+    }
+    return true;
+  }
+
+  // A switch point (0 < s <= 1, at most 2 decimals) as hundredths.
+  bool switchPoint(const char* tok, uint8_t* out) {
+    int32_t v;
+    if (!parseMilli(tok, &v) || v <= 0 || v > 1000 || v % 10)
+      return fail("switch point '%s' must be a number above 0, at most 1, with at most 2 decimals", tok);
+    *out = uint8_t(v / 10);
+    return true;
+  }
+
+  bool patch(char** w, int n) {
+    if (n < 3) return fail("write 'patch NAME param=value ...'");
+    if (!validName(w[1])) return fail("patch name '%s': letters, digits, - and _ only", w[1]);
+    int pi = set->findPatch(w[1]);
+    if (pi < 0) {
+      if (set->numPatches >= kMaxPatches) return failN("more than %s%s patches", kMaxPatches);
+      Patch& pa = set->patches[set->numPatches];
+      if (!name(w[1], pa.name, kPatchNameLen, "patch name '%s' is longer than %s characters")) return false;
+      pa.first = set->numPatchValues;
+      pa.n = 0;
+      paLine[set->numPatches] = line;
+      pi = set->numPatches++;
+    }
+    Patch& pa = set->patches[pi];
+    for (int i = 2; i < n; ++i) {
+      char* eq = std::strchr(w[i], '=');
+      if (!eq || eq == w[i] || !eq[1]) return fail("'%s': write patch values as param=value, no spaces", w[i]);
+      *eq = 0;
+      char* at = std::strchr(eq + 1, '@');
+      if (at) *at = 0;
+      const int p = param(w[i]);
+      if (p < 0) return false;
+      for (int e = 0; e < pa.n; ++e)
+        if (set->patchValues[pa.first + e].param == p) return fail("patch %s: %s given twice", pa.name, info(p)->name);
+      int32_t v;
+      if (!paramValue(p, eq + 1, &v)) return false;
+      uint8_t sw = kNoSwitch;
+      if (at) {
+        if (info(p)->fmt != ParamFormat::Enum)
+          return fail("'@%s': a switch point is only for enum parameters (%s is continuous)", at + 1, info(p)->name);
+        if (!switchPoint(at + 1, &sw)) return false;
+      }
+      if (set->numPatchValues >= kMaxPatchValues) return failN("more than %s%s patch values in the set", kMaxPatchValues);
+      // insert at the end of this patch (a patch may be continued after another one)
+      const int at0 = pa.first + pa.n;
+      std::memmove(&set->patchValues[at0 + 1], &set->patchValues[at0],
+                   sizeof(PatchValue) * size_t(set->numPatchValues - at0));
+      for (int q = 0; q < set->numPatches; ++q)
+        if (q != pi && set->patches[q].first >= at0) ++set->patches[q].first;
+      set->patchValues[at0] = PatchValue{uint8_t(p), roundValue(v), sw};
+      ++pa.n;
+      ++set->numPatchValues;
+    }
+    return true;
+  }
+
+  bool macro(char** w, int n) {
+    if (n < 2 || isString(w[1])) return fail("write 'macro NAME', 'macro NAME START' (START 0..1), then optionally \"LOW\" \"HIGH\" \"description\"");
+    if (set->numMacros >= kMaxMacros) return failN("more than %s%s macros", kMaxMacros);
+    if (set->findMacro(w[1]) >= 0) return fail("macro '%s' declared twice", w[1]);
+    if (!validName(w[1])) return fail("macro name '%s': letters, digits, - and _ only", w[1]);
+    Macro& m = set->macros[set->numMacros];
+    if (!name(w[1], m.name, kMacroNameLen, "macro name '%s' is longer than %s characters")) return false;
+    m.start1000 = 0;
+    m.first = set->numTargets;
+    m.n = 0;
+    int words = 0, strs = 0;
+    const char* s[3] = {nullptr, nullptr, nullptr};
+    for (int i = 2; i < n; ++i) {
+      if (isString(w[i])) {
+        if (strs >= 3) return fail("a macro takes at most three strings: \"LOW\" \"HIGH\" \"description\"");
+        s[strs++] = w[i];
+        continue;
+      }
+      if (strs > 0 || ++words > 1)
+        return fail("write 'macro NAME', 'macro NAME START' (START 0..1), then optionally \"LOW\" \"HIGH\" \"description\"");
+      int32_t v;
+      if (!parseMilli(w[i], &v) || v < 0 || v > 1000) return fail("macro start '%s' must be a number 0..1", w[i]);
+      m.start1000 = uint16_t(v);
+    }
+    // one string: the description; two: the end labels; three: both
+    if (strs >= 2) {
+      if (!str(s[0], m.lo, kLabelLen, "an end label") || !str(s[1], m.hi, kLabelLen, "an end label")) return false;
+    }
+    if (strs == 1 || strs == 3) {
+      if (!str(s[strs - 1], m.desc, kDescLen, "a description")) return false;
+    }
+    cur = set->numMacros++;
+    return true;
+  }
+
+  // A target (Kind::Target, parameter p), a morph line or a trim line of the current macro.
+  bool curveLine(char** w, int n, Kind kind, int p) {
+    if (cur < 0) return fail("'%s': needs a 'macro NAME' line above it", w[0]);
+    Macro& m = set->macros[cur];
+    const ParamInfo* in = p >= 0 ? info(p) : nullptr;
+    Op op = Op::Set;
+    Interp ip = (in && in->fmt == ParamFormat::Enum) ? Interp::Step : Interp::Linear;
+    bool haveOp = false, haveInterp = false, haveBy = false, over = false, haveSw = false;
+    const char* byName = nullptr;
+    const char* patchName = nullptr;
+    uint8_t sw = kNoSwitch;
+    int i0 = 1;
+    if (kind == Kind::Morph) {
+      if (n < 2 || std::strchr(w[1], ':')) return fail("write 'morph PATCH' and optionally the amount curve");
+      if (std::strlen(w[1]) > size_t(kPatchNameLen)) return fail("'morph %s': no patch has that name", w[1]);
+      patchName = w[1];
+      i0 = 2;
+    }
+    // words first (the op decides how point values read), then the points in order
+    for (int i = i0; i < n; ++i) {
       const char* s = w[i];
       if (std::strchr(s, ':')) continue;
-      Op op;
-      Interp ip;
-      if (ieq(s, "set") || ieq(s, "add") || ieq(s, "mul")) {
-        op = ieq(s, "set") ? Op::Set : ieq(s, "add") ? Op::Add : Op::Mul;
+      if (kind == Kind::Target && (ieq(s, "set") || ieq(s, "add") || ieq(s, "mul"))) {
         if (haveOp) return fail("'%s': only one of set / add / mul per target", s);
         haveOp = true;
-        t.op = op;
+        op = ieq(s, "set") ? Op::Set : ieq(s, "add") ? Op::Add : Op::Mul;
       } else if (ieq(s, "linear") || ieq(s, "smooth") || ieq(s, "step")) {
-        ip = ieq(s, "linear") ? Interp::Linear : ieq(s, "smooth") ? Interp::Smooth : Interp::Step;
-        if (haveInterp) return fail("'%s': only one of linear / smooth / step per target", s);
+        if (haveInterp) return fail("'%s': only one of linear / smooth / step per line", s);
         haveInterp = true;
-        t.curve.interp = ip;
-      } else if (ieq(s, "by")) {
+        ip = ieq(s, "linear") ? Interp::Linear : ieq(s, "smooth") ? Interp::Smooth : Interp::Step;
+      } else if (ieq(s, "by") && kind != Kind::Morph) {
         if (haveBy) return fail("'by' given twice");
         if (i + 1 >= n || std::strchr(w[i + 1], ':')) return fail("'by' needs a macro name after it");
         if (std::strlen(w[i + 1]) > size_t(kMacroNameLen)) return fail("'by %s': no macro has that name", w[i + 1]);
-        std::strcpy(byName[cur][m.numTargets], w[i + 1]);
-        byLine[cur][m.numTargets] = line;
+        byName = w[i + 1];
         haveBy = true;
-        w[i + 1][0] = 0;   // consumed
+        ++i;
+      } else if (ieq(s, "override") && kind == Kind::Target) {
+        if (over) return fail("'override' given twice");
+        over = true;
+      } else if (ieq(s, "switch") && kind == Kind::Morph) {
+        if (haveSw) return fail("'switch' given twice");
+        if (i + 1 >= n) return fail("'switch' needs a point after it (0 < point <= 1)");
+        if (!switchPoint(w[i + 1], &sw)) return false;
+        haveSw = true;
         ++i;
       } else if (*s) {
-        return fail("'%s': expected a point pos:value, set/add/mul, linear/smooth/step or 'by MACRO'", s);
+        if (kind == Kind::Morph && ieq(s, "by")) return fail("'by' is not for morph lines (the amount is the macro's own)");
+        if (kind == Kind::Morph) return fail("'%s': expected a point pos:amount, linear/smooth/step or 'switch POINT'", s);
+        if (kind == Kind::Trim) return fail("'%s': expected a point pos:dB, linear/smooth/step or 'by MACRO'", s);
+        return fail("'%s': expected a point pos:value, set/add/mul, linear/smooth/step, 'by MACRO' or 'override'", s);
       }
     }
-    for (int i = 1; i < n; ++i) {
+    const int first = set->numPoints;
+    int np = 0;
+    for (int i = i0; i < n; ++i) {
       char* s = w[i];
       char* colon = std::strchr(s, ':');
       if (!colon) continue;
       *colon = 0;
-      if (t.curve.n >= kMaxPoints) {
-        char c[8];
-        std::snprintf(c, sizeof(c), "%d", kMaxPoints);
-        return fail("more than %s points on one curve", c);
-      }
-      float pos, v;
-      if (!parseNum(s, &pos) || pos < 0.0f || pos > 1.0f) return fail("point position '%s' must be a number 0..1", s);
+      if (np >= kMaxPoints) return failN("more than %s%s points on one curve", kMaxPoints);
+      if (first + np >= kMaxSetPoints) return failN("more than %s%s curve points in the set", kMaxSetPoints);
+      int32_t pos, v;
+      if (!parseMilli(s, &pos) || pos < 0 || pos > 1000) return fail("point position '%s' must be a number 0..1", s);
       const char* vs = colon + 1;
       if (!*vs) return fail("point '%s:' has no value", s);
-      if (t.op == Op::Set) {
+      if (kind == Kind::Morph) {
+        if (!parseMilli(vs, &v) || v < 0 || v > 1000) return fail("morph amount '%s' must be a number 0..1", vs);
+      } else if (kind == Kind::Trim) {
+        if (!parseMilli(vs, &v)) return fail("'%s': trim points take plain numbers in dB (at most 3 decimals)", vs);
+        if (v < -kTrimMaxDb * 1000 || v > kTrimMaxDb * 1000) return fail("trim %s dB is outside -24..24", vs);
+      } else if (op == Op::Set) {
         if (!paramValue(p, vs, &v)) return false;
-      } else if (!parseNum(vs, &v)) {
+      } else if (!parseMilli(vs, &v)) {
         return fail("'%s': add and mul take plain numbers (at most 3 decimals)", vs);
-      } else if (t.op == Op::Add && (v < -255.0f || v > 255.0f)) {
+      } else if (op == Op::Add && (v < -255000 || v > 255000)) {
         return fail("add offset %s is outside -255..255", vs);
-      } else if (t.op == Op::Mul && (v < 0.0f || v > 16.0f)) {
+      } else if (op == Op::Mul && (v < 0 || v > 16000)) {
         return fail("mul factor %s is outside 0..16", vs);
       }
-      if (t.curve.n > 0 && pos < t.curve.pos[t.curve.n - 1]) {
+      if (np > 0 && pos < pointPosMilli(set->points[first + np - 1])) {
         char prev[16];
-        fmtNum(t.curve.pos[t.curve.n - 1], prev);
+        fmtMilli(pointPosMilli(set->points[first + np - 1]), prev);
         return fail("point positions go backwards (%s after %s)", s, prev);
       }
-      t.curve.pos[t.curve.n] = pos;
-      t.curve.val[t.curve.n] = v;
-      ++t.curve.n;
+      set->points[first + np] = packPoint(pos, v);
+      ++np;
     }
-    if (t.curve.n == 0) return fail("target %s has no points (write pos:value, e.g. 0:20 1:120)", in->name);
-    ++m.numTargets;
+    if (kind == Kind::Target) {
+      if (np == 0) return fail("target %s has no points (write pos:value, e.g. 0:20 1:120)", in->name);
+      if (m.n >= kMaxMacroTargets) return failN("macro %s has more than %s targets", kMaxMacroTargets, m.name);
+      if (set->numTargets >= kMaxTargets) return failN("more than %s%s targets in the set", kMaxTargets);
+      const int j = set->numTargets++;
+      Target& t = set->targets[j];
+      t.param = uint8_t(p);
+      t.first = uint8_t(first);
+      t.n = uint8_t(np);
+      t.setBits(op, ip, kNoMacro, over);
+      if (byName) std::strcpy(tBy[j], byName);
+      tLine[j] = line;
+      tMacro[j] = uint8_t(cur);
+      ++m.n;
+    } else if (kind == Kind::Morph) {
+      if (set->numMorphs >= kMaxMorphs) return failN("more than %s%s morph lines in the set", kMaxMorphs);
+      const int k = set->numMorphs++;
+      set->morphs[k] = Morph{uint8_t(cur), 0, sw, uint8_t(ip), uint8_t(np ? first : 0), uint8_t(np)};
+      std::strcpy(moPatch[k], patchName);
+      moLine[k] = line;
+    } else {
+      if (np == 0) return fail("a trim line needs points (pos:dB, e.g. 0:0 1:-3)");
+      if (set->numTrims >= kMaxTrims) return failN("more than %s%s trim lines in the set", kMaxTrims);
+      const int k = set->numTrims++;
+      set->trims[k] = Trim{uint8_t(cur), kNoMacro, uint8_t(ip), uint8_t(first), uint8_t(np)};
+      if (byName) std::strcpy(trBy[k], byName);
+      trLine[k] = line;
+    }
+    set->numPoints = uint8_t(first + np);
     return true;
+  }
+
+  bool patchHas(int patch, int param) const {
+    const Patch& pa = set->patches[patch];
+    for (int e = 0; e < pa.n; ++e)
+      if (set->patchValues[pa.first + e].param == param) return true;
+    return false;
   }
 
   bool finish() {
@@ -315,15 +490,69 @@ struct Parser {
       line = 0;
       return fail("empty file: the first line must be 'voice <track>'");
     }
-    for (int i = 0; i < set->numMacros; ++i)
-      for (int j = 0; j < set->macros[i].numTargets; ++j) {
-        if (!byName[i][j][0]) continue;
-        const int b = set->findMacro(byName[i][j]);
-        line = byLine[i][j];
-        if (b < 0) return fail("'by %s': no macro has that name", byName[i][j]);
-        set->macros[i].targets[j].by = uint8_t(b);
-      }
+    for (int j = 0; j < set->numTargets; ++j) {
+      if (!tBy[j][0]) continue;
+      const int b = set->findMacro(tBy[j]);
+      line = tLine[j];
+      if (b < 0) return fail("'by %s': no macro has that name", tBy[j]);
+      Target& t = set->targets[j];
+      t.setBits(t.op(), t.interp(), uint8_t(b), t.isOverride());
+    }
+    for (int k = 0; k < set->numTrims; ++k) {
+      if (!trBy[k][0]) continue;
+      const int b = set->findMacro(trBy[k]);
+      line = trLine[k];
+      if (b < 0) return fail("'by %s': no macro has that name", trBy[k]);
+      set->trims[k].by = uint8_t(b);
+    }
+    for (int k = 0; k < set->numMorphs; ++k) {
+      const int pa = set->findPatch(moPatch[k]);
+      line = moLine[k];
+      if (pa < 0) return fail("'morph %s': no patch has that name", moPatch[k]);
+      set->morphs[k].patch = uint8_t(pa);
+      for (int q = 0; q < k; ++q)
+        if (set->morphs[q].macro == set->morphs[k].macro && set->morphs[q].patch == pa)
+          return fail("'morph %s' given twice in macro %s", moPatch[k], set->macros[set->morphs[k].macro].name);
+    }
+    // the about line repeats the set name: "ACID -- family: ..." -> "family: ..."
+    const size_t nl = std::strlen(set->name);
+    if (nl && std::strlen(set->about) > nl + 4) {
+      char head[kSetNameLen + 1];
+      std::memcpy(head, set->about, nl);
+      head[nl] = 0;
+      if (ieq(head, set->name) && std::strncmp(set->about + nl, " -- ", 4) == 0)
+        std::memmove(set->about, set->about + nl + 4, std::strlen(set->about + nl + 4) + 1);
+    }
+    warnings();
     return true;
+  }
+
+  void warnings() {
+    if (!warn) return;
+    // a plain set (no "by", not marked override) throws away whatever an earlier line did to its parameter
+    for (int j = 0; j < set->numTargets; ++j) {
+      const Target& t = set->targets[j];
+      if (t.op() != Op::Set || t.by() != kNoMacro || t.isOverride()) continue;
+      const char* pn = info(t.param)->name;
+      bool done = false;
+      for (int i = 0; i < j && !done; ++i)
+        if (set->targets[i].param == t.param) {
+          warnf(tLine[j], "%s: plain set undoes line %d (%s); add 'override' if meant", pn,
+                tLine[i], set->macros[tMacro[i]].name);
+          done = true;
+        }
+      for (int k = 0; k < set->numMorphs && !done; ++k)
+        if (set->morphs[k].macro != tMacro[j] && patchHas(set->morphs[k].patch, t.param)) {
+          warnf(tLine[j], "%s: plain set undoes 'morph %s' (%s); add 'override' if meant", pn,
+                set->patches[set->morphs[k].patch].name, set->macros[set->morphs[k].macro].name);
+          done = true;
+        }
+    }
+    for (int q = 0; q < set->numPatches; ++q) {
+      bool used = false;
+      for (int k = 0; k < set->numMorphs; ++k) used |= set->morphs[k].patch == q;
+      if (!used) warnf(paLine[q], "patch %s is not used by any morph line", set->patches[q].name);
+    }
   }
 };
 
@@ -360,12 +589,14 @@ int findParam(const ParamTable& params, int track, const char* name) {
   return found;
 }
 
-bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out, ParseError* err) {
+bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out, ParseError* err, Warnings* warn) {
   out->clear();
   err->line = 0;
   err->msg[0] = 0;
-  Parser ps(params, out, err);
+  if (warn) warn->count = 0;
+  Parser ps(params, out, err, warn);
   char buf[kMaxLineLen + 2];
+  bool firstLine = true;   // the first line with anything on it; a comment there is the about line
   size_t i = 0;
   while (i < len) {
     ++ps.line;
@@ -377,17 +608,33 @@ bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out
       else tooLong = true;
     }
     if (i < len) ++i;   // the '\n'
-    if (tooLong) {
-      char c[8];
-      std::snprintf(c, sizeof(c), "%d", kMaxLineLen);
-      return ps.fail("line longer than %s characters", c);
-    }
+    if (tooLong) return ps.failN("line longer than %s%s characters", kMaxLineLen);
     buf[n] = 0;
+    bool any = false;   // anything but blanks: the first such line may be the about line
+    for (size_t k = 0; k < n && !any; ++k) any = buf[k] != ' ' && buf[k] != '\t' && buf[k] != '\r';
+    bool inStr = false;
     for (size_t k = 0; k < n; ++k) {
-      if (buf[k] == '#') { buf[k] = 0; break; }
+      if (buf[k] == '"') inStr = !inStr;
+      if (buf[k] == '#' && !inStr) {
+        bool lead = true;   // nothing before the '#': a comment line
+        for (size_t b = 0; b < k; ++b) lead &= buf[b] == ' ' || buf[b] == '\t' || buf[b] == '\r';
+        if (firstLine && lead) {   // keep it as the set's about line (printable ASCII, cut to fit)
+          size_t a = k + 1;
+          while (a < n && (buf[a] == ' ' || buf[a] == '\t')) ++a;
+          size_t m = 0;
+          for (; a < n && m < size_t(kAboutLen); ++a)
+            if (buf[a] != '\r') out->about[m++] = (uint8_t(buf[a]) >= 0x20 && uint8_t(buf[a]) < 0x7F) ? buf[a] : '?';
+          while (m > 0 && out->about[m - 1] == ' ') --m;
+          out->about[m] = 0;
+        }
+        buf[k] = 0;
+        break;
+      }
       if (buf[k] == '\t' || buf[k] == '\r') buf[k] = ' ';
       else if (uint8_t(buf[k]) < 0x20 || uint8_t(buf[k]) >= 0x7F) return ps.fail("a character that is not plain ASCII");
     }
+    if (any) firstLine = false;
+    if (inStr) return ps.fail("a string without its closing quote \"");
     char* w[kMaxTokens];
     int nw = 0;
     for (char* s = buf; *s;) {
@@ -395,7 +642,18 @@ bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out
       if (!*s) break;
       if (nw >= kMaxTokens) return ps.fail("too many words on one line");
       w[nw++] = s;
-      while (*s && *s != ' ') ++s;
+      if (*s == '"') {   // a string: up to the closing quote, which must end the word
+        char* q = std::strchr(s + 1, '"');
+        if (!q) return ps.fail("a string without its closing quote \"");
+        if (q[1] && q[1] != ' ') return ps.fail("write a space after a closing quote \"");
+        *q = 0;
+        s = q[1] ? q + 2 : q + 1;
+        continue;
+      }
+      while (*s && *s != ' ') {
+        if (*s == '"') return ps.fail("a quote \" inside a word: put strings in quotes on their own");
+        ++s;
+      }
       if (*s) *s++ = 0;
     }
     if (nw == 0) continue;
@@ -410,6 +668,7 @@ struct Out {
   char* b;
   size_t cap, n = 0;
   bool ok = true;
+  size_t lineStart = 0;
   void put(const char* s) {
     const size_t l = std::strlen(s);
     if (n + l + 1 > cap) { ok = false; return; }
@@ -417,10 +676,20 @@ struct Out {
     n += l;
     b[n] = 0;
   }
-  void num(float v) {
+  void nl() {
+    put("\n");
+    lineStart = n;
+  }
+  size_t col() const { return n - lineStart; }
+  void milli(int32_t v) {
     char t[24];
-    fmtNum(v, t);
+    fmtMilli(v, t);
     put(t);
+  }
+  void str(const char* s) {
+    put(" \"");
+    put(s);
+    put("\"");
   }
 };
 
@@ -429,17 +698,32 @@ void lowerName(const char* s, char* o) {
   *o = 0;
 }
 
-// a value of parameter p as the file writes it: the enum name if it has one
-void putValue(Out& o, const ParamInfo* in, float v) {
-  const int iv = int(v);
-  if (in && in->fmt == ParamFormat::Enum && in->enumNames && float(iv) == v && iv >= in->min && iv <= in->max &&
+// a value of parameter p as the file writes it (thousandths): the enum name if it has one
+void putValue(Out& o, const ParamInfo* in, int32_t milli) {
+  const int iv = milli / 1000;
+  if (in && in->fmt == ParamFormat::Enum && in->enumNames && milli % 1000 == 0 && iv >= in->min && iv <= in->max &&
       in->enumNames[iv - in->min]) {
     char t[16];
     lowerName(in->enumNames[iv - in->min], t);
     o.put(t);
     return;
   }
-  o.num(v);
+  o.milli(milli);
+}
+
+void putPoints(Out& o, const MacroSet& set, int first, int n, const ParamInfo* setParam) {
+  for (int k = 0; k < n; ++k) {
+    const Point p = set.points[first + k];
+    o.put(" ");
+    o.milli(pointPosMilli(p));
+    o.put(":");
+    if (setParam) putValue(o, setParam, pointValMilli(p));
+    else o.milli(pointValMilli(p));
+  }
+}
+
+void putInterp(Out& o, Interp ip, Interp def) {
+  if (ip != def) o.put(ip == Interp::Linear ? " linear" : ip == Interp::Smooth ? " smooth" : " step");
 }
 }  // namespace
 
@@ -449,58 +733,119 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
   Out o{buf, cap};
   const int tr = set.track < kNumTracks ? set.track : 0;
   char t[48];
+  if (set.about[0]) {
+    o.put("# ");
+    if (set.name[0]) {
+      o.put(set.name);
+      o.put(" -- ");
+    }
+    o.put(set.about);
+    o.nl();
+  }
   o.put("voice ");
   o.put(kTrackNames[tr]);
-  o.put("\n");
+  o.nl();
   if (set.name[0]) {
     o.put("name ");
     o.put(set.name);
-    o.put("\n");
+    o.nl();
   }
   if (set.baseMask) {
     o.put("base");
     for (int p = 0; p < kParamsPerTrack; ++p) {
       if (!((set.baseMask >> p) & 1) || !params.info[tr][p]) continue;
+      if (o.col() > 150) {
+        o.nl();
+        o.put("base");
+      }
       lowerName(params.info[tr][p]->name, t);
       o.put(" ");
       o.put(t);
       o.put("=");
-      putValue(o, params.info[tr][p], float(set.base[p]));
+      putValue(o, params.info[tr][p], int32_t(set.base[p]) * 1000);
     }
-    o.put("\n");
+    o.nl();
+  }
+  for (int q = 0; q < set.numPatches && q < kMaxPatches; ++q) {
+    const Patch& pa = set.patches[q];
+    o.put("patch ");
+    o.put(pa.name);
+    for (int e = 0; e < pa.n; ++e) {
+      const PatchValue& pv = set.patchValues[pa.first + e];
+      const ParamInfo* in = pv.param < kParamsPerTrack ? params.info[tr][pv.param] : nullptr;
+      if (!in) continue;
+      if (o.col() > 150) {
+        o.nl();
+        o.put("patch ");
+        o.put(pa.name);
+      }
+      lowerName(in->name, t);
+      o.put(" ");
+      o.put(t);
+      o.put("=");
+      putValue(o, in, int32_t(pv.value) * 1000);
+      if (pv.sw != kNoSwitch) {
+        o.put("@");
+        o.milli(int32_t(pv.sw) * 10);
+      }
+    }
+    o.nl();
   }
   for (int i = 0; i < set.numMacros && i < kMaxMacros; ++i) {
     const Macro& m = set.macros[i];
     o.put("macro ");
     o.put(m.name);
-    if (m.start != 0.0f) {
+    if (m.start1000) {
       o.put(" ");
-      o.num(m.start);
+      o.milli(m.start1000);
     }
-    o.put("\n");
-    for (int j = 0; j < m.numTargets && j < kMaxTargets; ++j) {
-      const Target& tg = m.targets[j];
+    if (m.lo[0] || m.hi[0]) {
+      o.str(m.lo);
+      o.str(m.hi);
+    }
+    if (m.desc[0]) o.str(m.desc);
+    o.nl();
+    for (int k = 0; k < set.numMorphs && k < kMaxMorphs; ++k) {
+      const Morph& mo = set.morphs[k];
+      if (mo.macro != i || mo.patch >= set.numPatches) continue;
+      o.put("  morph ");
+      o.put(set.patches[mo.patch].name);
+      putPoints(o, set, mo.first, mo.n, nullptr);
+      putInterp(o, Interp(mo.interp), Interp::Linear);
+      if (mo.sw != kNoSwitch) {
+        o.put(" switch ");
+        o.milli(int32_t(mo.sw) * 10);
+      }
+      o.nl();
+    }
+    for (int j = 0; j < m.n && m.first + j < kMaxTargets; ++j) {
+      const Target& tg = set.targets[m.first + j];
       const ParamInfo* in = tg.param < kParamsPerTrack ? params.info[tr][tg.param] : nullptr;
       if (!in) continue;
       lowerName(in->name, t);
       o.put("  ");
       o.put(t);
-      if (tg.op != Op::Set) o.put(tg.op == Op::Add ? " add" : " mul");
-      for (int k = 0; k < tg.curve.n && k < kMaxPoints; ++k) {
-        o.put(" ");
-        o.num(tg.curve.pos[k]);
-        o.put(":");
-        if (tg.op == Op::Set) putValue(o, in, tg.curve.val[k]);
-        else o.num(tg.curve.val[k]);
-      }
-      const Interp def = in->fmt == ParamFormat::Enum ? Interp::Step : Interp::Linear;
-      if (tg.curve.interp != def)
-        o.put(tg.curve.interp == Interp::Linear ? " linear" : tg.curve.interp == Interp::Smooth ? " smooth" : " step");
-      if (tg.by < set.numMacros) {
+      if (tg.op() != Op::Set) o.put(tg.op() == Op::Add ? " add" : " mul");
+      putPoints(o, set, tg.first, tg.n, tg.op() == Op::Set ? in : nullptr);
+      putInterp(o, tg.interp(), in->fmt == ParamFormat::Enum ? Interp::Step : Interp::Linear);
+      if (tg.by() < set.numMacros) {
         o.put(" by ");
-        o.put(set.macros[tg.by].name);
+        o.put(set.macros[tg.by()].name);
       }
-      o.put("\n");
+      if (tg.isOverride()) o.put(" override");
+      o.nl();
+    }
+    for (int k = 0; k < set.numTrims && k < kMaxTrims; ++k) {
+      const Trim& tm = set.trims[k];
+      if (tm.macro != i) continue;
+      o.put("  trim");
+      putPoints(o, set, tm.first, tm.n, nullptr);
+      putInterp(o, Interp(tm.interp), Interp::Linear);
+      if (tm.by < set.numMacros) {
+        o.put(" by ");
+        o.put(set.macros[tm.by].name);
+      }
+      o.nl();
     }
   }
   return o.ok ? o.n : 0;

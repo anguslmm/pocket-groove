@@ -12,20 +12,20 @@ voice chh
 name ALLOY
 base snap=40 tone=80
 
-macro WD-MTL 0.6
+macro WD-MTL 0.6 "WOOD" "METAL"
   mtl      0:0 0.6:84 1:127
   colr     0:100 0.6:56 1:24        # wood: a resonant band does the colouring
   sprd     0:40 0.6:64 1:110        # metal: inharmonic spread
   tone     add 0:-18 0.6:0 1:6
   lvl      0:100 0.6:92 1:88
 
-macro SIZE 0.5
+macro SIZE 0.5 "TINY" "BIG"
   tune     0:118 0.5:64 1:12
   dcy      0:30 0.5:58 1:96
   tone     add 0:14 0.5:0 1:-18
   lvl      add 0:-2 0.5:0 1:2
 
-macro DAMP
+macro DAMP "RINGING" "CHOKED"
   dcy      mul 0:1 1:0.3
   tone     add 0:0 1:-24
   snap     add 0:0 1:30             # a choked hat is mostly its tick

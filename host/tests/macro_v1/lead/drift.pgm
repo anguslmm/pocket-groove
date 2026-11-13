@@ -1,0 +1,39 @@
+# DRIFT -- family: MOVEMENT.
+# Idea: the macros change how the sound moves over time, not its static
+# tone. The base is a soft triangle lead with a sine an octave up.
+#   BLOOM   note length and vibrato together (the owner's pairing): short
+#           notes stay still; as notes get longer the vibrato fades in, deepens
+#           and slows down, like a singer leaning into a held note
+#   WANDER  the LFO's depth and speed together: a slow drift of the filter and
+#           the wave shape at one end, a fast flutter at the other
+#   SWELL   the envelope shape: an instant pluck at 0, a slow swell with a
+#           late filter rise at 1 (slow attacks soften fast phrases: intended)
+# Feel if it works: you play gestures in time; BLOOM up and notes start to
+# breathe, WANDER up and the line starts to float.
+# Try: BLOOM on X, WANDER on Y, a slow line of long notes; then SWELL
+# with chords.
+voice lead
+name DRIFT
+base wave=tri shape=30 osc2=sine intv=36 mix=48 flt=lp cutoff=78 reso=22 env=30 fdcy=60 sus=40 ktrk=64 drive=0 lfoshape=0 lcut=0 glide=60
+
+macro BLOOM 0.4
+  decay    0:34 1:110 smooth
+  sus      0:0 1:84
+  release  0:24 1:84
+  vib      0:0 0.3:12 1:84               # fades in with the note length (VIB is quadratic: 12 is barely there)
+  lfo      0:104 1:84                    # and slows as it deepens: 7 Hz .. 3.5 Hz
+  lcut     0:0 0.5:4 1:16                # a touch of filter breathing with it
+  lvl      0:116 0.5:108 1:102           # short blips sound quieter than held notes: lift them
+
+macro WANDER
+  lcut     add 0:0 0.3:34 1:72              # LFO>CUT is quadratic inside the voice
+  lshp     0:0 1:96                      # the triangle leans into a saw and back
+  lfo      add 0:-50 0.5:-20 1:10        # slow drift .. fast flutter (on top of BLOOM's rate)
+  det      0:20 1:70
+
+macro SWELL
+  attack   0:0 0.5:50 1:96
+  fatk     0:0 0.5:60 1:104
+  env      add 0:0 1:36
+  release  add 0:0 1:30
+  lvl      add 0:0 1:6                   # a swell never reaches the peak of a pluck: lift it a little

@@ -157,6 +157,33 @@ int main(int argc, char** argv) {
   std::remove((macros + "/a.pgm").c_str());
   tick(400);
   CHECK(h.v[pg::kTrackLead][0] == 50);
+  std::printf("model v2: a morph, end labels, the about line, warnings\n");
+  {
+    const char* v2 = "# B -- family: TEST.\nvoice bass\nname B\nbase cut=20\npatch HI cut=100\n"
+                     "macro M \"LOW\" \"HIGH\" \"a test macro\"\n morph HI\nmacro N\n res 0:10 1:20\n res 0:30 1:40\n";
+    writeFile(macros + "/b.pgm", v2);
+    tick(400);
+    CHECK(lab.errors() == 0 && lab.warnings() == 1);   // the second plain set on RES wipes out the first
+    CHECK(lab.selectSet(pg::kTrackBass, "B"));
+    CHECK(lab.setMacro(pg::kTrackBass, 0, 0.5f));
+    tick(33);
+    CHECK(h.v[pg::kTrackBass][CUT] == 60 && h.v[pg::kTrackBass][RES] == 30);
+    h.sel = pg::kTrackBass;
+    static uint8_t a[desk::kLabW * desk::kCanvasH], b[desk::kLabW * desk::kCanvasH];
+    lab.draw(a);
+    std::string plain = v2;
+    plain.replace(plain.find(" \"LOW\" \"HIGH\" \"a test macro\""), 28, "");
+    plain.replace(0, plain.find('\n') + 1, "");   // no about line
+    writeFile(macros + "/b.pgm", plain + " res 0:1 override\n");
+    tick(400);
+    CHECK(lab.warnings() == 1);   // the override line is not warned about, the earlier one still is
+    tick(3000);   // let the RELOADED notice pass
+    lab.draw(b);
+    CHECK(std::memcmp(a, b, sizeof(a)) != 0);   // the labels, the about line, the description are drawn
+    CHECK(lab.selectSet(pg::kTrackBass, "none"));
+    std::remove((macros + "/b.pgm").c_str());
+    tick(400);
+  }
   std::printf("marks\n");
   h.sel = pg::kTrackSnare;
   lab.action(desk::kActLabGood, false);

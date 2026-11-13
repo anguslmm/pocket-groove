@@ -1,0 +1,42 @@
+# TRAIL -- family: JOURNEY.
+# Idea: one macro walks through five percussion models, low to high, and
+# the pitch is continuous across every model change: TUNE climbs inside each
+# model and jumps back down exactly where the next model picks up at the
+# pitch the last one left (the same TUNE value means a different pitch in
+# each model, so the jumps in TUNE are what make the pitch smooth).
+#   0.00 TOM  (low, ~80 Hz)    .. the tom climbs to ~290 Hz at 0.125
+#   0.25 RIM                   .. ~280 -> ~540 Hz
+#   0.50 COWBELL               .. ~580 -> ~1070 Hz
+#   0.75 CLAVE                 .. ~1060 -> ~1690 Hz
+#   1.00 ZAP (a falling laser from ~1200 Hz), entered at 0.875
+# (pitches computed from the voice code, not measured: the audit has no pitch
+# tracker)
+# (The shaker model is left out: it has no pitch to continue.)
+# DROP and DIRT are spice on top.
+# audit: allow-jump TRAIL
+# Feel if it works: one slide goes from a tom fill to a cowbell to a laser;
+# a fast sweep across a roll sounds like one instrument changing.
+# Try: TRAIL on X, DROP on Y on a 16th roll; then DIRT.
+# Drums are unsmoothed today: moving TRAIL while a hit rings changes it
+# mid-hit in 7-bit steps (TUNE moves about 7 values per 1 % of TRAIL), so
+# a very slow sweep under a long tom will step. Between hits it is clean.
+voice perc
+name TRAIL
+base tone=64 harm=64 noise=48 drive=28 bend=40
+
+macro TRAIL 0.25
+  modl     0:tom 0.125:rim 0.375:cowb 0.625:clav 0.875:zap
+  tune     0:40 0.125:127 0.125:10 0.375:70 0.625:127 0.625:10 0.875:40 0.875:127
+  decay    0:72 0.25:56 0.5:60 0.75:50 1:70 smooth
+  tone     0:50 0.25:70 0.5:60 0.75:74 1:80 smooth
+  lvl      0:90 0.25:106 0.5:122 0.75:118 1:102 smooth   # the tom is long and loud, the cowbell thin
+
+macro DROP
+  bend     0:0 1:120
+  decay    add 0:0 1:16
+  harm     add 0:0 1:-20
+
+macro DIRT
+  drive    0:16 1:110
+  noise    add 0:0 1:40
+  lvl      add 0:0 1:-6

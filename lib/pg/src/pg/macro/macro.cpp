@@ -9,39 +9,77 @@ namespace macro {
 namespace {
 inline float clamp01(float x) { return x > 0.0f ? (x < 1.0f ? x : 1.0f) : 0.0f; }   // NaN -> 0
 inline char lower(char c) { return (c >= 'A' && c <= 'Z') ? char(c - 'A' + 'a') : c; }
+
+bool ieq(const char* a, const char* b) {
+  while (*a && *b && lower(*a) == lower(*b)) ++a, ++b;
+  return *a == 0 && *b == 0;
+}
+
+// 2^x for |x| <= 4: integer part by repeated scaling, fraction by its Taylor
+// series to the 6th power (relative error below 2e-5, a ten-thousandth of a dB).
+float exp2Small(float x) {
+  if (x > 4.0f) x = 4.0f;
+  if (x < -4.0f) x = -4.0f;
+  float scale = 1.0f;
+  while (x >= 1.0f) { x -= 1.0f; scale *= 2.0f; }
+  while (x < 0.0f) { x += 1.0f; scale *= 0.5f; }
+  const float y = x * 0.69314718f;   // 2^x = e^y, 0 <= y < ln 2
+  const float e = 1.0f + y * (1.0f + y * (0.5f + y * (1.0f / 6.0f + y * (1.0f / 24.0f + y * (1.0f / 120.0f + y * (1.0f / 720.0f))))));
+  return scale * e;
+}
 }  // namespace
 
-float Curve::at(float x) const {
-  if (n == 0) return 0.0f;
+float milliToFloat(int32_t m) {
+  const bool neg = m < 0;
+  const int32_t a = neg ? -m : m;
+  const float v = float(a / 1000) + float(a % 1000) / 1000.0f;
+  return neg ? -v : v;
+}
+
+float curveAt(const Point* pts, int n, Interp interp, float x) {
+  if (n <= 0) return 0.0f;
   x = clamp01(x);
-  if (x >= pos[n - 1]) return val[n - 1];
-  if (x < pos[0]) return val[0];
+  if (x >= pointPos(pts[n - 1])) return pointVal(pts[n - 1]);
+  const float p0 = pointPos(pts[0]);
+  if (x < p0) return pointVal(pts[0]);
   // the last point at or left of x; pos[i + 1] > x >= pos[i], so the segment has width
   int i = n - 2;
-  while (i > 0 && pos[i] > x) --i;
-  if (interp == Interp::Step) return val[i];
-  float t = (x - pos[i]) / (pos[i + 1] - pos[i]);
+  float pi = pointPos(pts[i]);
+  while (i > 0 && pi > x) pi = pointPos(pts[--i]);
+  const float vi = pointVal(pts[i]);
+  if (interp == Interp::Step) return vi;
+  float t = (x - pi) / (pointPos(pts[i + 1]) - pi);
   if (interp == Interp::Smooth) t = t * t * (3.0f - 2.0f * t);
-  return val[i] + (val[i + 1] - val[i]) * t;
+  return vi + (pointVal(pts[i + 1]) - vi) * t;
 }
 
 void MacroSet::clear() { std::memset(this, 0, sizeof(*this)); }
 
 uint32_t MacroSet::ownedMask() const {
   uint32_t m = baseMask;
-  for (int i = 0; i < numMacros && i < kMaxMacros; ++i)
-    for (int j = 0; j < macros[i].numTargets && j < kMaxTargets; ++j)
-      if (macros[i].targets[j].param < kParamsPerTrack) m |= 1u << macros[i].targets[j].param;
+  const int nt = numTargets < kMaxTargets ? numTargets : kMaxTargets;
+  for (int j = 0; j < nt; ++j)
+    if (targets[j].param < kParamsPerTrack) m |= 1u << targets[j].param;
+  const int nmo = numMorphs < kMaxMorphs ? numMorphs : kMaxMorphs;
+  for (int k = 0; k < nmo; ++k) {
+    if (morphs[k].patch >= numPatches || morphs[k].patch >= kMaxPatches) continue;
+    const Patch& p = patches[morphs[k].patch];
+    for (int e = 0; e < p.n && p.first + e < kMaxPatchValues; ++e)
+      if (patchValues[p.first + e].param < kParamsPerTrack) m |= 1u << patchValues[p.first + e].param;
+  }
+  if (numTrims) m |= 1u << kMixLevel;
   return m;
 }
 
 int MacroSet::findMacro(const char* nm) const {
-  for (int i = 0; i < numMacros && i < kMaxMacros; ++i) {
-    const char* a = macros[i].name;
-    const char* b = nm;
-    while (*a && *b && lower(*a) == lower(*b)) ++a, ++b;
-    if (*a == 0 && *b == 0) return i;
-  }
+  for (int i = 0; i < numMacros && i < kMaxMacros; ++i)
+    if (ieq(macros[i].name, nm)) return i;
+  return -1;
+}
+
+int MacroSet::findPatch(const char* nm) const {
+  for (int i = 0; i < numPatches && i < kMaxPatches; ++i)
+    if (ieq(patches[i].name, nm)) return i;
   return -1;
 }
 
@@ -57,21 +95,79 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
   const int nm = set.numMacros < kMaxMacros ? set.numMacros : kMaxMacros;
   float pos[kMaxMacros] = {0.0f, 0.0f, 0.0f, 0.0f};
   for (int m = 0; m < nm; ++m) pos[m] = clamp01(positions[m]);
+
+  // 2. morphs: a mix of the base and the patches
+  const int nmo = set.numMorphs < kMaxMorphs ? set.numMorphs : kMaxMorphs;
+  if (nmo > 0) {
+    float amt[kMaxMorphs];
+    float sum = 0.0f;
+    for (int k = 0; k < nmo; ++k) {
+      const Morph& mo = set.morphs[k];
+      const float x = mo.macro < nm ? pos[mo.macro] : 0.0f;
+      amt[k] = mo.n ? clamp01(curveAt(set.points + mo.first, mo.n, Interp(mo.interp), x)) : x;
+      sum += amt[k];
+    }
+    const float norm = sum > 1.0f ? 1.0f / sum : 1.0f;
+    float start[kParamsPerTrack];
+    std::memcpy(start, v, sizeof(v));
+    float best[kParamsPerTrack];   // enum: the winning line's amount so far (-1 = none)
+    for (int p = 0; p < kParamsPerTrack; ++p) best[p] = -1.0f;
+    for (int k = 0; k < nmo; ++k) {
+      const Morph& mo = set.morphs[k];
+      if (mo.patch >= set.numPatches || amt[k] <= 0.0f) continue;
+      const Patch& pa = set.patches[mo.patch];
+      const float w = amt[k] * norm;
+      for (int e = 0; e < pa.n; ++e) {
+        const PatchValue& pv = set.patchValues[pa.first + e];
+        if (pv.param >= kParamsPerTrack) continue;
+        const ParamInfo* in = params.info[track][pv.param];
+        if (in && in->fmt == ParamFormat::Enum) {
+          const int sw = pv.sw != kNoSwitch ? pv.sw : mo.sw != kNoSwitch ? mo.sw : kDefaultSwitch;
+          if (amt[k] * 100.0f >= float(sw) && amt[k] >= best[pv.param]) {
+            best[pv.param] = amt[k];
+            v[pv.param] = float(pv.value);
+          }
+        } else {
+          v[pv.param] += w * (float(pv.value) - start[pv.param]);
+        }
+      }
+    }
+  }
+
+  // 3. targets, in file order
+  const int nt = set.numTargets < kMaxTargets ? set.numTargets : kMaxTargets;
   for (int m = 0; m < nm; ++m) {
     const Macro& mac = set.macros[m];
-    for (int j = 0; j < mac.numTargets && j < kMaxTargets; ++j) {
-      const Target& t = mac.targets[j];
+    for (int j = 0; j < mac.n && mac.first + j < nt; ++j) {
+      const Target& t = set.targets[mac.first + j];
       if (t.param >= kParamsPerTrack) continue;
-      const float c = t.curve.at(pos[m]);
-      const float s = t.by < nm ? pos[t.by] : 1.0f;
+      const float c = set.curve(t, pos[m]);
+      const uint8_t by = t.by();
+      const float s = by < nm ? pos[by] : 1.0f;
       float& x = v[t.param];
-      switch (t.op) {
+      switch (t.op()) {
         case Op::Set: x += (c - x) * s; break;
         case Op::Add: x += c * s; break;
         case Op::Mul: x *= 1.0f + (c - 1.0f) * s; break;
       }
     }
   }
+
+  // 4. trims: dB on the level, through the mixer's cubic taper (gain = (lvl / 100)^3)
+  const int ntr = set.numTrims < kMaxTrims ? set.numTrims : kMaxTrims;
+  if (ntr > 0) {
+    float db = 0.0f;
+    for (int k = 0; k < ntr; ++k) {
+      const Trim& tr = set.trims[k];
+      const float x = tr.macro < nm ? pos[tr.macro] : 0.0f;
+      const float s = tr.by < nm ? pos[tr.by] : 1.0f;
+      db += curveAt(set.points + tr.first, tr.n, Interp(tr.interp), x) * s;
+    }
+    // 10^(db / 60) = 2^(db * log2(10) / 60)
+    v[kMixLevel] *= exp2Small(db * (3.32192809f / 60.0f));
+  }
+
+  // 5. clamp and round
   for (int p = 0; p < kParamsPerTrack; ++p) {
     if (!((owned >> p) & 1)) continue;
     const ParamInfo* info = params.info[track][p];
@@ -83,6 +179,34 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
     out[p] = uint8_t(int(x + 0.5f));
   }
   return owned;
+}
+
+int enumJumps(const MacroSet& set, const ParamTable& params, int m, const float* positions, const uint8_t* under,
+              float* outPos, uint8_t* outParam, int max) {
+  if (m < 0 || m >= set.numMacros || max <= 0) return 0;
+  const int track = set.track < kNumTracks ? set.track : 0;
+  uint32_t enums = 0;
+  for (int p = 0; p < kParamsPerTrack; ++p)
+    if (params.info[track][p] && params.info[track][p]->fmt == ParamFormat::Enum) enums |= 1u << p;
+  enums &= set.ownedMask();
+  if (!enums) return 0;
+  float pos[kMaxMacros];
+  for (int i = 0; i < kMaxMacros; ++i) pos[i] = i < set.numMacros ? positions[i] : 0.0f;
+  uint8_t prev[kParamsPerTrack], cur[kParamsPerTrack];
+  int found = 0;
+  for (int k = 0; k <= kJumpSteps && found < max; ++k) {
+    pos[m] = float(k) / float(kJumpSteps);
+    evaluate(set, params, pos, under, cur);
+    if (k > 0)
+      for (int p = 0; p < kParamsPerTrack && found < max; ++p)
+        if (((enums >> p) & 1) && cur[p] != prev[p]) {
+          outPos[found] = pos[m];
+          outParam[found] = uint8_t(p);
+          ++found;
+        }
+    std::memcpy(prev, cur, sizeof(cur));
+  }
+  return found;
 }
 
 }  // namespace macro
