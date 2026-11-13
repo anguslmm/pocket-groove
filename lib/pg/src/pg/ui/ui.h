@@ -176,6 +176,8 @@ class Ui {
   // instrument itself (id 0 = CLASSIC; positions nullptr = the set's defaults).
   void setMacro(int track, int m, int value);
   void setInstrument(int track, uint16_t id, const uint8_t* positions = nullptr);
+  // A host's short message in the toast line (the desktop: a sample file dropped on the window).
+  void notify(const char* text, bool error = false) { toast(text, error ? 2 : 0); }
 
   // ---- tilt (UX.md 10.3 "Tilt") --------------------------------------------
   // The host owns G0 (the firmware: volume, diagnostics) and reports the gesture

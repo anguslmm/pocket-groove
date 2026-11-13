@@ -156,6 +156,14 @@ if(Python3_Interpreter_FOUND AND TARGET xfer_sim AND NOT WIN32)
            WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(test_pg_client PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
 endif()
+# The sample converters: C++ (host/common/sample_convert.h, the desktop's) and Python
+# (tools/pg_sample.py, tools/pg sample put) agree on shared test vectors.
+if(Python3_Interpreter_FOUND AND TARGET sample_convert)
+  add_test(NAME test_sample_convert
+           COMMAND ${Python3_EXECUTABLE} ${PG_ROOT}/tools/test_sample_convert.py $<TARGET_FILE:sample_convert>
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(test_sample_convert PROPERTIES TIMEOUT 300)
+endif()
 
 # The hardware spike's portable parts (src/hwspike, env:hw-spike, docs/hw-spike.md).
 add_subdirectory(hwspike)

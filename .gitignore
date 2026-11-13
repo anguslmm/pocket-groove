@@ -4,5 +4,6 @@ build/
 __pycache__/
 .claude/worktrees/
 projects/
+samples/
 bounces/
 lab-notes.txt

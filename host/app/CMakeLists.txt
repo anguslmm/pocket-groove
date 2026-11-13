@@ -52,7 +52,8 @@ target_include_directories(pg_desk PUBLIC ${DESK_DIR} ${PG_SRC} ${CMAKE_CURRENT_
 target_link_libraries(pg_desk PUBLIC ${PG_SDL_TARGET})
 target_compile_options(pg_desk PRIVATE ${PG_FLAGS})
 
-add_executable(pocket-groove main.cpp audio.cpp display.cpp recorder.cpp listen.cpp strip.cpp stems.cpp lab.cpp)
+add_executable(pocket-groove main.cpp audio.cpp display.cpp recorder.cpp listen.cpp strip.cpp stems.cpp lab.cpp
+               samples.cpp)
 target_link_libraries(pocket-groove PRIVATE pg_desk ${PG_LIBS} ${PG_LIBS} ${PG_SDL_TARGET})
 target_compile_options(pocket-groove PRIVATE ${PG_FLAGS})
 # Next to the other host binaries (build/host/pocket-groove).
@@ -79,6 +80,15 @@ target_link_libraries(test_desktop_lab PRIVATE ${PG_LIBS} ${PG_LIBS})
 target_compile_options(test_desktop_lab PRIVATE ${PG_FLAGS})
 set_target_properties(test_desktop_lab PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 add_test(NAME test_desktop_lab COMMAND test_desktop_lab ${CMAKE_BINARY_DIR}/desktop_test_lab_unit
+         WORKING_DIRECTORY ${PG_ROOT})
+
+# The desktop's sample folder (samples.cpp: no SDL): load, reload on change, remove, drop.
+add_executable(test_desktop_samples tests/test_desktop_samples.cpp samples.cpp)
+target_include_directories(test_desktop_samples PRIVATE ${DESK_DIR} ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_desktop_samples PRIVATE ${PG_LIBS} ${PG_LIBS})
+target_compile_options(test_desktop_samples PRIVATE ${PG_FLAGS})
+set_target_properties(test_desktop_samples PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME test_desktop_samples COMMAND test_desktop_samples ${CMAKE_BINARY_DIR}/desktop_test_samples
          WORKING_DIRECTORY ${PG_ROOT})
 
 # Listen's rate match against simulated clocks (header-only, no SDL needed by the test itself).

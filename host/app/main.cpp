@@ -62,6 +62,7 @@
 #include "pg/ui/keys.h"
 #include "pg/ui/ui.h"
 #include "recorder.h"
+#include "samples.h"
 #include "script.h"
 #include "stems.h"
 #include "strip.h"
@@ -72,6 +73,7 @@ constexpr uint32_t kFrameMs = 33;   // the firmware's UI frame (~30 fps)
 
 struct Options {
   std::string dir = "projects";
+  std::string samplesDir;            // --samples; empty = "samples" next to the projects directory
   std::string sdDir;                 // empty = no SD card
   std::string recDir = "bounces/live";
   std::string keymapFile;
@@ -105,6 +107,8 @@ void usage(FILE* f) {
   std::fprintf(f,
                "usage: pocket-groove [options]\n"
                "  --dir PATH        projects directory (default ./projects, where tools/pg pull/push work)\n"
+               "  --samples PATH    the sample pool's folder: 01-name.wav .. 12-name.wav, one per slot\n"
+               "                    (default: samples/ next to the projects directory; docs/DESKTOP.md)\n"
                "  --sd PATH         also mount PATH as the SD card (default: no card)\n"
                "  --scale N         window size, N x 240x135 points (default 4)\n"
                "  --buffer N        audio buffer in frames (default 256)\n"
@@ -145,6 +149,7 @@ bool parseArgs(int argc, char** argv, Options* o) {
       return argv[++i];
     };
     if (a == "--dir") o->dir = next("a path");
+    else if (a == "--samples") o->samplesDir = next("a path");
     else if (a == "--sd") o->sdDir = next("a path");
     else if (a == "--rec-dir") o->recDir = next("a path");
     else if (a == "--keymap") o->keymapFile = next("a file");
@@ -223,6 +228,7 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   desk::Listen listen;
   desk::Stems stems;
   desk::Lab lab;
+  desk::Samples samples;
   bool labMouse = false;     // a drag that started on the lab panel
   bool textInput = false;    // SDL text input on (only while a lab note is typed)
   std::unique_ptr<desk::SimCapture> simCapture;
@@ -702,6 +708,19 @@ class App final : public desk::ScriptHost, public desk::LabHost {
       listen.rescanSoon();
       return 0;
     }
+    if (c == "drop" && w.size() == 2) {   // as a file dropped on the window
+      dropFile(w[1]);
+      return 0;
+    }
+    if (c == "print-samples") {   // the pool as the instrument sees it
+      for (int i = 0; i < pg::sampler::kPoolSlots; ++i) {
+        pg::sampler::SampleRef r;
+        pg::sampler::resolve(samples.pool(), i, &r);
+        std::printf("[samples] slot %d: %s %u %s\n", i + 1, r.builtin ? "BUILT-IN" : "USER", unsigned(r.length), r.name);
+      }
+      std::fflush(stdout);
+      return 0;
+    }
     if (c == "wait-stems") return waitFor(!stems.busy(), "the stems job");
     if (c == "wait-listening") return waitFor(listen.active() && g_listenBuf.stats().primed, "listening");
     if (c == "print-keys") {
@@ -793,6 +812,31 @@ class App final : public desk::ScriptHost, public desk::LabHost {
     if (c == "lab-wait-reloads" && w.size() >= 2)
       return waitFor(lab.reloads() >= std::atoi(w[1].c_str()), "a macro file reload", 2);
     return -1;
+  }
+  // A file dropped on the window: into the selected track's sample slot (samples.h).
+  void dropFile(const std::string& path) {
+    const int t = g_ui.selTrack();
+    const int slot = g_inst.project().tracks[t].sampleSlot;
+    std::string msg;
+    const bool ok = samples.drop(path, slot, &msg);
+    std::printf("[samples] drop %s -> slot %d: %s\n", path.c_str(), slot + 1, msg.c_str());
+    std::fflush(stdout);
+    char toast[40];
+    if (ok) {
+      const pg::sampler::SlotHeader* h = samples.memoryPool().header(slot);
+      char nm[pg::sampler::kNameLen + 1] = "";
+      if (h) pg::sampler::headerName(*h, nm);
+      std::snprintf(toast, sizeof toast, "SLOT %d: %s", slot + 1, nm);
+    } else {
+      std::snprintf(toast, sizeof toast, "SAMPLE: %.30s", msg.c_str());
+    }
+    g_ui.notify(toast, !ok);
+    needPresent = true;
+  }
+  void samplesFrame(uint32_t now) {
+    if (!samples.tick(now)) return;
+    for (const std::string& m : samples.messages()) std::printf("[samples] %s\n", m.c_str());
+    std::fflush(stdout);
   }
   void pushMouse(uint32_t type, int cx, int cy) {
     int wx = 0, wy = 0;
@@ -911,6 +955,25 @@ int main(int argc, char** argv) {
   pg::ui::initPalette(g_stripFb);
   pg::ui::initPalette(g_overlayFb);
   g_inst.init(float(opt.sr), opt.mono);
+  // The sample pool: samples/ next to the projects directory (before the audio starts).
+  {
+    std::string sdir = opt.samplesDir;
+    if (sdir.empty()) {
+      std::string d = opt.dir;
+      while (d.size() > 1 && d.back() == '/') d.pop_back();
+      const size_t sl = d.find_last_of('/');
+      sdir = sl == std::string::npos ? std::string("samples") : d.substr(0, sl + 1) + "samples";
+    }
+    if (app.samples.init(sdir)) {
+      g_inst.setSamplePool(app.samples.pool());
+      int n = 0;
+      for (int i = 0; i < pg::sampler::kPoolSlots; ++i) n += app.samples.fileOf(i).empty() ? 0 : 1;
+      std::printf("[samples] %s: %d slot(s) with a file\n", sdir.c_str(), n);
+      for (const std::string& m : app.samples.messages()) std::printf("[samples] %s\n", m.c_str());
+    } else {
+      std::printf("[samples] cannot create %s: the built-in sounds only\n", sdir.c_str());
+    }
+  }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter
   g_ui.setDevMode(opt.dev || opt.lab);
@@ -1021,6 +1084,12 @@ int main(int argc, char** argv) {
         case SDL_TEXTINPUT:
           if (app.lab.typing()) app.lab.typeText(e.text.text);
           break;
+        case SDL_DROPFILE:
+          if (e.drop.file) {
+            app.dropFile(e.drop.file);
+            SDL_free(e.drop.file);
+          }
+          break;
         case SDL_AUDIODEVICEADDED:
         case SDL_AUDIODEVICEREMOVED:
           if (app.simCapture == nullptr)
@@ -1062,6 +1131,7 @@ int main(int argc, char** argv) {
     }
     if (app.audioOk) app.listen.tick(now);
     app.stems.poll();
+    app.samplesFrame(now);
     app.updateStrip();
     app.updateOverlay();
     if (app.needPresent) {
