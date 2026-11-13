@@ -205,7 +205,7 @@ Everything else works as in GROOVE (pads select and play, `;` `.` octave, `l` ch
 
 ![The bass's instrument POLES](ux/instrument-labels.png)
 
-The page shows the selected track's instrument: its name, a line about it, a live picture of its sound and its four macros. The picture is the track's own voice as an oscilloscope draws it: a held note stands still, a filter sweep reshapes it as you move, a drum hit draws its shape and decay from the left; it settles to a calm line when the track is silent.
+The page shows the selected track's instrument: its name, a live picture of its sound and its four macros. The picture is the track's own voice as an oscilloscope draws it: a held note stands still, a filter sweep reshapes it as you move, a drum hit draws its shape and decay from the left; it settles to a calm line when the track is silent.
 
 The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `v` macro 2), the right hand's on the right (`b` `n` macro 3, `m` `,` macro 4). Each slider has its two keys at its ends: the left key moves it toward the left end, the right key toward the right. Words at the ends (DARK / BRIGHT) say what each end does. A small notch under a slider marks the instrument's default; ticks above it mark where the sound switches in a jump (a new wave, another filter) instead of moving smoothly. The macro you moved last has its name in the track colour; a macro you are moving right now turns white, with its key lit.
 

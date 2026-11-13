@@ -330,6 +330,9 @@ Order of work (owner, updated 2026-11-12):
    Host: 73/73. Before / after WAVs: build/stageg/wav/ (demo_compare --wav). NOT LISTENED TO.
    LATER STAGES (not built): (F) a sampler instrument, in progress as F1 (playback and import
    from the Mac) and F2 (microphone recording).
+   STANDING TASTE RULE (owner, 2026-11-13: "get the stupid tag lines for each synth out of there"):
+   no descriptive captions for instruments on the screen. `about "..."` stays in the .pgm as an
+   author's note, not displayed; the instrument page gives those rows to the picture (y 29..72).
    STANDING RULE (owner, 2026-11-13): development does not wait for macro assessment. The owner
    will request macro changes continually and there will be no single final assessment; a
    retuned .pgm is regenerated into the table and committed like any other change.

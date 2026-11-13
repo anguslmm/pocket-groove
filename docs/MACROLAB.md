@@ -88,7 +88,7 @@ One file per set, plain text. Keep them under `macros/<track>/` (the lab does no
 # ACID -- family: INTERACTION.     <- the first line, a comment: the set's header (the lab shows it)
 voice bass                         # first statement: kick snare clap chh ohh perc bass lead
 name ACID                          # optional, up to 12 characters (else the file name)
-about "The 303 squelch. Open it, then bite."   # optional: the player's line (up to 38 characters)
+about "The 303 squelch. Open it, then bite."   # optional: an author's note (up to 38 characters), not displayed
 base wave=0 sub=40 lfoshape=sine   # optional, any number of lines: fixed values under the macros
 
 macro OPEN 0.4 "SHUT" "OPEN" "the 303 filter"   # up to 4 macros; name up to 6 characters; start
@@ -134,7 +134,7 @@ macro BELL "ORGAN" "BELL"
 | line | |
 |---|---|
 | `# TEXT` | the first non-blank line, if it is a comment, is the set's **header** line (`MacroSet::about`, up to 72 characters, the rest is cut): the author's, shown by the lab and listed in the index. When it starts with the set's name and ` -- ` (the round-1 header `# ACID -- family: ...`), that part is dropped: the header line is then `family: ...` |
-| `about "TEXT"` | optional, once: the **player's line** (`MacroSet::tagline`), one short sentence of 1 to 38 characters that fits the instrument page under the name (shown in capitals). Say what the instrument is and what to do with it, in a player's words ("The 303 squelch. Open it, then bite."), not the family or the idea being tested. Longer is an error, not cut |
+| `about "TEXT"` | optional, once: an **author's note** (`MacroSet::tagline`), one short sentence of 1 to 38 characters. It is kept in the set and the built-in table but **not displayed** anywhere (the device and the lab show no caption for an instrument: the owner's rule, docs/STATE.md). Longer is an error, not cut |
 | `voice TRACK` | required, first statement. `kick snare clap chh ohh perc bass lead` (also `snar`, `closedhat`, `openhat`) |
 | `name NAME` | optional, one word, up to 12 characters, shown in capitals |
 | `base p=v p=v ...` | optional, repeatable; no spaces around `=` |
@@ -212,7 +212,7 @@ The ctest `check_builtin` (`macro_builtin --check`) fails while the checked-in t
 
 ## The sets in macros/
 
-[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works, and has an `about "..."` line after its name: what the player reads on the instrument page (`itest_macro_files` checks the first line, which is also the set's header line, that every set has a player's line of at most 38 characters that the built-in table carries, that set names are unique per track, and that no set loads with a warning).
+[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works, and has an `about "..."` line after its name, an author's note that is not displayed (`itest_macro_files` checks the first line, which is also the set's header line, that every set has an `about` line of at most 38 characters that the built-in table carries, that set names are unique per track, and that no set loads with a warning).
 
 ## Auditing a set (macro_audit)
 
