@@ -34,6 +34,8 @@
 //                           page; recordings land in the same pool as `sample` (after demo / empty)
 //   mic amp <peak>          the simulated voice's peak (0 = only the room)
 //   mic dirty <slot>        slot 1..12 is empty but not erased (L then shows ERASING first)
+//   resample on             SHIFT+L on a sampler page records the engine's output
+//                           (host/common/host_resample.h) into the same pool
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -41,6 +43,7 @@
 #include <string>
 #include <sys/stat.h>
 
+#include "common/host_resample.h"
 #include "common/sample_convert.h"
 #include "common/sim_mic.h"
 #include "common/ui_harness.h"
@@ -63,6 +66,8 @@ int main(int argc, char** argv) {
   static uih::Rig rig;
   static pg::sampler::MemoryPool pool;   // `sample` and `mic`
   static simmic::SimMic mic;
+  static hostrs::HostResample resample;
+  static std::vector<int16_t> resampleBufs[pg::sampler::kPoolSlots];
   bool started = false;
   char line[256];
   int lineNo = 0, errors = 0;
@@ -172,6 +177,19 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "%s:%d: mic on | amp <peak> | dirty <slot>\n", argv[1], lineNo);
         ++errors;
       }
+    } else if (op == "resample") {
+      resample.init(&rig.eng, &rig.inst.sampler(), uih::Rig::kSr,
+                    [](int slot, const int16_t* d, uint32_t n2, std::string* err) {
+                      return hostrs::commitToPool(&pool, resampleBufs, slot, d, n2, err);
+                    },
+                    [](int slot) {
+                      pool.clear(slot);
+                      return true;
+                    });
+      rig.eng.suspend();
+      rig.inst.setSamplePool(&pool);
+      rig.eng.resume();
+      rig.ui.setResample(&resample);
     } else if (op == "sample") {
       static std::vector<int16_t> bufs[pg::sampler::kPoolSlots];
       const int slot = std::atoi(a) - 1;

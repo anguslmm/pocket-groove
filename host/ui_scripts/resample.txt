@@ -1,0 +1,64 @@
+# Resampling on a sampler page (docs/ux/resample-*.png, docs/UX.md 10.3 "Resampling"):
+# SHIFT+L records what the groove plays (the engine's own output, host/common/
+# host_resample.h: the real Resampler) into the track's slot, in whole bars:
+#   build/host/ui_shot host/ui_scripts/resample.txt docs/ux
+dev 0
+
+# a new project: kick, hats and a lead line; 120 BPM (a bar is 2 s)
+empty
+resample on
+global 0 120
+steppost 0 0 1
+steppost 0 4 1
+steppost 0 8 1
+steppost 0 12 1
+steppost 3 2 1
+steppost 3 6 1
+steppost 3 10 1
+steppost 3 14 1
+steppost 7 0 1 57 110
+steppost 7 3 1 60 100
+steppost 7 6 1 64 110
+steppost 7 10 1 62 100
+steppost 7 13 1 67 110
+
+# PERC selected silently, SOUND, stepped to CHOP (TAP, TRAIL, SHAKE, CHOP)
+down shift
+tap h
+up shift
+tap 9
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 1800
+
+# SHIFT held: the footer is SHIFT's layer
+down shift
+wait 100
+shot resample-footer
+up shift
+wait 100
+
+# the groove plays; a little into the bar, SHIFT+L: the beats to the bar line
+tap space
+until 0 5
+down shift
+down l
+wait 60
+up shift
+wait 60
+shot resample-count
+
+# the bar line: REC; held on past the next bar line (its tick)
+until 0 0
+wait 2400
+shot resample-recording
+
+# let go: it records on to the next bar line, then the slot holds two bars
+up l
+wait 1900
+shot resample-done
