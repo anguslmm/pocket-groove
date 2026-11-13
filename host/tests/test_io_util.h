@@ -74,15 +74,15 @@ inline void initProject(pg::Project& p) {
 
 inline pg::Step musicalStep(Rng& r, int track) {
   pg::Step s = pg::kDefaultStep;
-  s.flags = pg::kStepOn;
-  if (r.below(4) == 0) s.flags |= pg::kStepAccent;
-  if (track >= pg::kTrackBass && r.below(5) == 0) s.flags |= pg::kStepSlide;
-  if (r.below(10) == 0) s.flags |= uint8_t(r.below(4) << pg::kStepRatchetShift);
+  s.setFlags(pg::kStepOn);
+  if (r.below(4) == 0) s.addFlags(pg::kStepAccent);
+  if (track >= pg::kTrackBass && r.below(5) == 0) s.addFlags(pg::kStepSlide);
+  if (r.below(10) == 0) s.addFlags(uint8_t(r.below(4) << pg::kStepRatchetShift));
   s.note = track >= pg::kTrackBass ? uint8_t(33 + r.below(24)) : 60;
   s.vel = uint8_t(60 + r.below(68));
-  if (r.below(5) == 0) s.prob = uint8_t(30 + r.below(70));
-  if (track == pg::kTrackLead && r.below(2)) s.chord = uint8_t(r.below(pg::kChordNum));
-  if (r.below(8) == 0) { s.lockParam = uint8_t(1 + r.below(32)); s.lockValue = r.byte() & 0x7F; }
+  if (r.below(5) == 0) s.setProb(uint8_t(30 + r.below(70)));
+  if (track == pg::kTrackLead && r.below(2)) s.setChord(uint8_t(r.below(pg::kChordNum)));
+  if (r.below(8) == 0) { s.setLock(uint8_t(1 + r.below(32)), r.byte() & 0x7F); }
   return s;
 }
 
@@ -100,15 +100,14 @@ inline void typicalProject(pg::Project& p, uint32_t seed = 7) {
     }
   for (int i = 0; i < 8; ++i) { p.song[i].pattern = uint8_t(i); p.song[i].repeats = 2; }
   p.globals[pg::kGTempo] = 126;
-  // instruments (project version 2) on most tracks, with macro locks on some steps
+  // instruments on most tracks, with a note's own macro value on some steps
   for (int t = 0; t < pg::kNumTracks; ++t) {
     if (t == pg::kTrackPerc) continue;   // one CLASSIC track
     pg::setInstrumentId(p.tracks[t], uint16_t(0x1234 + 0x0F0F * t));
     for (int m = 0; m < pg::kTrackMacros; ++m) p.tracks[t].macro[m] = r.byte();
     pg::Step& s = p.patterns[0].tracks[t].steps[3];
-    s.flags |= pg::kStepOn;
-    s.lockParam = uint8_t(pg::kLockMacro0 + t % pg::kTrackMacros);
-    s.lockValue = r.byte();
+    s.addFlags(pg::kStepOn);
+    s.setMacroValue(t % pg::kTrackMacros, r.byte());
   }
 }
 

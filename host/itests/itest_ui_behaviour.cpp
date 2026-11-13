@@ -33,7 +33,7 @@ static void tap(const char* n, uint32_t ms = 40) { R->tap(K(n), ms); R->run(20);
 static void down(const char* n) { R->down(K(n)); }
 static void up(const char* n) { R->up(K(n)); R->run(20); }
 static const Step& S(int t, int i) { return R->step(t, i); }
-static bool on(int t, int i) { return S(t, i).flags & kStepOn; }
+static bool on(int t, int i) { return S(t, i).flags() & kStepOn; }
 static int P(int t, int i) { return R->proj->tracks[t].params[i]; }
 static int G(int g) { return R->proj->globals[g]; }
 
@@ -143,32 +143,32 @@ static void testPLocks() {
   R->run(300);
   tap("=");
   CHECK(on(kTrackBass, 0));
-  CHECK_EQ(S(kTrackBass, 0).lockParam, 1);
-  CHECK_EQ(S(kTrackBass, 0).lockValue, P(kTrackBass, 0) + 1);
+  CHECK_EQ(S(kTrackBass, 0).lockParam(), 1);
+  CHECK_EQ(S(kTrackBass, 0).lockValue(), P(kTrackBass, 0) + 1);
   CHECK_EQ(P(kTrackBass, 0), 46);            // the base value is untouched
   tap("x");                                  // focus RES while holding
   tap("-");
-  CHECK_EQ(S(kTrackBass, 0).lockParam, 2);
-  CHECK_EQ(S(kTrackBass, 0).lockValue, P(kTrackBass, 1) - 1);
+  CHECK_EQ(S(kTrackBass, 0).lockParam(), 2);
+  CHECK_EQ(S(kTrackBass, 0).lockValue(), P(kTrackBass, 1) - 1);
   CHECK(std::strstr(R->ui.toastText(), "LOCK RES REPLACES CUT") != nullptr);
   tap("del");
-  CHECK_EQ(S(kTrackBass, 0).lockParam, 0);
+  CHECK_EQ(S(kTrackBass, 0).lockParam(), 0);
   up("1");
   CHECK(on(kTrackBass, 0));
   // FX globals can't be locked
   tap("o");
   tap("c");                                  // DHLD
   down("1"); R->run(300); tap("="); up("1");
-  CHECK_EQ(S(kTrackBass, 0).lockParam, 0);
+  CHECK_EQ(S(kTrackBass, 0).lockParam(), 0);
   CHECK(std::strstr(R->ui.toastText(), "CAN'T BE LOCKED") != nullptr);
   // GROOVE STEP EDIT, LOCK field: locks trackFocus (RES after the SOUND visit)
   tap("`");
   down("1"); R->run(300); tap("k"); tap("="); up("1");
-  CHECK_EQ(S(kTrackBass, 0).lockParam, 2);
+  CHECK_EQ(S(kTrackBass, 0).lockParam(), 2);
   // view key with a step held keeps the hold (hold step -> 0 -> -/=: mixer lock)
   down("1"); R->run(300); tap("0"); tap("z"); tap("=");
   CHECK_EQ(R->ui.heldStep(), 0);
-  CHECK_EQ(S(kTrackBass, 0).lockParam, kMixLevel + 1);
+  CHECK_EQ(S(kTrackBass, 0).lockParam(), kMixLevel + 1);
   up("1");
 }
 
@@ -184,13 +184,13 @@ static void testStepEditFields() {
   tap("s"); tap("=");
   CHECK_EQ(S(6, 13).gate, 3);
   tap("d"); tap("-");
-  CHECK_EQ(S(6, 13).prob, 95);
+  CHECK_EQ(S(6, 13).prob(), 95);
   tap("f"); tap("="); tap("=");
   CHECK_EQ(stepRatchet(S(6, 13)), 3);
   tap("g"); tap("=");
-  CHECK(!(S(6, 13).flags & kStepAccent));    // flip (demo step 14 is accented)
+  CHECK(!(S(6, 13).flags() & kStepAccent));    // flip (demo step 14 is accented)
   tap("h"); tap("=");
-  CHECK(S(6, 13).flags & kStepSlide);
+  CHECK(S(6, 13).flags() & kStepSlide);
   tap("j");                                  // CHRD: not on bass -> field unchanged
   CHECK_EQ(R->ui.stepField(), kFSlide);
   tap("c");                                  // note row: degree 2 of A MIN oct 1 = C2
@@ -225,15 +225,15 @@ static void testStepWrite() {
   CHECK_EQ(R->ui.stepCursor(), 0);
   tap("z");
   CHECK_EQ(S(6, 0).note, 33);                // A1
-  CHECK(!(S(6, 0).flags & kStepAccent));
+  CHECK(!(S(6, 0).flags() & kStepAccent));
   CHECK_EQ(R->ui.stepCursor(), 1);
   down("shift"); tap("x"); up("shift");
   CHECK_EQ(S(6, 1).note, 35);
-  CHECK(S(6, 1).flags & kStepAccent);
+  CHECK(S(6, 1).flags() & kStepAccent);
   // hold c, press v: slide on the c step
   down("c"); R->run(50); down("v"); R->run(50); up("c"); up("v");
-  CHECK(S(6, 2).flags & kStepSlide);
-  CHECK(!(S(6, 3).flags & kStepSlide));
+  CHECK(S(6, 2).flags() & kStepSlide);
+  CHECK(!(S(6, 3).flags() & kStepSlide));
   CHECK_EQ(S(6, 3).note, 38);
   tap("del");                                // rest
   CHECK(!on(6, 4));
@@ -253,13 +253,13 @@ static void testStepWrite() {
   down("shift"); tap("k"); up("shift");
   tap("1");
   tap("z"); tap("x"); tap("c");
-  CHECK_EQ(S(7, 0).chord, kChordMin);
-  CHECK_EQ(S(7, 1).chord, kChordOct);
-  CHECK_EQ(S(7, 2).chord, kChordMaj);
+  CHECK_EQ(S(7, 0).chord(), kChordMin);
+  CHECK_EQ(S(7, 1).chord(), kChordOct);
+  CHECK_EQ(S(7, 2).chord(), kChordMaj);
   tap("l");
   CHECK_EQ(R->ui.chordMode(), kModeAuto7);
   tap("z");
-  CHECK_EQ(S(7, 3).chord, kChordMin7);
+  CHECK_EQ(S(7, 3).chord(), kChordMin7);
   tap("ent");
   CHECK(!R->ui.recOn());
 }

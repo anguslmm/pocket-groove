@@ -186,11 +186,10 @@ void testLockWins() {
   s.b = kTrackBass;
   s.c = 0;
   s.step = kDefaultStep;
-  s.step.flags = kStepOn;
+  s.step.setFlags(kStepOn);
   s.step.note = 45;
   s.step.gate = 60;
-  s.step.lockParam = uint8_t(kLockMacro0 + 0);
-  s.step.lockValue = 230;
+  s.step.setMacroValue(0, 230);
   g_inst.engine().post(s);
   Command play{};
   play.type = CmdType::Play;

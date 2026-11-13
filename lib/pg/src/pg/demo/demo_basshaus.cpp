@@ -90,7 +90,7 @@ void drumsFull(Pattern& P, bool clap = true, bool oh = true) {
     }
     if (oh) drums(P, OH, kHatO, b * 16);
   }
-  at(P, K, 0).flags |= kStepAccent;
+  at(P, K, 0).addFlags(kStepAccent);
 }
 
 void intro(Pattern& P) {

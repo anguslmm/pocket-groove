@@ -326,7 +326,7 @@ void testUi() {
   for (int i = 0; i < 16; ++i) {
     Command c = cmd(CmdType::SetStep, rig.ui.editPattern(), kTrackBass, i);
     c.step = kDefaultStep;
-    c.step.flags = kStepOn;
+    c.step.setFlags(kStepOn);
     c.step.note = uint8_t(36 + (i % 3) * 5);
     rig.eng.post(c);
   }

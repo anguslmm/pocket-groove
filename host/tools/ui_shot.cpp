@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
         cm.b = uint8_t(std::atoi(a));
         cm.c = uint8_t(std::atoi(b));
         cm.step = pg::kDefaultStep;
-        if (std::atoi(c)) cm.step.flags = pg::kStepOn;
+        if (std::atoi(c)) cm.step.setFlags(pg::kStepOn);
         if (n > 4) cm.step.note = uint8_t(std::atoi(d));
         if (n > 5) cm.step.vel = uint8_t(std::atoi(e));
       }

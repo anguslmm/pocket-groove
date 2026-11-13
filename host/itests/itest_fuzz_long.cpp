@@ -63,7 +63,7 @@ void randomCommand(it::Rng& r) {
   c.b = arg(r, 32);
   c.c = arg(r, 128);
   for (size_t i = 0; i < sizeof(Step); ++i) reinterpret_cast<uint8_t*>(&c.step)[i] = r.byte();
-  if (r.range(0, 2)) c.step.prob = uint8_t(r.range(0, 100));
+  if (r.range(0, 2)) c.step.setProb(uint8_t(r.range(0, 100)));
   c.ptr = nullptr;
   if (c.type == CmdType::WriteTrack || c.type == CmdType::WritePattern) {
     if (g_writePending) return;             // the buffer still belongs to the engine

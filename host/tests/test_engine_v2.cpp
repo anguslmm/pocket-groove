@@ -16,7 +16,7 @@ static Rig rig;
 
 static Command noteOnCmd(int track, int note, int vel, int flags = 0) {
   Command c = cmd(CmdType::NoteOn, track, note, vel);
-  c.step.flags = uint8_t(flags);
+  c.step.setFlags(uint8_t(flags));
   return c;
 }
 
@@ -117,8 +117,8 @@ static void testWrites() {
   rig.run(2);
   CHECK(uint8_t(rig.eng.status().writesDone - w0) == 1);
   const TrackPattern& d = rig.proj.patterns[2].tracks[kTrackBass];
-  CHECK(d.length == 7 && d.steps[3].note == 64 && (d.steps[3].flags & kStepOn));
-  CHECK(d.steps[0].note <= 127 && d.steps[0].prob <= 100 && d.steps[0].chord == 0 && d.steps[0].vel <= 127);
+  CHECK(d.length == 7 && d.steps[3].note == 64 && (d.steps[3].flags() & kStepOn));
+  CHECK(d.steps[0].note <= 127 && d.steps[0].prob() <= 100 && d.steps[0].chord() == 0 && d.steps[0].vel <= 127);
   std::memset(&pat, 0, sizeof pat);
   pat.length = 12;
   for (int t = 0; t < kNumTracks; ++t) { pat.tracks[t].length = 12; pat.tracks[t].steps[0] = mkStep(50 + t); }
@@ -186,8 +186,8 @@ static void testRecordLegatoGate() {
   rig.run(2);
   const Step& a = rig.step(0, kTrackBass, 2);
   const Step& b = rig.step(0, kTrackBass, 4);
-  CHECKF((a.flags & kStepSlide) && a.note == 45 && a.gate == kDefaultStep.gate, "legato: step A flags %02x gate %d", a.flags, a.gate);
-  CHECKF(!(b.flags & kStepSlide) && b.note == 48 && b.gate == 6, "step B flags %02x gate %d (expected 6 quarter-steps)", b.flags, b.gate);
+  CHECKF((a.flags() & kStepSlide) && a.note == 45 && a.gate == kDefaultStep.gate, "legato: step A flags %02x gate %d", a.flags(), a.gate);
+  CHECKF(!(b.flags() & kStepSlide) && b.note == 48 && b.gate == 6, "step B flags %02x gate %d (expected 6 quarter-steps)", b.flags(), b.gate);
   // Short tap: min 1 quarter-step. Detached notes: no slide.
   rig.runSamples(long(8.0 * L) + 32 - rig.time);
   rig.post(noteOnCmd(kTrackBass, 50, 100));
@@ -196,7 +196,7 @@ static void testRecordLegatoGate() {
   rig.runSamples(long(10.0 * L) + 32 - rig.time);
   rig.post(noteOnCmd(kTrackBass, 52, 100));
   rig.run(3);
-  CHECKF(rig.step(0, kTrackBass, 8).gate == 1 && !(rig.step(0, kTrackBass, 8).flags & kStepSlide), "tap: gate %d", rig.step(0, kTrackBass, 8).gate);
+  CHECKF(rig.step(0, kTrackBass, 8).gate == 1 && !(rig.step(0, kTrackBass, 8).flags() & kStepSlide), "tap: gate %d", rig.step(0, kTrackBass, 8).gate);
   // Drums: NoteOff never touches the step.
   rig.post(noteOnCmd(kTrackSnare, 60, 100));
   rig.runSamples(long(3.0 * L));
@@ -322,14 +322,15 @@ static void testTables() {
   CHECK(std::memcmp(&p, &q, sizeof p) == 0);
   std::memset(q.name, 'X', sizeof q.name);
   q.magic[0] = 0;
-  q.patterns[3].tracks[2].steps[9].lockParam = 31;          // reserved mixer slot: no such param
-  q.patterns[3].tracks[2].steps[9].chord = 3;                // not the lead
-  q.patterns[3].tracks[7].steps[9].flags = 0xFF;
+  q.patterns[3].tracks[2].steps[9].setLock(31, 0);         // reserved mixer slot: no such param
+  q.patterns[3].tracks[2].steps[9].setChord(3);                // not the lead
+  q.patterns[3].tracks[7].steps[9].flagsRaw = 0xFF;          // every flag, chord 7 | 8 = 15: no such chord
+  q.patterns[3].tracks[7].steps[9].probRaw = 0xE4;            // prob 100, chord bit 3
   q.tracks[1].params[20] = 99;                               // stub voice has no param 20
   rig.eng.sanitizeProject(q);
   CHECK(q.name[15] == 0 && q.magic[0] == 'P');
-  CHECK(q.patterns[3].tracks[2].steps[9].lockParam == 0 && q.patterns[3].tracks[2].steps[9].chord == 0);
-  CHECK(q.patterns[3].tracks[7].steps[9].flags == (kStepOn | kStepAccent | kStepSlide | kStepRatchetMask));
+  CHECK(q.patterns[3].tracks[2].steps[9].lockParam() == 0 && q.patterns[3].tracks[2].steps[9].chord() == 0);
+  CHECK(q.patterns[3].tracks[7].steps[9].flags() == (kStepOn | kStepAccent | kStepSlide | kStepRatchetMask) && q.patterns[3].tracks[7].steps[9].chord() == 0 && q.patterns[3].tracks[7].steps[9].prob() == 100);
   CHECK(q.tracks[1].params[20] == 0);
 }
 

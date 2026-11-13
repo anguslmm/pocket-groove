@@ -42,13 +42,14 @@ bool inRange(const Engine& eng, const Project& p, const char** why) {
       const TrackPattern& tp = pat.tracks[t];
       if (tp.length < 1 || tp.length > kMaxSteps) { *why = "track length"; return false; }
       for (const Step& s : tp.steps) {
-        if (s.note > 127 || s.vel < 1 || s.vel > 127 || s.gate < 1 || s.prob > 100) { *why = "step field"; return false; }
-        if (s.flags & ~(kStepOn | kStepAccent | kStepSlide | kStepRatchetMask)) { *why = "step flags"; return false; }
-        if (s.chord >= kChordNum || (t != kTrackLead && s.chord)) { *why = "chord"; return false; }
-        if (s.lockParam >= kLockMacro0 + kTrackMacros) { *why = "lockParam"; return false; }
-        if (s.lockParam && !isMacroLock(s.lockParam)) {   // a macro lock's value is any position
-          const ParamInfo* info = eng.trackParamInfo(t, s.lockParam - 1);
-          if (!info || s.lockValue < info->min || s.lockValue > info->max) { *why = "lock"; return false; }
+        if (s.note > 127 || s.vel < 1 || s.vel > 127 || s.gate < 1 || s.prob() > 100) { *why = "step field"; return false; }
+        if (s.flags() & ~(kStepOn | kStepAccent | kStepSlide | kStepRatchetMask)) { *why = "step flags"; return false; }
+        if (s.chord() >= kChordNum || (t != kTrackLead && s.chord())) { *why = "chord"; return false; }
+        if (instrumentId(p.tracks[t]) != 0) continue;   // four macro codes: every value is legal
+        if (s.lockParam() > kParamsPerTrack || s.ext[2] != 0 || (!s.lockParam() && s.lockValue())) { *why = "lockParam"; return false; }
+        if (s.lockParam()) {
+          const ParamInfo* info = eng.trackParamInfo(t, s.lockParam() - 1);
+          if (!info || s.lockValue() < info->min || s.lockValue() > info->max) { *why = "lock"; return false; }
         }
       }
     }

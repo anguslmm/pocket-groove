@@ -370,7 +370,7 @@ static void testRatchetsAndGates() {
   // Velocity, accent and chord reach the voice (chord only on the lead).
   rig.init();
   Step s = mkStep(64, kStepOn | kStepAccent, 77, 2);
-  s.chord = kChordMin7;
+  s.setChord(kChordMin7);
   rig.step(0, kTrackLead, 0) = s;
   rig.step(0, kTrackBass, 0) = s;
   rig.step(0, kTrackKick, 0) = s;
@@ -418,17 +418,17 @@ static void testPLocks() {
   // Steps: 0 on, 2 on+lock, 3 OFF, 5 on (no lock), 8 on + lock param 0 = 7, 9 on + lock param 0 = 9, 12 on with prob 0 (never fires).
   rig.step(0, kTrackBass, 0) = mkStep(40);
   Step s = mkStep(42);
-  s.lockParam = 3 + 1; s.lockValue = 99;
+  s.setLock(3 + 1, 99);
   rig.step(0, kTrackBass, 2) = s;
   rig.step(0, kTrackBass, 5) = mkStep(45);
-  s = mkStep(48); s.lockParam = 0 + 1; s.lockValue = 7;
+  s = mkStep(48); s.setLock(0 + 1, 7);
   rig.step(0, kTrackBass, 8) = s;
-  s = mkStep(49); s.lockParam = 0 + 1; s.lockValue = 9;
+  s = mkStep(49); s.setLock(0 + 1, 9);
   rig.step(0, kTrackBass, 9) = s;
-  s = mkStep(52, kStepOn, 100, 2, 0); s.lockParam = 1 + 1; s.lockValue = 111;
+  s = mkStep(52, kStepOn, 100, 2, 0); s.setLock(1 + 1, 111);
   rig.step(0, kTrackBass, 12) = s;
   // a lock on a step that is not on must do nothing
-  s = mkStep(60, 0); s.lockParam = 2 + 1; s.lockValue = 5;
+  s = mkStep(60, 0); s.setLock(2 + 1, 5);
   rig.step(0, kTrackBass, 3) = s;
 
   rig.post(CmdType::Play);
@@ -475,7 +475,7 @@ static void testPLocks() {
   rig.v[kTrackPerc].mode = StubVoice::Dc;
   rig.v[kTrackPerc].amp = 0.5f;
   rig.step(0, kTrackPerc, 0) = mkStep(60);
-  s = mkStep(60); s.lockParam = kMixLevel + 1; s.lockValue = 0;
+  s = mkStep(60); s.setLock(kMixLevel + 1, 0);
   rig.step(0, kTrackPerc, 1) = s;
   rig.step(0, kTrackPerc, 3) = mkStep(60);
   rig.eng.init(44100.0f, &rig.proj);

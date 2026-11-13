@@ -19,7 +19,7 @@ enum class CmdType : uint8_t {
   SetTrackLength,   // a = pattern, b = track, c = length
   SetPatternLength, // a = pattern, c = length
   SetMute,          // a = track, c = 0/1
-  NoteOn,           // live play: a = track, b = note, c = velocity, step.chord/flags honoured.
+  NoteOn,           // live play: a = track, b = note, c = velocity, step.chord()/flags honoured.
                     //   If recording and playing, the engine also writes it to the nearest step.
                     //   A NoteOn that arrives while the previous recorded note on that synth track
                     //   is still held (legato) sets kStepSlide on the PREVIOUS note's step.
@@ -44,7 +44,7 @@ enum class CmdType : uint8_t {
                     //   setInstrumentCommand(). Id 0 = none (CLASSIC: the sound parameters stay
                     //   as they are now and play as stored). See "Instruments" below.
   SetMacro,         // a = track, b = macro 0..3, c = position 0..255; the macro moves there along
-                    //   a straight line in a ramp time (step.lockParam | step.lockValue << 8 quanta;
+                    //   a straight line in a ramp time (step.ext[0] | step.ext[1] << 8 quanta;
                     //   0 = the default glide, kMacroRampMs; 1 = jump). Build it with
                     //   setMacroCommand(). See "MACRO MOTION" below.
   RefreshInstruments, // a = track (0xFF = every track): look the bound ids up again in the
@@ -104,8 +104,8 @@ struct Command {
   const void* ptr;   // WriteTrack / WritePattern only
 };
 
-// SetInstrument: a = track; the id in step.lockParam (low byte) / step.lockValue
-// (high byte), the positions in step.note, flags, vel, gate (macros 0..3).
+// SetInstrument: a = track; the id in step.ext[0] (low byte) / step.ext[1]
+// (high byte), the positions in step.note, flagsRaw, vel, gate (macros 0..3).
 Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4]);
 // SetMacro with an explicit ramp (quanta; 0 = kMacroRampMs). The "motion" stage
 // sets ramps that arrive exactly at a note (ramp = quanta until then).
@@ -174,11 +174,13 @@ class Engine {
   // track params within their ParamInfo min/max (unused slots 0), mute 0/1,
   // pattern/track lengths 1..64, and every step (note <= 127, vel 1..127,
   // gate >= 1, prob <= 100, known flag bits only, chord < kChordNum on the
-  // lead and 0 elsewhere, lockParam <= 32 naming a param that exists, with
-  // lockValue in that param's range). Not real-time; call after setVoice()
+  // lead and 0 elsewhere; on a CLASSIC track a lock naming a param that
+  // exists, with its value in that param's range; on an instrument track any
+  // macro values). Not real-time; call after setVoice()
   // (param ranges come from the voices) and before handing the project to
-  // the engine. A valid project is left byte-identical. A version-1 project
-  // becomes version 2 with no instrument on any track. A track whose
+  // the engine. A valid project is left byte-identical. A version-1 or 2
+  // project becomes version 3: its steps are repacked (project.h Step,
+  // repackStepV2); version 1 has no instrument on any track. A track whose
   // instrument the library knows gets its sound parameters derived (so after
   // a load they already are what the engine will play).
   void sanitizeProject(Project& p) const;

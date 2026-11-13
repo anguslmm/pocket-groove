@@ -68,6 +68,13 @@ Case g_cases[] = {
 // reserved carry an instrument id that must be ignored).
 void throughV1File(Project& p) {
   p.version = 1;
+  // The demos are CLASSIC: their steps in the version 1 layout (StepV2).
+  for (auto& pat : p.patterns)
+    for (auto& tp : pat.tracks)
+      for (Step& s : tp.steps) {
+        const StepV2 o = {s.note, s.flags(), s.vel, s.gate, s.prob(), s.chord(), s.lockParam(), s.lockValue()};
+        std::memcpy(&s, &o, sizeof(o));
+      }
   for (int t = 0; t < kNumTracks; ++t) {
     setInstrumentId(p.tracks[t], macro::builtinAt(0).id);
     p.tracks[t].macro[0] = 200;

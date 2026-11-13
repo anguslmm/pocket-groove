@@ -103,6 +103,10 @@ class Ui {
   uint16_t instrumentIdOf(int t) const;
   const macro::MacroSet* instrumentOf(int t) const;   // nullptr: CLASSIC or an id the library lacks
   int macroValue(int t, int m) const;                  // position 0..255
+  // A step's own value of track value `index` (UX.md 7): on a CLASSIC track its
+  // parameter lock, on an instrument track the note's value of that macro
+  // (index kMacroIndex0 + m); -1 = none.
+  int stepOwnValue(int t, const Step& s, int index) const;
   bool instrumentPage() const;     // SOUND shows the player's page (instrument / classic), not parameter pages
   bool listVisible() const { return listUntil_ != 0; }   // the instrument list overlay
   // Developer mode (desktop --dev / --lab): SOUND can also show the bare parameter
@@ -286,6 +290,8 @@ class Ui {
   void editFocus(const ValueRef& ref, int delta, bool popup);
   void editField(int dir, int mag, bool shift);
   void editLock(int dir, int mag, bool shift);
+  void stepMacroEdit(int t, Step& s, int m, int dir, int mag, bool shift);
+  bool clearStepOwn(int t, Step& s) const;
   void setValue(const ValueRef& ref, int v);
   const ParamInfo* infoFor(const ValueRef& ref) const;
   int valueOf(const ValueRef& ref) const;
@@ -302,7 +308,7 @@ class Ui {
   void setTrackLength(int t, int len);
   void setPatternLength(int len);
   void setMute(int t, bool m);
-  void heldEdited(Step& s) { s.flags |= kStepOn; heldEdited_ = true; }
+  void heldEdited(Step& s) { s.addFlags(kStepOn); heldEdited_ = true; }
   bool fieldAvailable(int t, int f) const;
   void stepEditNote(int k, int n);
   void stepWriteNote(int k, int n, bool shift);
@@ -495,6 +501,7 @@ class Ui {
   Pattern snap_[2] = {};
   Pattern clip_ = {};               // a track clip uses clip_.tracks[0]
   uint8_t undoIdx_ = 0, undoPat_ = 0, clipKind_ = 0, clipTrack_ = 0;
+  uint16_t clipInst_[kNumTracks] = {};   // each clipped track's instrument id when it was copied
   bool undoValid_ = false, undoIsRedo_ = false;
   // an instrument change is undone without a pattern snapshot (ui_edit.cpp)
   uint8_t undoKind_ = 0, undoTrack_ = 0;   // 0 pattern, 1 instrument

@@ -93,8 +93,8 @@ Step note(int n, int vel, int gate, uint8_t flags = 0, int chord = 0) {
   s.note = uint8_t(n);
   s.vel = uint8_t(vel);
   s.gate = uint8_t(gate);
-  s.flags = uint8_t(kStepOn | flags);
-  s.chord = uint8_t(chord);
+  s.setFlags(uint8_t(kStepOn | flags));
+  s.setChord(uint8_t(chord));
   return s;
 }
 

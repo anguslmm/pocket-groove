@@ -228,6 +228,7 @@ void Ui::cutCopyTrack(bool cut) {
   for (int i = 0; i < kMaxSteps; ++i) c.steps[i] = stepAt(sel_, i);
   clipKind_ = 1;
   clipTrack_ = sel_;
+  clipInst_[0] = instrumentId(proj_->tracks[sel_]);
   char buf[40];
   if (cut) {
     char* o = cat(cat(buf, kTrackNames[sel_]), " CLEARED");
@@ -244,6 +245,7 @@ void Ui::cutCopyTrack(bool cut) {
 void Ui::cutCopyPattern(bool cut) {
   copyPatternShadowed(pat_, clip_);
   clipKind_ = 2;
+  for (int t = 0; t < kNumTracks; ++t) clipInst_[t] = instrumentId(proj_->tracks[t]);
   char buf[40];
   char* o = catP2(cat(buf, "P"), pat_ + 1);
   if (cut) {
@@ -279,12 +281,14 @@ void Ui::paste() {
     snapshotUndo(pat_, buf);
     TrackPattern& d = snap_[spare].tracks[sel_];
     d = clip_.tracks[0];
-    if (clipTrack_ != sel_) {
-      // Another voice: its sound-param locks mean something else; only the lead has chords.
+    const uint16_t now = instrumentId(proj_->tracks[sel_]);
+    if (clipTrack_ != sel_ || clipInst_[0] != now) {
+      // Another voice: its sound-param locks mean something else; only the lead has chords;
+      // a note's own macro values mean something only on the instrument they were made on.
+      const bool dropAll = clipInst_[0] != 0 || now != 0;
       for (Step& s : d.steps) {
-        if (sel_ != kTrackLead) s.chord = 0;
-        // (a macro lock means something only on the instrument it was made on)
-        if ((s.lockParam && s.lockParam <= kSoundParams) || isMacroLock(s.lockParam)) { s.lockParam = 0; s.lockValue = 0; }
+        if (sel_ != kTrackLead) s.setChord(0);
+        if (dropAll || (clipTrack_ != sel_ && s.lockParam() && s.lockParam() <= kSoundParams)) s.clearExt();
       }
     }
     postWrite(pat_, sel_, spare);
@@ -297,6 +301,9 @@ void Ui::paste() {
   char* o = cat(catP2(cat(buf, "P"), pat_ + 1), " PASTED");
   snapshotUndo(pat_, buf);
   std::memcpy(&snap_[spare], &clip_, sizeof(Pattern));
+  for (int t = 0; t < kNumTracks; ++t)   // a track whose instrument changed since the copy: its values go
+    if (clipInst_[t] != instrumentId(proj_->tracks[t]))
+      for (Step& s : snap_[spare].tracks[t].steps) s.clearExt();
   postWrite(pat_, -1, spare);
   cat(o, "  CTRL+Z UNDO");
   toast(buf, 1);

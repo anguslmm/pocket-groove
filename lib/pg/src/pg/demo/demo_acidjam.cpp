@@ -95,7 +95,7 @@ void drumsBasic(Pattern& P, bool clap, bool oh, int hatScale = 100) {
     if (clap) drums(P, CP, b == 3 ? kClapFill : kClap, b * 16);
     if (oh) drums(P, OH, kHatO, b * 16);
   }
-  at(P, K, 0).flags |= kStepAccent;
+  at(P, K, 0).addFlags(kStepAccent);
 }
 
 void intro(Pattern& P) {

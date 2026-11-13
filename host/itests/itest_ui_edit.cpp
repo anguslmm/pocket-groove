@@ -70,7 +70,7 @@ static void testClipboardUndo() {
   before = PAT(0);
   ctrl("x");
   CHECK(toastHas("BASS CLEARED  CTRL+Z UNDO"));
-  for (int i = 0; i < 16; ++i) CHECK(!(R->step(6, i).flags & kStepOn));
+  for (int i = 0; i < 16; ++i) CHECK(!(R->step(6, i).flags() & kStepOn));
   CHECK_EQ(R->ui.clipKind(), 1);
   undoRedo(before, 0, "cut track");
   // copy kick, paste on snare (drum -> drum), undo
@@ -95,8 +95,8 @@ static void testClipboardUndo() {
   down("shift"); tap("j"); up("shift");
   ctrl("v");
   CHECK_EQ(PAT(0).tracks[6].length, 8);
-  CHECK(PAT(0).tracks[6].steps[2].flags & kStepOn);
-  CHECK_EQ(PAT(0).tracks[6].steps[2].chord, 0);
+  CHECK(PAT(0).tracks[6].steps[2].flags() & kStepOn);
+  CHECK_EQ(PAT(0).tracks[6].steps[2].chord(), 0);
   // pattern copy / cut / paste (CTRL+SHIFT)
   before = PAT(0);
   ctrl("c", true);
@@ -106,7 +106,7 @@ static void testClipboardUndo() {
   CHECK(toastHas("P01 CLEARED"));
   CHECK_EQ(PAT(0).tracks[0].length, 16);
   int on = 0;
-  for (int t = 0; t < 8; ++t) on += PAT(0).tracks[t].steps[0].flags & kStepOn;
+  for (int t = 0; t < 8; ++t) on += PAT(0).tracks[t].steps[0].flags() & kStepOn;
   CHECK_EQ(on, 0);
   ctrl("v");
   CHECK(samePat(PAT(0), before));
@@ -158,7 +158,7 @@ static void testUndoAfterPatternSwitch() {
   ctrl("x");
   ctrl("z");
   CHECK(R->ui.writeInFlight());
-  CHECK(R->ui.stepAt(6, 0).flags & kStepOn);   // shown from the buffer before the engine applied it
+  CHECK(R->ui.stepAt(6, 0).flags() & kStepOn);   // shown from the buffer before the engine applied it
   ctrl("z");                                   // still in flight: queued, not refused
   CHECK(!toastHas("BUSY"));
   CHECK(toastHas("UNDO: "));
@@ -186,14 +186,14 @@ static void testStepUndo() {
   // place a note
   before = PAT(0);
   tap("2");
-  CHECK(R->step(0, 1).flags & kStepOn);
+  CHECK(R->step(0, 1).flags() & kStepOn);
   ctrl("z");
   CHECK(toastHas("UNDO: KICK STEP 2"));
-  CHECK(!(R->step(0, 1).flags & kStepOn));
+  CHECK(!(R->step(0, 1).flags() & kStepOn));
   CHECK(samePat(PAT(0), before));
   ctrl("z");
   CHECK(toastHas("REDO: KICK STEP 2"));
-  CHECK(R->step(0, 1).flags & kStepOn);
+  CHECK(R->step(0, 1).flags() & kStepOn);
   ctrl("z");
   CHECK(samePat(PAT(0), before));
   tap("2");
@@ -201,9 +201,9 @@ static void testStepUndo() {
   // delete a note: back with all its fields (accent, velocity 110)
   before = PAT(0);
   tap("1");
-  CHECK(!(R->step(0, 0).flags & kStepOn));
+  CHECK(!(R->step(0, 0).flags() & kStepOn));
   undoRedo(before, 0, "delete note");
-  CHECK(R->step(0, 0).flags & kStepAccent);
+  CHECK(R->step(0, 0).flags() & kStepAccent);
   CHECK_EQ(R->step(0, 0).vel, 110);
   // two taps are two units: undo takes back only the second
   before = PAT(0);
@@ -240,7 +240,7 @@ static void testStepUndo() {
   CHECK(samePat(PAT(0), before));
   // DEL on a held step (remove its lock), then the next hold is a new unit
   down("y"); R->run(300); tap("del"); up("y");
-  CHECK_EQ(R->step(6, 13).lockParam, 0);
+  CHECK_EQ(R->step(6, 13).lockParam(), 0);
   mid = PAT(0);
   down("y"); R->run(300); tap("="); up("y");
   ctrl("z");
@@ -254,10 +254,10 @@ static void testStepUndo() {
   down("c"); R->run(50);
   before = PAT(0);                             // the c note is written
   down("v"); R->run(50); up("c"); up("v");
-  CHECK(R->step(6, 1).flags & kStepSlide);
+  CHECK(R->step(6, 1).flags() & kStepSlide);
   undoRedo(before, 0, "step-write note + slide");   // takes back the v note AND the slide on c
-  CHECK(!(R->step(6, 1).flags & kStepSlide));
-  CHECK(R->step(6, 1).flags & kStepOn);
+  CHECK(!(R->step(6, 1).flags() & kStepSlide));
+  CHECK(R->step(6, 1).flags() & kStepOn);
   tap("ent");
   CHECK(!R->ui.recOn());
 }
@@ -271,17 +271,17 @@ static void testUndoPending() {
   R->engineRuns = false;                       // the engine stalls: edits stay pending
   tap("3");
   tap("4");
-  CHECK(R->ui.stepAt(0, 2).flags & kStepOn);
-  CHECK(R->ui.stepAt(0, 3).flags & kStepOn);
-  CHECK(!(PAT(0).tracks[0].steps[2].flags & kStepOn));   // not in the project yet
+  CHECK(R->ui.stepAt(0, 2).flags() & kStepOn);
+  CHECK(R->ui.stepAt(0, 3).flags() & kStepOn);
+  CHECK(!(PAT(0).tracks[0].steps[2].flags() & kStepOn));   // not in the project yet
   ctrl("z");                                   // undo the second; the first stays
   CHECK(toastHas("UNDO: KICK STEP 4"));
-  CHECK(R->ui.stepAt(0, 2).flags & kStepOn);
-  CHECK(!(R->ui.stepAt(0, 3).flags & kStepOn));
+  CHECK(R->ui.stepAt(0, 2).flags() & kStepOn);
+  CHECK(!(R->ui.stepAt(0, 3).flags() & kStepOn));
   R->engineRuns = true;
   R->run(100);
-  CHECK(PAT(0).tracks[0].steps[2].flags & kStepOn);
-  CHECK(!(PAT(0).tracks[0].steps[3].flags & kStepOn));
+  CHECK(PAT(0).tracks[0].steps[2].flags() & kStepOn);
+  CHECK(!(PAT(0).tracks[0].steps[3].flags() & kStepOn));
   // undo at once after a quick edit, engine running: never BUSY
   mid = PAT(0);
   tap("6");
@@ -297,7 +297,7 @@ static void testUndoPending() {
   CHECK(R->ui.writeInFlight());
   R->run(100);
   CHECK(toastHas("REDO: KICK STEP 6"));
-  CHECK(PAT(0).tracks[0].steps[5].flags & kStepOn);
+  CHECK(PAT(0).tracks[0].steps[5].flags() & kStepOn);
   (void)before;
 }
 
@@ -316,7 +316,7 @@ static void testRecordUndo() {
   tap("a", 30);                                // and a kick
   R->run(100);
   int hits = 0;
-  for (int i = 0; i < 16; ++i) hits += (PAT(0).tracks[kTrackClap].steps[i].flags & kStepOn) ? 1 : 0;
+  for (int i = 0; i < 16; ++i) hits += (PAT(0).tracks[kTrackClap].steps[i].flags() & kStepOn) ? 1 : 0;
   CHECK(hits >= 4);
   tap("ent");                                  // REC off: the pass ends
   R->run(50);

@@ -207,13 +207,13 @@ inline pg::Command cmd(pg::CmdType type, int a = 0, int b = 0, int c = 0) {
   k.type = type;
   k.a = uint8_t(a); k.b = uint8_t(b); k.c = uint8_t(c);
   k.step = pg::kDefaultStep;
-  k.step.flags = 0;
+  k.step.setFlags(0);
   return k;
 }
 
 inline pg::Step mkStep(int note = 60, int flags = pg::kStepOn, int vel = 100, int gate = 2, int prob = 100) {
   pg::Step s = pg::kDefaultStep;
-  s.note = uint8_t(note); s.flags = uint8_t(flags); s.vel = uint8_t(vel); s.gate = uint8_t(gate); s.prob = uint8_t(prob);
+  s.note = uint8_t(note); s.setFlags(uint8_t(flags)); s.vel = uint8_t(vel); s.gate = uint8_t(gate); s.setProb(uint8_t(prob));
   return s;
 }
 

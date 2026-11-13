@@ -53,7 +53,7 @@ double runScene(const Scene& sc, float sr) {
   for (int t = 0; t < kNumTracks; ++t) {
     g_proj.tracks[t].params[kMixDelaySend] = sc.delay ? 60 : 0;
     g_proj.tracks[t].params[kMixReverbSend] = sc.reverb ? 60 : 0;
-    for (int s = 0; s < 16; s += (t == kTrackKick ? 4 : 2)) g_proj.patterns[0].tracks[t].steps[s].flags = kStepOn;
+    for (int s = 0; s < 16; s += (t == kTrackKick ? 4 : 2)) g_proj.patterns[0].tracks[t].steps[s].setFlags(kStepOn);
   }
   g_proj.globals[kGMasterFilter] = sc.filter ? 30 : 64;
   g_proj.globals[kGMasterReso] = 90;

@@ -47,7 +47,7 @@ void roll(Pattern& P, int bar, int note, int cutA, int cutB, bool ghosts = true,
       const int i = bar * 16 + beat * 4 + k;
       Step& s = put(P, BS, i, k == 1 ? 108 : (k == 2 ? 86 : 96), note, 2);
       lock(s, param, c + (k == 3 ? 6 : 0));
-      if (k == 3 && beat == 3) s.flags |= kStepAccent;
+      if (k == 3 && beat == 3) s.addFlags(kStepAccent);
       if (ghosts && k == 2 && (beat & 1)) prob(s, 70);
     }
   }
@@ -76,7 +76,7 @@ void intro(Pattern& P) {
     drums(P, K, kKick, b * 16);
     drums(P, CH, kHatT, b * 16, b < 2 ? 70 : 100);
   }
-  at(P, K, 0).flags |= kStepAccent;
+  at(P, K, 0).addFlags(kStepAccent);
   percPoly(P, 7, "o..g.?.", 0, "");
 }
 
@@ -140,7 +140,7 @@ void peak(Pattern& P) {
     drums(P, CP, kClap, b * 16);
     roll(P, b, E2, 56 + 3 * b, 62 + 3 * b, false, bEnv);
   }
-  at(P, K, 0).flags |= kStepAccent;
+  at(P, K, 0).addFlags(kStepAccent);
   percPoly(P, 7, "o..o.g?", 12, "..g. .oo. ..?g");
   stabLoop(P, 74, 86);
   ratchet(at(P, CH, 47), 2);

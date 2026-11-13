@@ -324,7 +324,7 @@ static void testNewProject() {
   CHECK(!R->ui.dirty());
   int on = 0;
   for (int t = 0; t < 8; ++t)
-    for (int i = 0; i < 16; ++i) on += R->step(t, i).flags & kStepOn;
+    for (int i = 0; i < 16; ++i) on += R->step(t, i).flags() & kStepOn;
   CHECK_EQ(on, 0);
   ctrl("n");                                   // clean: no question
   CHECK(R->ui.dialog() == Dialog::None);
