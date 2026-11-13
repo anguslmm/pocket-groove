@@ -84,7 +84,7 @@ constexpr float kTwo32 = 4294967296.0f;
 constexpr float kTwo24 = 16777216.0f;
 constexpr float kInt31ToFloat = 1.0f / 2147483648.0f;
 
-inline float unit(uint8_t v) { return float(v) * (1.0f / 127.0f); }
+inline float unit(float v) { return v * (1.0f / 127.0f); }   // of float(byte): exactly as the bytes gave
 inline void smooth(float& s, float target) { s += kSmooth * (target - s); }
 
 }  // namespace
@@ -93,7 +93,10 @@ inline void smooth(float& s, float target) { s += kSmooth * (target - s); }
 // Lifecycle / params
 // ============================================================================
 BassVoice::BassVoice() {
-  for (int i = 0; i < kSoundParams; ++i) params_[i] = i < kNumParams ? kInfo[i].def : uint8_t(0);
+  for (int i = 0; i < kSoundParams; ++i) {
+    params_[i] = i < kNumParams ? kInfo[i].def : uint8_t(0);
+    pf_[i] = float(params_[i]);
+  }
   std::memset(ring_, 0, sizeof ring_);
 }
 
@@ -116,14 +119,33 @@ const ParamInfo* BassVoice::paramInfo(int index) const {
 }
 
 void BassVoice::setParams(const uint8_t* p) {
-  if (paramsValid_ && std::memcmp(p, params_, kNumParams) == 0) return;
+  if (paramsValid_ && !fine_ && std::memcmp(p, params_, kNumParams) == 0) return;
   for (int i = 0; i < kNumParams; ++i) {
     uint8_t v = p[i];
     if (v < kInfo[i].min) v = kInfo[i].min;
     if (v > kInfo[i].max) v = kInfo[i].max;
     params_[i] = v;
+    pf_[i] = float(v);
   }
   paramsValid_ = true;
+  fine_ = false;
+  mapParams();
+}
+
+// Fractional values (a macro in motion): the same mapping, which needs no libm,
+// so every parameter but the enums and TUNE (whole numbers from the engine)
+// moves continuously; the cutoff and the level-type ones also pass through the
+// voice's own smoothing, as before.
+void BassVoice::setParamsFine(const float* p) {
+  float v[kNumParams];
+  for (int i = 0; i < kNumParams; ++i) v[i] = clampf(p[i], float(kInfo[i].min), float(kInfo[i].max));
+  if (paramsValid_ && fine_ && std::memcmp(v, pf_, sizeof(v)) == 0) return;
+  for (int i = 0; i < kNumParams; ++i) {
+    pf_[i] = v[i];
+    params_[i] = uint8_t(int(v[i] + 0.5f));
+  }
+  paramsValid_ = true;
+  fine_ = true;
   mapParams();
 }
 
@@ -135,7 +157,7 @@ void BassVoice::setTempo(float bpm) {
 // Map the uint8 params to physical units. Runs only when a param changed;
 // uses the fast exp so a knob sweep costs well under one sample's budget.
 void BassVoice::mapParams() {
-  const uint8_t* p = params_;
+  const float* p = pf_;   // float(params_) on the 7-bit path, so each result is what the bytes gave
   const float perQ = ctlDt_;
 
   pCutOct_ = unit(p[kCutoff]) * kCutRangeOct;
@@ -180,7 +202,10 @@ void BassVoice::mapParams() {
   }
 
   pLfoOct_ = unit(p[kLfoDepth]) * kLfoRangeOct;
-  pLfoBeats_ = kRateBeats[p[kLfoRate] < kNumRates ? p[kLfoRate] : kNumRates - 1];
+  {
+    const int i = int(p[kLfoRate]);
+    pLfoBeats_ = kRateBeats[i < kNumRates ? i : kNumRates - 1];
+  }
   lfoInc_ = bpm_ * (1.0f / 60.0f) / pLfoBeats_ * perQ;
 
   {
@@ -202,7 +227,10 @@ void BassVoice::mapParams() {
     float f = unit(p[kFmDepth]);
     pFmIndex_ = 1.25f * f * f;                      // cycles (x 2 pi = modulation index, up to 7.9)
   }
-  pFmRatio_ = kRatios[p[kFmRatio] < kNumRatios ? p[kFmRatio] : kNumRatios - 1];
+  {
+    const int i = int(p[kFmRatio]);
+    pFmRatio_ = kRatios[i < kNumRatios ? i : kNumRatios - 1];
+  }
   {
     float f = unit(p[kFold]);
     float m = f * 4.0f;
@@ -211,16 +239,16 @@ void BassVoice::mapParams() {
   }
   pTimbreEnv_ = unit(p[kTimbreEnv]);
   pLfoTimbre_ = unit(p[kLfoTimbre]);
-  pLfoShape_ = p[kLfoShape] < kNumLfoShapes ? p[kLfoShape] : uint8_t(0);
+  pLfoShape_ = int(p[kLfoShape]) < kNumLfoShapes ? uint8_t(p[kLfoShape]) : uint8_t(0);
 
   {
     float t = 0.005f * fastExp2(unit(p[kSlide]) * 7.0f);      // 95 % time
     pGlideCoef_ = 1.0f - fastExp(-perQ * 3.0f / t);
   }
-  if (p[kAmpDecay] >= 127) {
+  if (p[kAmpDecay] >= 127.0f) {
     pADecCoef_ = 1.0f;
   } else {
-    float tau = 0.050f * fastExp2(float(p[kAmpDecay]) * (6.5f / 126.0f));
+    float tau = 0.050f * fastExp2(p[kAmpDecay] * (6.5f / 126.0f));
     pADecCoef_ = fastExp(-perQ / tau);
   }
   {
@@ -233,8 +261,8 @@ void BassVoice::mapParams() {
     pAtkInc_ = inc < 0.5f ? inc : 0.5f;             // never faster than two quanta
   }
   pKeyTrack_ = unit(p[kKeyTrack]);
-  pSubRatio_ = p[kSubOct] ? 0.5f : 1.0f;
-  pTuneRatio_ = fastExp2((float(p[kTune]) - 24.0f) * (1.0f / 12.0f));
+  pSubRatio_ = p[kSubOct] != 0.0f ? 0.5f : 1.0f;
+  pTuneRatio_ = fastExp2((p[kTune] - 24.0f) * (1.0f / 12.0f));
 }
 
 void BassVoice::resetAudioState() {

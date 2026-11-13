@@ -65,6 +65,7 @@ class BassVoice final : public Voice {
   void init(float sampleRate) override;
   const ParamInfo* paramInfo(int index) const override;
   void setParams(const uint8_t* soundParams) override;
+  void setParamsFine(const float* soundParams) override;
   void setTempo(float bpm) override;
   void noteOn(const NoteEvent& e) override;
   void noteOff(uint8_t note) override;
@@ -92,7 +93,9 @@ class BassVoice final : public Voice {
   float ctlDt_ = float(kQuantum) / kDefaultSampleRate;  // seconds per quantum
   float bpm_ = 120.0f;
   uint8_t params_[kSoundParams];
+  float pf_[kSoundParams];        // what mapParams() maps: float(params_), or the fractional values
   bool paramsValid_ = false;
+  bool fine_ = false;             // pf_ holds fractional values (setParamsFine)
 
   // ---- mapped parameter targets (updated in setParams when something changed)
   float pCutOct_ = 0, pK_ = 1, pMakeup_ = 2, pEnvOct_ = 0, pFDecCoef_ = 0.9f, pFDecCoefAcc_ = 0.9f;

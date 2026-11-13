@@ -90,12 +90,30 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
 
 uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
                   uint8_t* out) {
-  const uint32_t owned = set.ownedMask();
+  uint32_t enums = 0;
+  for (int p = 0; p < kParamsPerTrack; ++p)
+    if (info[p] && info[p]->fmt == ParamFormat::Enum) enums |= 1u << p;
   float v[kParamsPerTrack];
+  const uint32_t owned = evaluateRaw(set, enums, positions, under, v);
+  // 5. clamp and round
   for (int p = 0; p < kParamsPerTrack; ++p) {
     out[p] = under[p];
-    v[p] = float(((set.baseMask >> p) & 1) ? set.base[p] : under[p]);
+    if (!((owned >> p) & 1)) continue;
+    const ParamInfo* in = info[p];
+    float lo = 0.0f, hi = 127.0f;
+    if (in) lo = float(in->min), hi = float(in->max);
+    float x = v[p];
+    if (!(x >= lo)) x = lo;   // also catches NaN
+    if (x > hi) x = hi;
+    out[p] = uint8_t(int(x + 0.5f));
   }
+  return owned;
+}
+
+uint32_t evaluateRaw(const MacroSet& set, uint32_t enumMask, const float* positions, const uint8_t* under,
+                     float* v) {
+  const uint32_t owned = set.ownedMask();
+  for (int p = 0; p < kParamsPerTrack; ++p) v[p] = float(((set.baseMask >> p) & 1) ? set.base[p] : under[p]);
   const int nm = set.numMacros < kMaxMacros ? set.numMacros : kMaxMacros;
   float pos[kMaxMacros] = {0.0f, 0.0f, 0.0f, 0.0f};
   for (int m = 0; m < nm; ++m) pos[m] = clamp01(positions[m]);
@@ -113,7 +131,7 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
     }
     const float norm = sum > 1.0f ? 1.0f / sum : 1.0f;
     float start[kParamsPerTrack];
-    std::memcpy(start, v, sizeof(v));
+    std::memcpy(start, v, sizeof(start));
     float best[kParamsPerTrack];   // enum: the winning line's amount so far (-1 = none)
     for (int p = 0; p < kParamsPerTrack; ++p) best[p] = -1.0f;
     for (int k = 0; k < nmo; ++k) {
@@ -124,8 +142,7 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
       for (int e = 0; e < pa.n; ++e) {
         const PatchValue& pv = set.patchValues[pa.first + e];
         if (pv.param >= kParamsPerTrack) continue;
-        const ParamInfo* in = info[pv.param];
-        if (in && in->fmt == ParamFormat::Enum) {
+        if ((enumMask >> pv.param) & 1u) {
           const int sw = pv.sw != kNoSwitch ? pv.sw : mo.sw != kNoSwitch ? mo.sw : kDefaultSwitch;
           if (amt[k] * 100.0f >= float(sw) && amt[k] >= best[pv.param]) {
             best[pv.param] = amt[k];
@@ -170,17 +187,20 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
     // 10^(db / 60) = 2^(db * log2(10) / 60)
     v[kMixLevel] *= exp2Small(db * (3.32192809f / 60.0f));
   }
+  return owned;
+}
 
-  // 5. clamp and round
+uint32_t evaluateFine(const MacroSet& set, const FineRanges& r, const float* positions, const uint8_t* under,
+                      float* out) {
+  const uint32_t owned = evaluateRaw(set, r.enumMask, positions, under, out);
   for (int p = 0; p < kParamsPerTrack; ++p) {
-    if (!((owned >> p) & 1)) continue;
-    const ParamInfo* in = info[p];
-    float lo = 0.0f, hi = 127.0f;
-    if (in) lo = float(in->min), hi = float(in->max);
-    float x = v[p];
+    if (!((owned >> p) & 1)) { out[p] = float(under[p]); continue; }
+    const float lo = float(r.lo[p]), hi = float(r.hi[p]);
+    float x = out[p];
     if (!(x >= lo)) x = lo;   // also catches NaN
     if (x > hi) x = hi;
-    out[p] = uint8_t(int(x + 0.5f));
+    if ((r.stepMask >> p) & 1u) x = float(int(x + 0.5f));   // enums and semitones jump, as in evaluate()
+    out[p] = x;
   }
   return owned;
 }
@@ -239,6 +259,15 @@ void combineMixerRows(const uint8_t* player, const uint8_t* inst, const uint8_t*
   out[kMixDelaySend] = dly;
   out[kMixReverbSend] = rev;
   out[kMixDuck] = player[kMixDuck];
+}
+
+void combineMixerFine(const uint8_t* player, const float* inst, const uint8_t* def, float* out) {
+  auto clamp127 = [](float v) { return v > 0.0f ? (v < 127.0f ? v : 127.0f) : 0.0f; };
+  constexpr int L = 0, D = kMixDelaySend - kMixLevel, R = kMixReverbSend - kMixLevel;
+  const float d = float(def[L]);
+  out[0] = clamp127(def[L] > 0 ? float(player[L]) * inst[L] / d : float(player[L]));
+  out[1] = clamp127(float(player[D]) + inst[D] - float(def[D]));
+  out[2] = clamp127(float(player[R]) + inst[R] - float(def[R]));
 }
 
 void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out) {

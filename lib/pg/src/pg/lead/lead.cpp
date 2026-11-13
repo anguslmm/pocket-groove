@@ -103,6 +103,12 @@ constexpr float kOrganPerc = 0.42f;     // level of the 4' percussion partial at
 //                                       SAW   PULSE  TRI(+1.2) SUPER(+3) FM1(+1.8) FM2(+0.4) BELL(+1.1) ORGAN(+1.3 dB)
 constexpr float kWaveTrim[kNumWaves] = {1.0f, 1.0f, 1.148f, 1.413f, 1.230f, 1.047f, 1.135f, 1.161f};
 
+// The parameters that move continuously while a macro moves (setParamsFine).
+constexpr uint32_t kFineMask =
+    (1u << kPCutoff) | (1u << kPReso) | (1u << kPEnvAmt) | (1u << kPShape) | (1u << kPDetune) | (1u << kPWidth) |
+    (1u << kPSustain) | (1u << kPKeyTrack) | (1u << kPDrive) | (1u << kPOscMix) | (1u << kPLfoRate) |
+    (1u << kPVibrato) | (1u << kPLfoShape) | (1u << kPLfoCutoff);
+
 enum OscKind : uint8_t { kOne = 0, kTwo };
 enum TabSet : uint8_t { kSetSaw = 0, kSetTri, kSetSine };
 
@@ -400,6 +406,8 @@ void LeadVoice::init(float sampleRate) {
   }
   paramsSnap_ = true;
   rawValid_ = false;
+  fine_ = false;
+  touched_ = 0;
   ready_ = true;
   globalQuantum();
 }
@@ -410,17 +418,85 @@ const ParamInfo* LeadVoice::paramInfo(int index) const {
 
 void LeadVoice::setParams(const uint8_t* p) {
   // Called every quantum: unchanged input (the common case) is one compare.
-  if (rawValid_ && std::memcmp(p, raw_, kNumParams) == 0) return;
+  if (rawValid_ && !fine_ && std::memcmp(p, raw_, kNumParams) == 0) return;
   std::memcpy(raw_, p, kNumParams);
   rawValid_ = true;
+  // Back from the fractional path: what it mapped is mapped again from the bytes.
+  const uint32_t redo = fine_ ? touched_ : 0u;
+  fine_ = false;
+  touched_ = 0;
   for (int i = 0; i < kNumParams; ++i) {
     uint8_t v = p[i];
     if (v < kInfo[i].min) v = kInfo[i].min;
     if (v > kInfo[i].max) v = kInfo[i].max;
-    if (v != cur_[i]) {
+    if (v != cur_[i] || ((redo >> i) & 1u)) {
       cur_[i] = v;
       applyParam(i);
     }
+  }
+}
+
+// Fractional values (a macro in motion). The parameters in kFineMask follow
+// continuously through cheap mappings (no libm: applyFine); the rest (enums,
+// the interval, envelope and glide times) take their rounded value through the
+// 7-bit mapping, i.e. they step as before, at most once per 7-bit change.
+void LeadVoice::setParamsFine(const float* p) {
+  if (!fine_) {
+    fine_ = true;
+    touched_ = 0;
+    for (int i = 0; i < kNumParams; ++i) curF_[i] = float(cur_[i]);
+  }
+  for (int i = 0; i < kNumParams; ++i) {
+    const float x = clampf(p[i], float(kInfo[i].min), float(kInfo[i].max));
+    if (x == curF_[i]) continue;
+    curF_[i] = x;
+    if ((kFineMask >> i) & 1u) {
+      applyFine(i, x);
+      touched_ |= 1u << i;
+    } else {
+      const uint8_t v = uint8_t(int(x + 0.5f));
+      if (v != cur_[i]) {
+        cur_[i] = v;
+        applyParam(i);
+      }
+    }
+  }
+}
+
+// The continuous mappings of applyParam for a fractional value v (0..127), with
+// polynomial exp2 / sin / cos (relative error below 1e-6) instead of libm.
+void LeadVoice::applyFine(int index, float v) {
+  const float x = v * (1.0f / 127.0f);
+  switch (index) {
+    case kPCutoff: cutT_ = 30.0f + v * (105.0f / 127.0f); break;
+    case kPReso: {
+      const float q = 0.6f * exp2Fast(x * 4.32192809f);   // 0.6 * 20^x
+      kT_ = 1.0f / q;
+      resCompT_ = q > 0.7f ? exp2Fast(0.25f * (0.22239242f - 4.32192809f * x)) : 1.0f;   // (0.7 / q)^0.25
+      break;
+    }
+    case kPEnvAmt: envSemis_ = 72.0f * x; break;
+    case kPShape: shapeT_ = x; break;
+    case kPDetune:
+      detSemis_ = 80.0f * x * x * 0.01f;
+      superDetMax_ = 0.65f * detSemis_;
+      for (int j = 0; j < 5; ++j) superRatio_[j] = exp2Fast(kSuperDet[j] * superDetMax_ / 12.0f);
+      break;
+    case kPWidth: widthT_ = x; break;
+    case kPSustain: sus_ = x * x; break;
+    case kPKeyTrack: keyTrack_ = x; break;
+    case kPDrive: driveT_ = x; break;
+    case kPOscMix:
+      mixAT_ = cosQuarter(x * (0.5f * kPi));
+      mixBT_ = sinQuarter(x * (0.5f * kPi));
+      if (v <= 0.0f) mixBT_ = 0.0f;
+      if (v >= 127.0f) mixAT_ = 0.0f;
+      break;
+    case kPLfoRate: lfoInc_ = 0.1f * exp2Fast(x * 7.64385619f) / quantumRate_; break;   // 0.1 * 200^x Hz
+    case kPVibrato: vibDepth_ = x * x; break;
+    case kPLfoShape: lfoShapeDepth_ = x; break;
+    case kPLfoCutoff: lfoCutDepth_ = 24.0f * x * x; break;
+    default: break;
   }
 }
 

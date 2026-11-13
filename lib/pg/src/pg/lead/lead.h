@@ -70,6 +70,7 @@ class LeadVoice final : public Voice {
   void init(float sampleRate) override;
   const ParamInfo* paramInfo(int index) const override;
   void setParams(const uint8_t* soundParams) override;
+  void setParamsFine(const float* soundParams) override;
   void noteOn(const NoteEvent& e) override;
   void noteOff(uint8_t note) override;
   void choke() override;
@@ -89,6 +90,7 @@ class LeadVoice final : public Voice {
   static float lfoHz(uint8_t v);
   static float detuneCents(uint8_t v);       // osc1 <-> osc2 distance
   int soundingVoices() const;                // voices not idle
+  float debugCutoffPitch() const { return cutS_; }   // smoothed CUT (MIDI pitch), before env / LFO / key track
 
   // Mono output: both channels get the mono sum and each voice runs ONE filter
   // instead of two (saves ~25% CPU). The result equals (L+R)/2 of the stereo
@@ -151,6 +153,7 @@ class LeadVoice final : public Voice {
   };
 
   void applyParam(int index);
+  void applyFine(int index, float value);
   void globalQuantum();
   void shapeFor(int wave, OscShape& s) const;
   template <bool ST> void renderVoiceT(V& v, float* outL, float* outR);
@@ -172,6 +175,10 @@ class LeadVoice final : public Voice {
   uint8_t raw_[kSoundParams];     // last setParams() input, for the unchanged fast path
   bool rawValid_ = false;
   bool paramsSnap_ = true;
+  // ---- fractional path (setParamsFine) ----
+  float curF_[kSoundParams];      // the last fractional values
+  uint32_t touched_ = 0;          // params mapped from fractions (re-mapped on the way back)
+  bool fine_ = false;
 
   // ---- derived from params (targets) ----
   float cutT_ = 60.0f, kT_ = 1.0f, resCompT_ = 1.0f, envSemis_ = 0.0f;

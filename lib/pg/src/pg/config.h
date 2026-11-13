@@ -31,6 +31,10 @@ constexpr int kNumGlobals     = 32;
 constexpr int   kQuantum           = 16;       // frames per control block; all events land on quantum edges
 constexpr float kDefaultSampleRate = 44100.0f; // engine must work at 32000 too (fallback if CPU is short)
 constexpr int   kLeadVoices        = 4;
+// Control rate of macro motion: while a macro moves, the engine evaluates the
+// track's instrument and hands the voice fractional parameters every this many
+// quanta (64 frames: 1.45 ms at 44.1 kHz, 2 ms at 32 kHz). Power of two.
+constexpr int   kFineQuanta        = 4;
 
 // ---- Display --------------------------------------------------------------
 constexpr int kScreenW = 240;
