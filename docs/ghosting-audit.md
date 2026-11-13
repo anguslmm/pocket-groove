@@ -71,8 +71,10 @@ Every gesture below was expanded into every concrete key combination it allows (
 | 27 | three notes (legato runs, chords) | 168 / 54 | `alt` (z+x+c, b+v+z, ...), `.`, or a note | Third note ignored; the `alt` phantom was **accepted**: the next pad rolled instead of playing. | 18 work (phantom `alt`/`.` dropped); **36 dropped** (note phantom); the other 114 play all three. |
 | 28 | two notes + pad | 224 / 42 | a pad, a note, `l`, `;` | Third key ignored. | 6 work, **36 dropped**; the other 182 play. |
 | 29 | name entry, typing fast (three letters overlap) | - | a letter, `del`, `enter`, `tab`, `` ` ``, ... | Third key ignored. | Pairs in a rectangle dropped (a lost letter, never a stray `enter`/`del`); other overlaps type correctly. |
+| 30 | resampling (UX.md 10.3, added with it): `shift`+`l`; then `l` held + `shift`+pad or note (select, play), one pad, one note, `` ` `` | 1 + 8 + 8 + 8 + 8 + 1 / 0 | - | - | Works on all three matrix models (`itest_ui_resample`). |
+| 30' | `l` held (resampling, stopped) + two pads or two notes at once | 56 / 7 | the rectangle's fourth key: `a`+`s`, `d`+`f`, `g`+`h`, `j`+`k`; `x`+`,`, `v`+`,`, `n`+`,` | - | The pair is dropped (two hits lost, nothing wrong happens); the take goes on. Play them one after the other. |
 
-**Totals.** 14 designed or incidental three-key gestures (rows 1-14, counting 7 and 7' once), 15 playing situations (15-29). Ghost-prone among the designed ones: 1, 6, 7, 12, 13, 14. The filter saves all of them except row 7 on step 1, which is remapped. Row 7 on step `q` would also need the gesture table to prefer `;` over `shift`+`[`; it no longer matters after the remap.
+**Totals.** 14 designed or incidental three-key gestures (rows 1-14, counting 7 and 7' once), 15 playing situations (15-29), and resampling's holds (30, 30'). Ghost-prone among the designed ones: 1, 6, 7, 12, 13, 14. The filter saves all of them except row 7 on step 1, which is remapped. Row 7 on step `q` would also need the gesture table to prefer `;` over `shift`+`[`; it no longer matters after the remap.
 
 ## 4. Remap
 

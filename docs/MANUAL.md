@@ -224,7 +224,7 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | `del` held + a macro key | Clear that macro's motion: its values leave every note of this track in this pattern (`ctrl`+`z` brings them back). |
 | `'` | Which 16 steps the strip shows. |
 
-**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER. Their picture is the sample's waveform, `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays, and **holding `l` records the microphone into that slot**. Chapter 20.
+**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER. Their picture is the sample's waveform, `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays, **holding `l` records the microphone into that slot**, and **holding `shift`+`l` records what the groove plays** (resampling, in whole bars). While `shift` is held the footer shows its layer. Chapter 20.
 
 A track with no instrument shows **CLASSIC**: it plays its classic sound (projects from before instruments), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
@@ -1235,6 +1235,32 @@ On CHOP, TAPE or STUTTER, **hold `l`** and make the sound into the device; **let
 On the **desktop app** the same gesture records from the Mac's microphone (DESKTOP.md "Recording a sample"); the recording is the file `samples/NN-recNN.wav` there.
 
 If recording does not work on the device, type `r` in the serial monitor and paste the `[mic]` lines (chapter 16): they say whether the microphone came alive, its level, and what happened to the last recording.
+
+### Resampling: record what you hear
+
+![Counting in to the bar line](ux/resample-count.png)
+
+**`shift`+`l`** on CHOP, TAPE or STUTTER records what the Pocket Groove itself is playing into the slot: the whole mix as you hear it, with the effects, the ducking and the DJ filter. No microphone is involved, so nothing from the room gets in.
+
+1. **Choose what to record.** Solo what you want (`fn` + its note key, chapter 11), or mute the rest. To resample the lead: `fn`+`,`.
+2. **Go to CHOP's page** (or TAPE's, STUTTER's) and choose the slot (`shift`+`;` / `.`).
+3. **Hold `shift`+`l`** while the groove plays. You can let go of `shift`; keep `l` down. The box counts the beats to the next bar line (`4 3 2 1`), and recording starts exactly on it.
+4. **Let go of `l`** after the last bar you want. Recording carries on to the end of that bar and stops on the bar line. The toast names the new sample (`SLOT 3 RES03 3.9S`).
+
+The sample is **whole bars**, from a bar line to a bar line. In CHOP, one resampled bar gives one slice per sixteenth step: slice 1 is step 1, slice 5 is step 5, and so on. Give each note its own SLICE and the bar plays back in a new order. Bar lines are steps 1, 17, 33 and 49 of the playing pattern, and its end.
+
+![Recording: the bar lines are ticked](ux/resample-recording.png)
+
+- **Hold it and it fills the slot.** The slot holds about 6.2 seconds. If you keep holding, recording stops on the last bar line that still fits. At 60 BPM one bar is 4 seconds; from about 78 BPM two bars fit.
+- **The track you are on does not record itself.** While its slot records, CHOP (or TAPE, STUTTER) on that slot plays nothing. After recording it plays the new sample. Other slots and the other tracks play and are recorded.
+- **With the transport stopped** there is no bar to wait for. The page says `WAITING` and recording starts on the first sound, for example a pad or a note you play. To play the lead by hand, keep `l` held, go to GROOVE (`` ` ``), select the lead (`shift`+`k`) and play. Let go of `l` to stop. Nothing is trimmed.
+- **Stop while it records**, and the sample ends on the last bar line it passed.
+- **The level** is set the same way as for the microphone: the loudest point plays just under full scale.
+- **The same rules as the microphone**: a slot that holds a sample asks first (`REPLACE SLOT 3?`), and there is no undo. The device needs the 44.1 kHz setting (`RESAMPLE: 44.1K ONLY` at 32 kHz).
+
+![The slot holds two bars](ux/resample-done.png)
+
+On the **desktop app** the same gesture works with no microphone at all. The sample becomes the file `samples/NN-resNN.wav` (DESKTOP.md "Resampling").
 
 **What is where.** The samples live in a part of the device's flash that projects never use: saving, loading and pushing projects never touches them, and a project only remembers the slot number. A project made with a sample sounds different on a device that has another sample in that slot. While a recording runs, the device does not save projects (`RECORDING: SAVE AFTER`) and `tools/pg` transfers that write wait (`ERR RECORDING`).
 
