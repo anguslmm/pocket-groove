@@ -341,25 +341,24 @@ extern const MacroSet kBuiltin[] = {
       0x0119412cu, 0x0445c3e8u, 0x07c06000u, 0x06b6c0c8u, 0x03c8c3e8u, 0x00000000u, 0x017703e8u, 0x00000000u,
       0x052083e8u, 0x005dc000u, 0x036b03e8u}},
     // perc/stutter.pgm
-    {5, 4, 8, 25, 0, 0, 0, 0,
-     {0x92, 0x91},   // tilt x, y
+    {5, 4, 5, 21, 0, 0, 0, 0,
+     {0x93, 0x91},   // tilt x, y
      0x5570, "STUTTER",
      "family: ENERGY (sampler).",
      "One chop, repeated in time.", 1,   // voice kind
-     0x0104030bu, {8, 2, 0, 40, 0, 0, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 118, 0, 0, 0, 0, 0, 0, 0},
+     0x01040309u, {8, 0, 0, 40, 0, 0, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 118, 0, 0, 0, 0, 0, 0, 0},
      {{"RATE", "SLOW", "FAST", "repeats from 1/4 to 1/32", 500, 0, 1},
       {"RISE", "FALL", "RISE", "each repeat lower .. higher", 500, 1, 1},
-      {"TONE", "DARK", "THIN", "low-pass .. open .. high-pass", 500, 2, 4},
-      {"LENGTH", "TIGHT", "OPEN", "a blip per repeat .. the whole slice", 450, 6, 2}},
+      {"SLICE", "1", "8", "which of eight slices repeats", 300, 2, 1},
+      {"LENGTH", "TIGHT", "OPEN", "a blip per repeat .. the whole slice", 450, 3, 2}},
      {},
      {},
      {},
-     {{16, 120, 0, 5}, {17, 112, 5, 4}, {12, 120, 9, 2}, {10, 112, 11, 4}, {11, 112, 15, 3}, {13, 112, 18, 3}, {3, 112, 21, 2}, {9, 112, 23, 2}},
+     {{16, 120, 0, 5}, {17, 112, 5, 4}, {1, 120, 9, 8}, {3, 112, 17, 2}, {9, 112, 19, 2}},
      {},
      {0x001f4000u, 0x002ee0fau, 0x004e21f4u, 0x005dc2eeu, 0x006d6384u, 0x02af8000u, 0x03e801c2u, 0x03e80226u,
-      0x052083e8u, 0x00000000u, 0x001f41f4u, 0x02ee0000u, 0x07c061f3u, 0x000001f4u, 0x04a383e8u, 0x02328000u,
-      0x007d01f4u, 0x027103e8u, 0x00000000u, 0x000002bcu, 0x02ee03e8u, 0x003e8000u, 0x07c063e8u, 0x0445c000u,
-      0x067843e8u}},
+      0x052083e8u, 0x00000000u, 0x000fa07du, 0x001f40fau, 0x002ee177u, 0x003e81f4u, 0x004e2271u, 0x005dc2eeu,
+      0x006d636bu, 0x003e8000u, 0x07c063e8u, 0x0445c000u, 0x067843e8u}},
     // bass/acid.pgm
     {6, 4, 19, 43, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y

@@ -343,7 +343,7 @@ Order of work (owner, updated 2026-11-12):
    speed through stopped into reverse / pitch / attack / release / SVF LP-BP-HP / bit crush /
    sample-and-hold / drive / tempo-synced repeats with pitch and fade per repeat / loop
    (20 parameters, docs/MACROLAB.md "The voice line"). Sets: perc CHOP (SLICE PITCH TONE
-   LENGTH), TAPE (SPEED START WORN ECHO), STUTTER (RATE RISE TONE LENGTH), in builtin.txt
+   LENGTH), TAPE (SPEED START WORN ECHO), STUTTER (RATE RISE SLICE LENGTH; SLICE took TONE's place on 2026-11-13 at the owner's request), in builtin.txt
    after TAP and TRAIL (the demos are unchanged). Engine: a sampler note with its own macro
    values is primed with them before its note-on (primeNote), so CHOP's per-note SLICE is the
    note's. Desktop: samples/ next to projects/ (01-name.wav .. 12-name.wav, polled, any WAV

@@ -56,7 +56,7 @@ Model v2 (2026-11-13) changed five sets to use its new features, so marks on the
 | TAP | perc/tap.pgm | Gesture | a hand drum: soft tap to slap, pressing the skin, letting it ring | HIT PRESS LET | 16ths with accents, PRESS while it rolls |
 | CHOP | perc/chop.pgm | Gesture (sampler) | a sample in 16 slices, each note picks its own; pitch, tone, length | SLICE PITCH TONE LENGTH | a row of notes, each with its own SLICE |
 | TAPE | perc/tape.pgm | Movement (sampler) | the whole sample as tape: speed through stopped into reverse, start point, wear, echo | SPEED START WORN ECHO | long notes, SPEED down for a tape stop |
-| STUTTER | perc/stutter.pgm | Energy (sampler) | one chop repeated at a tempo-synced rate, rising or falling per repeat | RATE RISE TONE LENGTH | single steps, RISE up, RATE by hand |
+| STUTTER | perc/stutter.pgm | Energy (sampler) | one chop repeated at a tempo-synced rate, rising or falling per repeat | RATE RISE SLICE LENGTH | single steps, RISE up, RATE by hand |
 
 ## What round 1 is testing
 

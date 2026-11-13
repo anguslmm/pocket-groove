@@ -1191,7 +1191,7 @@ The PERC track can play a **sample** instead of its percussion sound: step its i
 |---|---|---|---|---|
 | CHOP: the sample cut into 16 slices, each note picks one | SLICE (1 .. 16) | PITCH (two octaves down .. up) | TONE (dark .. open .. thin) | LENGTH (a blip .. the whole slice) |
 | TAPE: the whole sample as tape | SPEED (backwards .. stopped .. normal .. double) | START (head .. tail) | WORN (clean .. crushed and dark) | ECHO (dry .. delay and reverb) |
-| STUTTER: one chop repeated in time | RATE (1/4 .. 1/32) | RISE (each repeat lower .. higher) | TONE (dark .. thin) | LENGTH (tight .. open) |
+| STUTTER: one chop repeated in time | RATE (1/4 .. 1/32) | RISE (each repeat lower .. higher) | SLICE (which of eight repeats; per note with a held step) | LENGTH (tight .. open) |
 
 - **A slice per note (CHOP)**: hold a step and press `z` / `x`: that note gets its own SLICE (chapter 10, "note values"). A row of notes with different slices re-orders the sample.
 - **Pitch**: on a sampler instrument the note keys play the sample at pitches: `z` is the sample as recorded, the others go up the project's scale. In STEP EDIT the note keys set the held note's pitch, `;` / `.` move it a semitone, `ctrl` an octave.
