@@ -36,7 +36,7 @@ SnareVoice::SnareVoice() : DrumVoice(kParams, kNumParams) {
 void SnareVoice::updateFine(uint32_t ch) {
   if (ch & bit(kTune)) tuneHz_ = 110.0f * exp2Fast(1.5849625f * unit(pf_[kTune]));   // 110..330 Hz
   if (ch & bit(kDetune)) ratio_ = 1.2f + 1.4f * unit(pf_[kDetune]);
-  if (ch & (bit(kTune) | bit(kDetune))) setPitch(true);
+  if (ch & (bit(kTune) | bit(kDetune))) setPitchT<true>();
   if (ch & bit(kBend)) {
     const float t = unit(pf_[kBend]);
     bend_ = 2.0f * t * t;
@@ -50,7 +50,7 @@ void SnareVoice::updateFine(uint32_t ch) {
   }
   if (ch & bit(kTone)) {
     toneHz_ = 700.0f * exp2Fast(3.6844982f * unit(pf_[kTone]));   // 700..9000 Hz
-    setFilter(true);
+    setFilterT<true>();
   }
   if (ch & bit(kDrive)) {
     drive_ = 0.6f * exp2Fast(4.5f * unit(pf_[kDrive]));
@@ -67,15 +67,17 @@ void SnareVoice::resetState() {
   level_ = 0.0f;
 }
 
-void SnareVoice::setPitch(bool fast) {
+template <bool Fast>
+void SnareVoice::setPitchT() {
   const float f1 = clampf(tuneHz_ * noteRatio_, 40.0f, 2000.0f);
-  eps1_ = fast ? oscEpsFast(f1, fs_) : oscEps(f1, fs_);
-  eps2_ = fast ? oscEpsFast(f1 * ratio_, fs_) : oscEps(f1 * ratio_, fs_);
+  eps1_ = Fast ? oscEpsFast(f1, fs_) : oscEps(f1, fs_);
+  eps2_ = Fast ? oscEpsFast(f1 * ratio_, fs_) : oscEps(f1 * ratio_, fs_);
 }
 
-void SnareVoice::setFilter(bool fast) {
+template <bool Fast>
+void SnareVoice::setFilterT() {
   const float fc = clampf(toneHz_ * bright_, 300.0f, 14000.0f), q = 0.8f;
-  if (fast) svf_.setFast(fc, q, fs_);
+  if (Fast) svf_.setFast(fc, q, fs_);
   else svf_.set(fc, q, fs_);
   // Normalise the band-passed noise to a constant RMS (see clap.cpp).
   noiseNorm_ = 0.3f / sqrtf((1.0f / 3.0f) * kPi * q * fc / fs_);

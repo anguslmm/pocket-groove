@@ -19,6 +19,16 @@
 // Control rate (once per 16-frame quantum): pitch glide, filter/accent/amp
 // envelopes, tempo-synced LFO, cutoff smoothing, filter coefficients.
 // No libm outside init(); no doubles; no allocation.
+//
+// Macro motion (Voice::setParamsFine, engine.h "MACRO MOTION"): the mapping
+// from parameters to targets reads floats and uses no libm, so every parameter
+// takes fractions and moves continuously while a macro moves (cutoff, resonance,
+// drive, fold, FM depth and mix, wave, sub, env and LFO depths, the envelope,
+// slide and attack times, key track) except the enums (LFO rate and shape, FM
+// ratio, sub octave) and TUNE (semitones), which the engine hands over as whole
+// numbers. The cutoff CV (~1.2 ms lag) and the level-type parameters (~1.6 ms)
+// keep their smoothing on top. For whole numbers the result is bit for bit the
+// 7-bit path's (float(byte) through the same arithmetic).
 #pragma once
 #include "../voice.h"
 

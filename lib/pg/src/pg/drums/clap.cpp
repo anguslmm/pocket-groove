@@ -39,7 +39,7 @@ void ClapVoice::updateFine(uint32_t ch) {
     toneHz_ = 500.0f * exp2Fast(2.6780719f * unit(pf_[kTone]));   // 500..3200 Hz
     q_ = 0.7f * exp2Fast(2.6844982f * unit(pf_[kReso]));         // 0.7..4.5
     airAmt_ = unit(pf_[kAir]);
-    setFilter(true);
+    setFilterT<true>();
   }
   if (ch & bit(kTail)) tailAmt_ = 0.1f + 0.9f * unit(pf_[kTail]);
   if (ch & bit(kDrive)) {
@@ -60,10 +60,11 @@ void ClapVoice::resetState() {
   level_ = 0.0f;
 }
 
-void ClapVoice::setFilter(bool fast) {
+template <bool Fast>
+void ClapVoice::setFilterT() {
   // An accented clap is brighter: band a little higher, more air.
   const float fc = clampf(toneHz_ * noteRatio_ * (bright_ > 1.0f ? 1.15f : 1.0f), 200.0f, 6000.0f);
-  if (fast) svf_.setFast(fc, q_, fs_);
+  if (Fast) svf_.setFast(fc, q_, fs_);
   else svf_.set(fc, q_, fs_);
   // White noise (variance 1/3) through a band-pass of peak gain Q has
   // variance ~ (1/3) * pi * Q * fc / fs: normalise to a constant RMS.

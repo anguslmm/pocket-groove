@@ -118,6 +118,8 @@ inline void smoothTo(float& s, float target, float c) {
   s = (d < 1.0e-5f && d > -1.0e-5f) ? target : s + d * c;
 }
 inline float norm01(uint8_t v) { return float(v) * (1.0f / 127.0f); }
+// applyFine's 2^x, out of line: one copy in IRAM instead of four.
+__attribute__((noinline)) float exp2Call(float x) { return exp2Fast(x); }
 inline uint32_t cycles(float x) { return uint32_t(int32_t(x * 16777216.0f)) << 8; }
 inline uint32_t toInc(float x) { return uint32_t(int32_t(x)); }
 
@@ -470,9 +472,9 @@ void LeadVoice::applyFine(int index, float v) {
   switch (index) {
     case kPCutoff: cutT_ = 30.0f + v * (105.0f / 127.0f); break;
     case kPReso: {
-      const float q = 0.6f * exp2Fast(x * 4.32192809f);   // 0.6 * 20^x
+      const float q = 0.6f * exp2Call(x * 4.32192809f);   // 0.6 * 20^x
       kT_ = 1.0f / q;
-      resCompT_ = q > 0.7f ? exp2Fast(0.25f * (0.22239242f - 4.32192809f * x)) : 1.0f;   // (0.7 / q)^0.25
+      resCompT_ = q > 0.7f ? exp2Call(0.25f * (0.22239242f - 4.32192809f * x)) : 1.0f;   // (0.7 / q)^0.25
       break;
     }
     case kPEnvAmt: envSemis_ = 72.0f * x; break;
@@ -480,7 +482,7 @@ void LeadVoice::applyFine(int index, float v) {
     case kPDetune:
       detSemis_ = 80.0f * x * x * 0.01f;
       superDetMax_ = 0.65f * detSemis_;
-      for (int j = 0; j < 5; ++j) superRatio_[j] = exp2Fast(kSuperDet[j] * superDetMax_ / 12.0f);
+      for (int j = 0; j < 5; ++j) superRatio_[j] = exp2Call(kSuperDet[j] * superDetMax_ / 12.0f);
       break;
     case kPWidth: widthT_ = x; break;
     case kPSustain: sus_ = x * x; break;
@@ -492,7 +494,7 @@ void LeadVoice::applyFine(int index, float v) {
       if (v <= 0.0f) mixBT_ = 0.0f;
       if (v >= 127.0f) mixAT_ = 0.0f;
       break;
-    case kPLfoRate: lfoInc_ = 0.1f * exp2Fast(x * 7.64385619f) / quantumRate_; break;   // 0.1 * 200^x Hz
+    case kPLfoRate: lfoInc_ = 0.1f * exp2Call(x * 7.64385619f) / quantumRate_; break;   // 0.1 * 200^x Hz
     case kPVibrato: vibDepth_ = x * x; break;
     case kPLfoShape: lfoShapeDepth_ = x; break;
     case kPLfoCutoff: lfoCutDepth_ = 24.0f * x * x; break;

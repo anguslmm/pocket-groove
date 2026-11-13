@@ -79,15 +79,26 @@ print("[audio-ram] PG_AUDIO_RAM tier %d, %s output layout" % (TIER, "STEREO (USB
 HOT_COMMON = [
     r"^pg::Engine::process\(",
     r"^pg::engine_detail::State::(render|quantum|drainCommands|ensureParams|publishStatus|sequencerTick|rollTick)\(",
+    # Macro motion (engine.h "MACRO MOTION"): what runs every 4 quanta per moving
+    # track: the engine's tick (interpolation and feed) and the bass's and lead's
+    # fractional mappings (below). The set's evaluation (fineInterval ->
+    # macro::evaluateFine), once per 11.6 ms per moving track, and the drums'
+    # fractional mappings, fed every 11.6 ms, stay in flash: ~2.5 KB of IRAM saved
+    # for a cost at 86 Hz that env:profile's MOTION lines measure.
+    r"^pg::engine_detail::State::(fineTick|fineEval)\(",
     r"^pg::Voice::mono\(\) const",
     r"^pg::engine_detail::Delay::readTap\(",
     r"^pg::engine_detail::MasterBus::setParams\(",
     r"^_ZN2pg13engine_detail9MasterBus6rumble",
-    r"^pg::lead::LeadVoice::(render|globalQuantum|active|mono|setParams|shapeFor)\(",
+    r"^pg::lead::LeadVoice::(render|globalQuantum|active|mono|setParams|setParamsFine|applyFine|shapeFor)\(",
+    r"^pg::lead::\(anonymous namespace\)::exp2Call\(",
     r"^_ZN2pg4lead12_GLOBAL__N_16osc(One|Two)ILb0",
     r"^void pg::lead::\(anonymous namespace\)::osc(One|Two)<true>",
-    r"^pg::bass::BassVoice::(render|setParams|active|mono)\(",
+    r"^pg::bass::BassVoice::(render|setParams|setParamsFine|mapParams|active|mono)\(",
+    r"^pg::bass::\(anonymous namespace\)::mapExp2\(",
     r"^pg::drums::\w+Voice::(render|renderTonal|renderCowbell|renderShaker|updateCoefs|endBlock|setParams|active|mono)\(",
+    # Not the drums' fractional path (setParamsFine, updateFine): the engine feeds a
+    # drum once per evaluation interval (11.6 ms), not per tick, so it stays in flash.
 ]
 # The variants only one output layout runs.
 HOT_MONO = [
@@ -103,7 +114,8 @@ HOT_STEREO = [
 ]
 HOT = HOT_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 # Placement checks (regexes on demangled names, see the header).
-MUST_COMMON = [r"^pg::Engine::process\(", r"^pg::lead::LeadVoice::render\(", r"^pg::bass::BassVoice::render\("]
+MUST_COMMON = [r"^pg::Engine::process\(", r"^pg::lead::LeadVoice::render\(", r"^pg::bass::BassVoice::render\(",
+               r"^pg::engine_detail::State::fineEval\(", r"^pg::bass::BassVoice::mapParams\("]
 MUST = MUST_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 MUST_NOT = HOT_MONO if STEREO else HOT_STEREO
 # Per-step / per-note paths (tier 2).

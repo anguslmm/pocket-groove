@@ -30,6 +30,14 @@
 //   level without any voice-count pumping.
 // * Param smoothing (5 ms) applies while voices sound; a note that starts
 //   from silence snaps to the current params (p-locks start clean).
+// * Macro motion (setParamsFine, engine.h "MACRO MOTION"): CUTOFF, RESONANCE,
+//   ENV AMOUNT, SHAPE, DETUNE, WIDTH, SUSTAIN, KEY TRACK, DRIVE, OSC MIX,
+//   LFO RATE, VIBRATO, LFO>SHAPE and LFO>CUTOFF follow fractions continuously
+//   through cheap mappings (polynomial exp2 / sin / cos, no libm; within 1e-6 of
+//   the libm values); the enums (waves, filter type), OSC2 PITCH (semitones),
+//   the envelope times and GLIDE take their rounded value through the 7-bit
+//   mapping (they step as before; a step in a time is not heard as a step).
+//   Back on the 7-bit path everything the fractions touched is re-mapped exactly.
 //
 // Envelope times quoted by the *Seconds() helpers: attack = linear ramp time;
 // decay / release = time to fall 60 dB (exponential, T60 = 6.9 time constants).

@@ -87,6 +87,12 @@ constexpr float kInt31ToFloat = 1.0f / 2147483648.0f;
 inline float unit(float v) { return v * (1.0f / 127.0f); }   // of float(byte): exactly as the bytes gave
 inline void smooth(float& s, float target) { s += kSmooth * (target - s); }
 
+// mapParams' 2^x and e^x: fastExp2 out of line, one copy instead of fourteen
+// (mapParams runs at the control rate while a macro moves and sits in IRAM on
+// the device, where every byte costs heap). Same results as inline.
+__attribute__((noinline)) float mapExp2(float x) { return fastExp2(x); }
+inline float mapExp(float x) { return mapExp2(x * 1.44269504f); }
+
 }  // namespace
 
 // ============================================================================
@@ -177,26 +183,26 @@ void BassVoice::mapParams() {
     // Passband gain of the ladder is 1/(1+k). Give back half of it (in dB):
     // the body thins out as on a 303 but doesn't vanish.
     pMakeup_ = sqrtf((1.0f + kResMin) * (1.0f + k));
-    pAccCoef_ = 1.0f - fastExp(-perQ / (0.003f + 0.022f * r));
+    pAccCoef_ = 1.0f - mapExp(-perQ / (0.003f + 0.022f * r));
   }
 
   pEnvOct_ = unit(p[kEnvMod]) * kEnvRangeOct;
   {
-    float tau = 0.020f * fastExp2(unit(p[kDecay]) * 7.0f);
-    pFDecCoef_ = fastExp(-perQ / tau);
+    float tau = 0.020f * mapExp2(unit(p[kDecay]) * 7.0f);
+    pFDecCoef_ = mapExp(-perQ / tau);
     // Accent forces a short decay (303), scaled by the accent amount so ACC 0 is a no-op.
     // Fully short from ACC ~ 1/3 up; below that it fades in.
     const float acc = clampf(unit(p[kAccent]) * 3.0f, 0.0f, 1.0f);
     const float tauShort = tau < 0.070f ? tau : 0.070f;
-    pFDecCoefAcc_ = fastExp(-perQ / (tau + acc * (tauShort - tau)));
+    pFDecCoefAcc_ = mapExp(-perQ / (tau + acc * (tauShort - tau)));
   }
   pAccent_ = unit(p[kAccent]);
   pAccOct_ = pAccent_ * kAccRangeOct;
 
   {
     float d = unit(p[kDrive]);
-    pPre_ = 0.5f * fastExp2(d * 1.6f);              // 0.5 .. 1.5 into the ladder
-    pDriveGain_ = fastExp2(d * 5.0f);               // 0 .. +30 dB into the clipper
+    pPre_ = 0.5f * mapExp2(d * 1.6f);              // 0.5 .. 1.5 into the ladder
+    pDriveGain_ = mapExp2(d * 5.0f);               // 0 .. +30 dB into the clipper
     pBias_ = 0.35f * d;                             // asymmetry -> even harmonics
     pPostGain_ = 1.0f / (1.0f + 1.5f * d);          // keep loudness roughly level
   }
@@ -242,27 +248,27 @@ void BassVoice::mapParams() {
   pLfoShape_ = int(p[kLfoShape]) < kNumLfoShapes ? uint8_t(p[kLfoShape]) : uint8_t(0);
 
   {
-    float t = 0.005f * fastExp2(unit(p[kSlide]) * 7.0f);      // 95 % time
-    pGlideCoef_ = 1.0f - fastExp(-perQ * 3.0f / t);
+    float t = 0.005f * mapExp2(unit(p[kSlide]) * 7.0f);      // 95 % time
+    pGlideCoef_ = 1.0f - mapExp(-perQ * 3.0f / t);
   }
   if (p[kAmpDecay] >= 127.0f) {
     pADecCoef_ = 1.0f;
   } else {
-    float tau = 0.050f * fastExp2(p[kAmpDecay] * (6.5f / 126.0f));
-    pADecCoef_ = fastExp(-perQ / tau);
+    float tau = 0.050f * mapExp2(p[kAmpDecay] * (6.5f / 126.0f));
+    pADecCoef_ = mapExp(-perQ / tau);
   }
   {
-    float tau = 0.002f * fastExp2(unit(p[kRelease]) * 8.0f);
-    pRelCoef_ = fastExp(-perQ / tau);
+    float tau = 0.002f * mapExp2(unit(p[kRelease]) * 8.0f);
+    pRelCoef_ = mapExp(-perQ / tau);
   }
   {
-    float t = 0.0007f * fastExp2(unit(p[kAttack]) * 8.0f);
+    float t = 0.0007f * mapExp2(unit(p[kAttack]) * 8.0f);
     float inc = perQ / t;
     pAtkInc_ = inc < 0.5f ? inc : 0.5f;             // never faster than two quanta
   }
   pKeyTrack_ = unit(p[kKeyTrack]);
   pSubRatio_ = p[kSubOct] != 0.0f ? 0.5f : 1.0f;
-  pTuneRatio_ = fastExp2((p[kTune] - 24.0f) * (1.0f / 12.0f));
+  pTuneRatio_ = mapExp2((p[kTune] - 24.0f) * (1.0f / 12.0f));
 }
 
 void BassVoice::resetAudioState() {

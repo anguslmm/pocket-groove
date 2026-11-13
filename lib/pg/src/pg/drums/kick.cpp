@@ -39,7 +39,7 @@ void KickVoice::updateFine(uint32_t ch) {
     const float t = unit(pf_[kPunch]);
     depthBase_ = 12.0f * t * t;
   }
-  if (ch & (bit(kTune) | bit(kPunch))) setPitch(true);
+  if (ch & (bit(kTune) | bit(kPunch))) setPitchT<true>();
   if (ch & (bit(kDrive) | bit(kHarm))) {
     const float t = unit(pf_[kDrive]);
     h2_ = 0.7f * unit(pf_[kHarm]);
@@ -59,9 +59,10 @@ void KickVoice::resetState() {
   accentDepth_ = 1.0f;
 }
 
-void KickVoice::setPitch(bool fast) {
+template <bool Fast>
+void KickVoice::setPitchT() {
   const float f0 = clampf(tuneHz_ * noteRatio_, 16.0f, 1200.0f);
-  eps0_ = fast ? oscEpsFast(f0, fs_) : oscEps(f0, fs_);
+  eps0_ = Fast ? oscEpsFast(f0, fs_) : oscEps(f0, fs_);
   // Keep the top of the sweep well under Nyquist.
   float d = depthBase_ * accentDepth_;
   const float dMax = 0.2f * fs_ / f0 - 1.0f;

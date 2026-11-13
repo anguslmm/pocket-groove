@@ -87,19 +87,25 @@ struct TrackRt {
   uint32_t mStart[kTrackMacros];      // qCount when the ramp began
   uint16_t mDur[kTrackMacros];        // ramp length, quanta
   uint8_t moving;                     // bit m: macro m is on a ramp
-  uint8_t fine;                       // the voice plays fractional values (fineEval), not eff[0..23]
-  uint8_t fineDue;                    // evaluate at the next quantum, whatever the control phase
-  uint8_t settling;                   // the motion ended: blending into the stored bytes
-  float blendW, blendStep;            // weight of off[] now, and its change per evaluation
-  float off[kSoundParams + 3];        // bytes - fractional when the blend began (sound, level, delay, reverb)
-  float fMix[3];                      // fractional level, delay and reverb send for render()
-  uint32_t fEnum, fStep;              // macro::FineRanges masks for this voice
+  uint8_t fine;                       // the voice plays fractional values (fineTick), not eff[0..23]
+  uint8_t anchor;                     // start an interval at the next quantum: 1 from the values now, 2 jump, 3 entering
+  uint8_t settling;                   // the motion ended: the interval runs into the stored bytes
+  // The values the voice hears move linearly from fA (at iStart) to fB (at iStart + iLen):
+  // fB is the instrument evaluated where the macros will be at the interval's end, so
+  // the set is evaluated once per interval (kFineEvalQuanta), the voice fed every tick.
+  // Both in 1/256 units (8.8 fixed point: 0..127 with 0.4 cent of a cutoff step).
+  uint16_t fA[kSoundParams + 3], fB[kSoundParams + 3];   // sound params, then level, delay, reverb send
+  uint32_t iStart;
+  uint16_t iLen;
+  uint32_t lerp;                      // bit i: fA[i] != fB[i] (the values that move in this interval)
+  float fMix[3];                      // fractional level, delay and reverb send now, for render()
+  uint32_t fEnum, fStep;              // bit p: parameter p is an enum / only jumps (enum, semitones)
   uint8_t dDef[kParamsPerTrack];      // the values under a set (voice + mixer defaults)
   // ---- params ----
   uint8_t eff[kParamsPerTrack];       // effective params this quantum (p-lock applied)
   uint8_t mute;                       // cached Project mute
   uint8_t paramsSent;
-  uint8_t pMin[kParamsPerTrack], pMax[kParamsPerTrack];   // param ranges (sanitising; 24..31 the mixer's)
+  uint8_t pMin[kSoundParams], pMax[kSoundParams];   // voice param ranges (for sanitising)
   uint32_t pHas;                      // bit i: the voice has sound param i (all set when no voice)
   // ---- mixer ----
   float cLevel;                       // level the targets were computed from (-1 = none)
@@ -154,7 +160,7 @@ struct State {
   uint8_t instRefreshes;              // RefreshInstruments commands consumed
   uint8_t fineTracks;                 // bit t: tr[t].fine (one compare per quantum when nothing moves)
   uint16_t rampQ;                     // kMacroRampMs in quanta
-  float settleStep;                   // blend weight per evaluation: kMacroSettleMs
+  uint16_t settleQ;                   // kMacroSettleMs in quanta
   uint32_t qCount;                    // quanta processed (record timing)
   uint32_t absStep;                   // master steps fired since Play (roll phase lock)
   int masterPos, masterNext;
@@ -251,13 +257,14 @@ struct State {
   void refreshInstrument(int t, bool rebind);
   void evalLock(int t);
   // macro motion
-  float macroPos(const TrackRt& r, int m) const;
+  float macroPos(const TrackRt& r, int m, uint32_t q) const;
   void startRamp(int t, int m, uint8_t target, uint16_t quanta);
   void jumpMacro(int t, int m, float to);
   void resetMotion(int t);
-  void fineValues(int t, float* sound, float* mix);
-  void beginFine(int t);
+  void fineValues(int t, uint32_t q, float* v);
+  void bytesNow(int t, float* v);
   void fineEval(int t);
+  bool fineInterval(int t, float* cur);
   void exitFine(int t);
   void fineTick();
   uint32_t rand32() {
@@ -305,10 +312,7 @@ void State::init(float sampleRate, Project* p) {
   const float quantaPerSec = sr / float(kQuantum);
   gainK = 1.0f - expf(-1.0f / (0.004f * quantaPerSec));     // 4 ms; init is not real-time
   rampQ = uint16_t(float(kMacroRampMs) * 0.001f * quantaPerSec + 0.5f);
-  {
-    const float ticks = float(kMacroSettleMs) * 0.001f * quantaPerSec / float(kFineQuanta);
-    settleStep = ticks > 1.0f ? 1.0f / ticks : 1.0f;
-  }
+  settleQ = uint16_t(float(kMacroSettleMs) * 0.001f * quantaPerSec + 0.5f);
   duck.init(sr, kQuantum);
   delay.init(sr * 0.5f);
   reverb.init(sr * 0.5f);
@@ -369,9 +373,11 @@ void State::resetRuntime() {
     r.inst = nullptr;
     r.lkValid = 0;
     r.moving = 0;
-    r.fine = r.fineDue = r.settling = 0;
-    r.blendW = r.blendStep = 0.0f;
-    for (int i = 0; i < kSoundParams + 3; ++i) r.off[i] = 0.0f;
+    r.fine = r.anchor = r.settling = 0;
+    for (int i = 0; i < kSoundParams + 3; ++i) r.fA[i] = r.fB[i] = 0;
+    r.iStart = 0;
+    r.iLen = 1;
+    r.lerp = 0;
     r.fMix[0] = r.fMix[1] = r.fMix[2] = 0.0f;
     for (int m = 0; m < kTrackMacros; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;
   }
@@ -400,10 +406,12 @@ void State::cacheVoiceRanges(int t) {
   r.fEnum = r.fStep = 0;
   for (int i = 0; i < kParamsPerTrack; ++i) {
     const ParamInfo* info = i < kSoundParams ? (voice[t] ? voice[t]->paramInfo(i) : nullptr) : mixParamInfo(t, i);
-    r.pMin[i] = info ? info->min : 0;
-    r.pMax[i] = info ? info->max : (i < kSoundParams ? 255 : 127);
+    if (i < kSoundParams) {
+      r.pMin[i] = info ? info->min : 0;
+      r.pMax[i] = info ? info->max : 255;
+      if (info) r.pHas |= 1u << i;
+    }
     r.dDef[i] = info ? info->def : 0;
-    if (info && i < kSoundParams) r.pHas |= 1u << i;
     if (info && info->fmt == ParamFormat::Enum) r.fEnum |= 1u << i;
     if (info && (info->fmt == ParamFormat::Enum || info->fmt == ParamFormat::Semitones)) r.fStep |= 1u << i;
   }
@@ -1112,11 +1120,20 @@ void State::ensureParams(int t) {
 
 // ---------------------------------------------------------- macro motion ----
 // engine.h "MACRO MOTION". Positions are in byte units (0..255) as floats.
+//
+// DECISION (control rate): while a track is in the fractional path its voice is
+// fed every kFineQuanta quanta (1.45 ms at 44.1 kHz; the bass's own 1.2 ms
+// cutoff lag and the lead's 5 ms smoothing join those updates into a curve) with
+// values that move in a straight line across intervals of kFineEvalQuanta
+// (11.6 ms): at the start of each interval the set is evaluated once, where the
+// macros will be at its end (the ramps are known, so this is no lag), and the
+// values run there from where they are. One evaluation per 11.6 ms per moving
+// track; a new target joins at the next interval (it only changes the speed).
 
-// Where macro m of the track is now (on its ramp, or where it stands).
-float State::macroPos(const TrackRt& r, int m) const {
+// Where macro m of the track is at quantum q (on its ramp, or where it stands).
+float State::macroPos(const TrackRt& r, int m, uint32_t q) const {
   if (!((r.moving >> m) & 1u)) return r.mTo[m];
-  const uint32_t e = qCount - r.mStart[m];
+  const uint32_t e = q - r.mStart[m];
   if (e >= r.mDur[m]) return r.mTo[m];
   return r.mFrom[m] + (r.mTo[m] - r.mFrom[m]) * (float(e) / float(r.mDur[m]));
 }
@@ -1125,7 +1142,7 @@ void State::jumpMacro(int t, int m, float to) {
   TrackRt& r = tr[t];
   r.mFrom[m] = r.mTo[m] = to;
   r.moving = uint8_t(r.moving & ~(1u << m));
-  if (r.fine) r.fineDue = 1;
+  if (r.fine) r.anchor = 2;   // the values jump there at the next quantum
 }
 
 // Every macro stands at its stored position and the track plays the 7-bit path.
@@ -1147,106 +1164,120 @@ void State::startRamp(int t, int m, uint8_t target, uint16_t quanta) {
   const float to = float(target);
   if (quanta == 0) quanta = rampQ;
   if (!r.inst || m >= r.inst->numMacros || quanta <= kMacroJump) { jumpMacro(t, m, to); return; }
-  const float from = macroPos(r, m);
-  if (from == to) { jumpMacro(t, m, to); return; }
-  if (!r.fine) beginFine(t);
-  if (r.settling) {
-    // Back into motion while blending out: keep what the voice hears, blend the rest away again.
-    r.settling = 0;
-    for (int i = 0; i < kSoundParams + 3; ++i) r.off[i] *= r.blendW;
-    r.blendW = 1.0f;
-    r.blendStep = -settleStep;
+  const float from = macroPos(r, m, qCount);
+  if (from == to) {   // already there: it stops
+    r.mFrom[m] = r.mTo[m] = to;
+    r.moving = uint8_t(r.moving & ~(1u << m));
+    return;
   }
   r.mFrom[m] = from;
   r.mTo[m] = to;
   r.mStart[m] = qCount;
   r.mDur[m] = quanta;
   r.moving = uint8_t(r.moving | (1u << m));
-  r.fineDue = 1;
+  if (!r.fine) {
+    // Into the fractional path, starting from the bytes the voice was playing (r.eff,
+    // as last built): the first interval runs from them, so nothing jumps.
+    for (int i = 0; i < kSoundParams; ++i) r.fA[i] = uint16_t(((r.pHas >> i) & 1u) ? r.eff[i] << 8 : 0);
+    r.fA[kSoundParams + 0] = uint16_t(r.eff[kMixLevel] << 8);
+    r.fA[kSoundParams + 1] = uint16_t(r.eff[kMixDelaySend] << 8);
+    r.fA[kSoundParams + 2] = uint16_t(r.eff[kMixReverbSend] << 8);
+    std::memcpy(r.fB, r.fA, sizeof(r.fA));
+    r.lerp = 0;
+    r.iStart = qCount;
+    r.iLen = 1;
+    r.lerp = 0;
+    r.fMix[0] = r.fMix[1] = r.fMix[2] = -1.0f;   // render() takes the first values
+    r.fine = 1;
+    r.settling = 0;
+    r.anchor = 3;
+    fineTracks = uint8_t(fineTracks | (1u << t));
+  } else if (r.settling) {
+    r.settling = 0;   // back into motion: a new interval from where the values are
+    if (!r.anchor) r.anchor = 1;
+  }
+  // Otherwise (a new target while moving) the interval under way runs on; the next
+  // one follows the new ramp.
 }
 
-// The instrument at the macros' current positions (a macro lock in scope wins),
-// unrounded: the 24 sound params and the combined level, delay and reverb send.
-void State::fineValues(int t, float* sound, float* mix) {
+// The instrument at the macros' positions at quantum q (a macro lock in scope
+// wins), unrounded: v[0..23] the sound params, v[24..26] the combined level,
+// delay and reverb send.
+void State::fineValues(int t, uint32_t q, float* v) {
   TrackRt& r = tr[t];
   float pos[kTrackMacros];
-  for (int m = 0; m < kTrackMacros; ++m) pos[m] = macroPos(r, m) * (1.0f / float(macro::kPosMax));
+  for (int m = 0; m < kTrackMacros; ++m) pos[m] = macroPos(r, m, q) * (1.0f / float(macro::kPosMax));
   if (isMacroLock(r.lockParam) && r.lkValid) pos[r.lockParam - kLockMacro0] = macro::posFromByte(r.lockValue);
   macro::FineRanges fr;
   fr.enumMask = r.fEnum;
   fr.stepMask = r.fStep;
   fr.lo = r.pMin;
   fr.hi = r.pMax;
-  float v[kParamsPerTrack];
-  macro::evaluateFine(*r.inst, fr, pos, r.dDef, v);
-  for (int i = 0; i < kSoundParams; ++i) sound[i] = ((r.pHas >> i) & 1u) ? v[i] : 0.0f;
+  float all[kParamsPerTrack];
+  macro::evaluateFine(*r.inst, fr, pos, r.dDef, all);
+  for (int i = 0; i < kSoundParams; ++i) v[i] = ((r.pHas >> i) & 1u) ? all[i] : 0.0f;
   // The player's mixer rows (a mixer lock replaces its value, as buildEff does).
   uint8_t player[macro::kMixRows];
   std::memcpy(player, proj->tracks[t].params + kMixLevel, macro::kMixRows);
   if (r.lockParam > kMixLevel && r.lockParam <= kMixLevel + macro::kMixRows)
     player[r.lockParam - 1 - kMixLevel] = r.lockValue;
-  macro::combineMixerFine(player, v + kMixLevel, r.dMix, mix);
+  macro::combineMixerFine(player, all + kMixLevel, r.dMix, v + kSoundParams);
 }
 
-// Into the fractional path: the blend starts from the bytes the voice was playing (r.eff).
-void State::beginFine(int t) {
+// What the 7-bit path would play now, as floats in fineValues' layout.
+void State::bytesNow(int t, float* v) {
   TrackRt& r = tr[t];
-  float sound[kSoundParams], mix[3];
-  fineValues(t, sound, mix);
-  for (int i = 0; i < kSoundParams; ++i) r.off[i] = ((r.pHas >> i) & 1u) ? float(r.eff[i]) - sound[i] : 0.0f;
-  r.off[kSoundParams + 0] = float(r.eff[kMixLevel]) - mix[0];
-  r.off[kSoundParams + 1] = float(r.eff[kMixDelaySend]) - mix[1];
-  r.off[kSoundParams + 2] = float(r.eff[kMixReverbSend]) - mix[2];
-  r.blendW = 1.0f;
-  r.blendStep = -settleStep;
-  r.settling = 0;
-  r.fine = 1;
-  r.fineDue = 1;
-  r.fMix[0] = r.fMix[1] = r.fMix[2] = -1.0f;   // render() picks the first values up
-  fineTracks = uint8_t(fineTracks | (1u << t));
+  buildEff(t);
+  for (int i = 0; i < kSoundParams; ++i) v[i] = ((r.pHas >> i) & 1u) ? float(r.eff[i]) : 0.0f;
+  v[kSoundParams + 0] = float(r.eff[kMixLevel]);
+  v[kSoundParams + 1] = float(r.eff[kMixDelaySend]);
+  v[kSoundParams + 2] = float(r.eff[kMixReverbSend]);
 }
 
 void State::exitFine(int t) {
   TrackRt& r = tr[t];
-  r.fine = r.fineDue = r.settling = 0;
+  r.fine = r.anchor = r.settling = 0;
   r.moving = 0;
   r.paramsSent = 0;      // the 7-bit values go out at this quantum's ensureParams
   r.settled = 0;         // and the mixer recomputes its gains from them
   fineTracks = uint8_t(fineTracks & ~(1u << t));
 }
 
-// One control-rate evaluation of a track in the fractional path.
+// One control tick of a track in the fractional path: the values now; when the
+// interval has run out (or after a start, a jump, a lock) a new one from them, to
+// the instrument where the macros will be at its end or, once no macro moves, to
+// the stored bytes over kMacroSettleMs (after which the track leaves the
+// fractional path); then the values to the voice and the mixer.
+// DECISION (enums, semitones): they do not glide between two whole values; they
+// switch to the next interval's value when it begins (so at most one interval,
+// 11.6 ms, from the position where the set switches them).
+// DECISION (drums): a drum voice is fed every kFineEvalQuanta (11.6 ms), not every
+// tick: its continuous parameters move in 11.6 ms steps of a small fraction of a
+// 7-bit value, and its fractional mapping runs from flash at 86 Hz instead of
+// taking IRAM to run at 690 Hz.
 void State::fineEval(int t) {
   TrackRt& r = tr[t];
-  r.fineDue = 0;
   if (!r.inst) { exitFine(t); return; }
-  for (int m = 0; m < kTrackMacros; ++m)
-    if (((r.moving >> m) & 1u) && qCount - r.mStart[m] >= r.mDur[m]) {
-      r.mFrom[m] = r.mTo[m];
-      r.moving = uint8_t(r.moving & ~(1u << m));
+  constexpr int kN = kSoundParams + 3;
+  float cur[kN];
+  const uint32_t e = qCount - r.iStart;
+  const bool done = e >= r.iLen;
+  const float w = done ? 1.0f : float(e) / float(r.iLen);
+  for (int i = 0; i < kN; ++i) {
+    const float a = float(r.fA[i]);
+    if (!((r.lerp >> i) & 1u)) {   // standing still in this interval (most parameters)
+      cur[i] = a * (1.0f / 256.0f);
+      continue;
     }
-  float sound[kSoundParams], mix[3];
-  fineValues(t, sound, mix);
-  if (!r.moving && !r.settling) {
-    // The motion has ended: blend into what the 7-bit path plays here.
-    buildEff(t);
-    for (int i = 0; i < kSoundParams; ++i) r.off[i] = ((r.pHas >> i) & 1u) ? float(r.eff[i]) - sound[i] : 0.0f;
-    r.off[kSoundParams + 0] = float(r.eff[kMixLevel]) - mix[0];
-    r.off[kSoundParams + 1] = float(r.eff[kMixDelaySend]) - mix[1];
-    r.off[kSoundParams + 2] = float(r.eff[kMixReverbSend]) - mix[2];
-    r.settling = 1;
-    r.blendW = 0.0f;
-    r.blendStep = settleStep;
+    const float b = float(r.fB[i]);
+    const bool step = i < kSoundParams && ((r.fStep >> i) & 1u);
+    cur[i] = (step ? (done ? b : a) : a + (b - a) * w) * (1.0f / 256.0f);
   }
-  float w = r.blendW + r.blendStep;
-  if (w <= 0.0f) { w = 0.0f; r.blendStep = 0.0f; }
-  if (r.settling && w >= 1.0f) { exitFine(t); return; }
-  r.blendW = w;
-  if (w != 0.0f) {
-    for (int i = 0; i < kSoundParams; ++i) sound[i] += r.off[i] * w;
-    for (int k = 0; k < 3; ++k) mix[k] += r.off[kSoundParams + k] * w;
-  }
-  if (voice[t]) voice[t]->setParamsFine(sound);
+  const bool fresh = r.anchor || done;
+  if (fresh && !fineInterval(t, cur)) return;
+  const bool feed = fresh || t >= kNumDrumTracks || ((qCount + uint32_t(t)) & uint32_t(kFineEvalQuanta - 1)) == 0;
+  if (voice[t] && feed) voice[t]->setParamsFine(cur);
+  const float* mix = cur + kSoundParams;
   if (mix[0] != r.fMix[0] || mix[1] != r.fMix[1] || mix[2] != r.fMix[2]) {
     r.fMix[0] = mix[0];
     r.fMix[1] = mix[1];
@@ -1255,13 +1286,55 @@ void State::fineEval(int t) {
   }
 }
 
+// A new interval from the values now (cur; replaced by the set's values on a
+// jump). Once per 11.6 ms per moving track: stays in flash (only fineEval's
+// per-tick part is in IRAM). False when the track has left the fractional path.
+__attribute__((noinline)) bool State::fineInterval(int t, float* cur) {
+  TrackRt& r = tr[t];
+  constexpr int kN = kSoundParams + 3;
+  {
+    if (r.settling && !r.anchor) { exitFine(t); return false; }   // arrived at the stored bytes
+    if (r.anchor == 2) fineValues(t, qCount, cur);          // a jump: the values are what the set says now
+    const bool first = r.anchor == 3;                       // the start, from the bytes
+    r.anchor = 0;
+    for (int m = 0; m < kTrackMacros; ++m)
+      if (((r.moving >> m) & 1u) && qCount - r.mStart[m] >= r.mDur[m]) {
+        r.mFrom[m] = r.mTo[m];
+        r.moving = uint8_t(r.moving & ~(1u << m));
+      }
+    // The interval ends on a control tick of this track. Entering and leaving the
+    // fractional path take kMacroSettleMs (from or to the bytes, at most half a
+    // 7-bit value away); in motion an interval is kFineEvalQuanta.
+    uint32_t end = qCount + uint32_t(r.moving && !first ? kFineEvalQuanta : settleQ);
+    end += (uint32_t(kFineQuanta) - ((end + uint32_t(t)) & uint32_t(kFineQuanta - 1))) & uint32_t(kFineQuanta - 1);
+    float to[kN];
+    if (r.moving) {
+      fineValues(t, end, to);
+      r.settling = 0;
+    } else {
+      bytesNow(t, to);
+      r.settling = 1;
+    }
+    auto q8 = [](float x) { return uint16_t(int(clampf(x, 0.0f, 255.0f) * 256.0f + 0.5f)); };
+    r.lerp = 0;
+    for (int i = 0; i < kN; ++i) {
+      r.fA[i] = q8(cur[i]);
+      r.fB[i] = q8(to[i]);
+      if (r.fA[i] != r.fB[i]) r.lerp |= 1u << i;
+    }
+    r.iStart = qCount;
+    r.iLen = uint16_t(end - qCount);
+  }
+  return true;
+}
+
 // Once per quantum while any track is in the fractional path: each such track is
-// evaluated every kFineQuanta quanta (tracks staggered by their index, so two
-// moving tracks do not land in one quantum), or at once after a change.
+// fed every kFineQuanta quanta (tracks staggered by their index, so two moving
+// tracks do not evaluate in one quantum), or at once after a start, jump or lock.
 void State::fineTick() {
   for (int t = 0; t < kNumTracks; ++t) {
     if (!((fineTracks >> t) & 1u)) continue;
-    if (tr[t].fineDue || ((qCount + uint32_t(t)) & uint32_t(kFineQuanta - 1)) == 0) fineEval(t);
+    if (tr[t].anchor || ((qCount + uint32_t(t)) & uint32_t(kFineQuanta - 1)) == 0) fineEval(t);
   }
 }
 
@@ -1375,8 +1448,12 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
   // on the 7-bit path (they jump; the other macros keep moving underneath). Blending
   // out after a motion, the track goes straight to its 7-bit values instead.
   if (r.fine && lockChanged) {
-    if (r.settling) exitFine(t);
-    else fineEval(t);
+    if (r.settling) {
+      exitFine(t);
+    } else {
+      r.anchor = 2;
+      fineEval(t);
+    }
   }
 
   const int ratchets = stepRatchet(st);
@@ -1711,8 +1788,7 @@ void State::render(int16_t* out) {
     // arrived, the gains are exactly last quantum's: skip all of this.
     uint64_t key;
     std::memcpy(&key, r.eff + kMixLevel, sizeof(key));        // bytes 24..31
-    key = (key & 0xFFFFFFFFFFull) | (uint64_t(r.mute ? 1 : 0) << 40) |   // level, pan, dly, rev, duck + mute
-          (uint64_t(r.fine) << 41);                                       // + fractional level / sends
+    key = (key & 0xFFFFFFFFFFull) | (uint64_t(r.mute ? 1 : 0) << 40);   // level, pan, dly, rev, duck + mute
     float endL, endR, endD, endR2;
     bool steady, sends;
     if (r.settled && key == r.mixKey && !(duckMoved && r.eff[kMixDuck] != 0)) {

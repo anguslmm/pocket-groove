@@ -222,7 +222,7 @@ uint32_t evaluateRaw(const MacroSet& set, uint32_t enumMask, const float* positi
 struct FineRanges {
   uint32_t enumMask;                 // as evaluateRaw
   uint32_t stepMask;                 // rounded (jumps): enums | semitone parameters
-  const uint8_t* lo;                 // kParamsPerTrack entries each
+  const uint8_t* lo;                 // the sound params (kSoundParams entries each); the mixer rows are 0..127
   const uint8_t* hi;
 };
 uint32_t evaluateFine(const MacroSet& set, const FineRanges& ranges, const float* positions, const uint8_t* under,

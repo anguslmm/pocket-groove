@@ -90,6 +90,8 @@ class DrumVoice : public Voice {
 };
 
 // ---------------------------------------------------------------------------
+// Macro motion: TUNE, PUNCH, DRIVE, HARM, TONE continuous (also mid-hit);
+// DECAY, SWEEP, HOLD, CLICK, CLICK TONE latched at the next hit.
 class KickVoice final : public DrumVoice {
  public:
   enum Param : uint8_t {
@@ -104,7 +106,8 @@ class KickVoice final : public DrumVoice {
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
   void updateFine(uint32_t changed) override;
-  void setPitch(bool fast = false);
+  template <bool Fast> void setPitchT();   // Fast: no libm (macro motion)
+  void setPitch() { setPitchT<false>(); }
 
   // coefficients
   float tuneHz_ = 50.0f, noteRatio_ = 1.0f, depthBase_ = 4.0f, accentDepth_ = 1.0f;
@@ -121,6 +124,8 @@ class KickVoice final : public DrumVoice {
 };
 
 // ---------------------------------------------------------------------------
+// Macro motion: TUNE, DETUNE, TONE, BEND, SNAPPY, RING, DRIVE continuous (pitch and
+// noise filter also mid-hit); DECAY, BODY DECAY latched at the next hit.
 class SnareVoice final : public DrumVoice {
  public:
   enum Param : uint8_t {
@@ -134,8 +139,10 @@ class SnareVoice final : public DrumVoice {
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
   void updateFine(uint32_t changed) override;
-  void setPitch(bool fast = false);
-  void setFilter(bool fast = false);
+  template <bool Fast> void setPitchT();   // Fast: no libm (macro motion)
+  void setPitch() { setPitchT<false>(); }
+  template <bool Fast> void setFilterT();
+  void setFilter() { setFilterT<false>(); }
 
   float tuneHz_ = 185.0f, ratio_ = 1.75f, noteRatio_ = 1.0f, toneHz_ = 3000.0f, bright_ = 1.0f;
   float eps1_ = 0.02f, eps2_ = 0.04f, bend_ = 0.4f, pitchCoef_ = 0.99f;
@@ -150,6 +157,8 @@ class SnareVoice final : public DrumVoice {
 };
 
 // ---------------------------------------------------------------------------
+// Macro motion: TONE, RESONANCE, AIR, TAIL, DRIVE continuous (the band-pass also
+// mid-hit); DECAY, SPREAD, BURSTS latched at the next hit.
 class ClapVoice final : public DrumVoice {
  public:
   enum Param : uint8_t {
@@ -163,7 +172,8 @@ class ClapVoice final : public DrumVoice {
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
   void updateFine(uint32_t changed) override;
-  void setFilter(bool fast = false);
+  template <bool Fast> void setFilterT();
+  void setFilter() { setFilterT<false>(); }
 
   float toneHz_ = 1150.0f, q_ = 1.6f, noteRatio_ = 1.0f, bright_ = 1.0f;
   float bpGain_ = 1.0f, airGain_ = 0.2f, airAmt_ = 0.3f;
@@ -180,6 +190,8 @@ class ClapVoice final : public DrumVoice {
 // ---------------------------------------------------------------------------
 // One class for both hat tracks; `open` only selects the default values and
 // the range of the decay knob.
+// Macro motion: TUNE, SPREAD, TONE, COLOUR, METAL, SNAP continuous (bank pitch and
+// filter also mid-hit, so an open hat sweeps); DECAY latched at the next hit.
 class HatVoice final : public DrumVoice {
  public:
   enum Param : uint8_t { kTune, kDecay, kTone, kMetal, kColour, kSnap, kSpread, kNumParams };
@@ -192,8 +204,10 @@ class HatVoice final : public DrumVoice {
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
   void updateFine(uint32_t changed) override;
-  void setPitch(bool fast = false);
-  void setFilter(bool fast = false);
+  template <bool Fast> void setPitchT();   // Fast: no libm (macro motion)
+  void setPitch() { setPitchT<false>(); }
+  template <bool Fast> void setFilterT();
+  void setFilter() { setFilterT<false>(); }
 
   bool  open_;
   float noteRatio_ = 1.0f, bright_ = 1.0f;
@@ -208,6 +222,8 @@ class HatVoice final : public DrumVoice {
 };
 
 // ---------------------------------------------------------------------------
+// Macro motion: every parameter latched at the next hit (a change recomputes the
+// whole model with some 15 libm calls: fine per hit, too dear per control tick).
 class PercVoice final : public DrumVoice {
  public:
   enum Param : uint8_t { kModel, kTune, kDecay, kTone, kBend, kHarm, kNoise, kDrive, kNumParams };

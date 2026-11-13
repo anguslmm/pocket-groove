@@ -76,14 +76,15 @@ enum class CmdType : uint8_t {
 // in the command's ramp time (default kMacroRampMs, longer than the gap between
 // the UI's key repeats on the device, so a held key or a stream of tilt values
 // joins into one continuous movement; a new target retargets from wherever the
-// macro is). While any macro of a track moves, every kFineQuanta quanta the
-// engine evaluates the instrument at the current positions without rounding
-// (macro::evaluateFine) and passes the voice fractional parameters
-// (Voice::setParamsFine) and the mixer fractional level and sends. When the
-// movement ends the values blend into the stored bytes (kMacroSettleMs) and the
-// track returns to the 7-bit path, bit for bit what a static project plays; it
-// enters the fractional path the same way (the first kMacroSettleMs blend from
-// the bytes it was playing). Jumps, never ramps: an instrument change (or a
+// macro is). While any macro of a track moves, the engine evaluates the
+// instrument without rounding (macro::evaluateFine) once per kFineEvalQuanta,
+// where the macros will be at the end of that interval, and every kFineQuanta
+// passes the voice fractional parameters interpolated in between
+// (Voice::setParamsFine; drums every kFineEvalQuanta), and the mixer a
+// fractional level and sends. When the movement ends the values run into the
+// stored bytes (kMacroSettleMs) and the track returns to the 7-bit path, bit for
+// bit what a static project plays; it enters the fractional path the same way
+// (the first kMacroSettleMs run from the bytes it was playing). Jumps, never ramps: an instrument change (or a
 // project loaded or edited by any other route), a ramp of 1, a macro lock
 // starting or ending at a step (the note it fires snaps anyway; a note still
 // ringing on a legato slide or another lead voice hears the jump through the
@@ -92,7 +93,7 @@ enum class CmdType : uint8_t {
 // says). CLASSIC tracks and tracks whose macros stand still never leave the
 // 7-bit path.
 constexpr int kMacroRampMs = 72;      // default glide of a SetMacro
-constexpr int kMacroSettleMs = 50;    // blend into / out of the fractional path
+constexpr int kMacroSettleMs = 50;    // run into / out of the fractional path
 constexpr uint16_t kMacroJump = 1;    // ramp: arrive at the next quantum
 
 

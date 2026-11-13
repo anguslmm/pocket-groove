@@ -59,31 +59,33 @@ void HatVoice::resetState() {
   bright_ = 1.0f;
 }
 
-void HatVoice::setPitch(bool fast) {
+template <bool Fast>
+void HatVoice::setPitchT() {
   const float tune = -0.6f + 2.2f * centred(pf_[kTune]);
-  const float base = 205.3f * (fast ? exp2Fast(tune) : powf(2.0f, tune)) * noteRatio_;
+  const float base = 205.3f * (Fast ? exp2Fast(tune) : powf(2.0f, tune)) * noteRatio_;
   const float spread = 0.55f + 0.9f * centred(pf_[kSpread]);
   float density = 0.0f;  // edges per sample = RMS^2 of the differentiated bank
   for (int i = 0; i < 6; ++i) {
-    inc_[i] = phaseInc(base * (fast ? exp2Fast(spread * kLog2Ratio[i]) : powf(kRatio[i], spread)), fs_);
+    inc_[i] = phaseInc(base * (Fast ? exp2Fast(spread * kLog2Ratio[i]) : powf(kRatio[i], spread)), fs_);
     density += float(inc_[i]) * (2.0f / 4294967296.0f);
   }
   // Same loudness whatever the tuning, spread, note or sample rate.
   metalNorm_ = clampf(sqrtf(0.1766f / (density + 1.0e-6f)), 0.3f, 3.0f);
 }
 
-void HatVoice::setFilter(bool fast) {
+template <bool Fast>
+void HatVoice::setFilterT() {
   const float t = unit(pf_[kTone]);
-  const float fc = clampf((fast ? 3000.0f * exp2Fast(2.0f * t) : expMap(t, 3000.0f, 12000.0f)) * bright_, 1000.0f,
+  const float fc = clampf((Fast ? 3000.0f * exp2Fast(2.0f * t) : expMap(t, 3000.0f, 12000.0f)) * bright_, 1000.0f,
                           0.42f * fs_);
   const float c = unit(pf_[kColour]);
-  const float q = fast ? 0.6f * exp2Fast(3.0588937f * c) : expMap(c, 0.6f, 5.0f);
-  if (fast) svf_.setFast(fc, q, fs_);
+  const float q = Fast ? 0.6f * exp2Fast(3.0588937f * c) : expMap(c, 0.6f, 5.0f);
+  if (Fast) svf_.setFast(fc, q, fs_);
   else svf_.set(fc, q, fs_);
   bpMix_ = 0.3f + 0.6f * c;
   // One-pole low-pass a little above the high-pass: the band falls gently
   // towards Nyquist instead of being white (which reads as fizz, not metal).
-  tiltK_ = 1.0f - (fast ? onePoleCoefFast(1.3f * fc, fs_) : onePoleCoef(1.3f * fc, fs_));
+  tiltK_ = 1.0f - (Fast ? onePoleCoefFast(1.3f * fc, fs_) : onePoleCoef(1.3f * fc, fs_));
   // Resonance and cutoff change how much gets through: hold the level steady.
   gainComp_ = sqrtf(1.5f / q) * (1.35f - 0.5f * t);
 }
@@ -108,8 +110,8 @@ void HatVoice::updateCoefs(uint32_t ch) {
 }
 
 void HatVoice::updateFine(uint32_t ch) {
-  if (ch & (bit(kTune) | bit(kSpread))) setPitch(true);
-  if (ch & (bit(kTone) | bit(kColour))) setFilter(true);
+  if (ch & (bit(kTune) | bit(kSpread))) setPitchT<true>();
+  if (ch & (bit(kTone) | bit(kColour))) setFilterT<true>();
   if (ch & bit(kMetal)) {
     const float m = unit(pf_[kMetal]);
     metalAmt_ = 1.3f * m * (1.6f - 0.6f * m);

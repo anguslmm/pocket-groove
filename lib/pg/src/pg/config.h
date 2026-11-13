@@ -35,6 +35,10 @@ constexpr int   kLeadVoices        = 4;
 // track's instrument and hands the voice fractional parameters every this many
 // quanta (64 frames: 1.45 ms at 44.1 kHz, 2 ms at 32 kHz). Power of two.
 constexpr int   kFineQuanta        = 4;
+// ... and evaluates the instrument once per this many quanta (11.6 ms at 44.1 kHz),
+// where the macros will be at the end of that interval; the values in between
+// are interpolated linearly. A multiple of kFineQuanta.
+constexpr int   kFineEvalQuanta    = 32;
 
 // ---- Display --------------------------------------------------------------
 constexpr int kScreenW = 240;
