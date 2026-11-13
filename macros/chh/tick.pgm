@@ -1,0 +1,28 @@
+# TICK -- family: OPPOSITES.
+# Idea: three axes with a plain closed hat in the middle and a usable hat at
+# both ends of each:
+#   DK-BRT  dark: a dull, low, papery tick .. bright: a glassy, high sizzle
+#   SH-LNG  short: a dry click .. long: a loose, half-open chick
+#   SF-HRD  soft: breathy noise, no attack .. hard: metallic, with a sharp tick
+# Feel if it works: you steer a hat line by words while it runs; nothing
+# falls off a cliff at the ends.
+# Try: DK-BRT on X, SH-LNG on Y with 16ths; then SF-HRD for accents.
+voice chh
+name TICK
+
+macro DK-BRT 0.5
+  tone     0:14 0.5:80 1:124
+  tune     0:36 0.5:64 1:92
+  colr     0:84 0.5:56 1:36           # dark: a resonant, papery band
+  lvl      0:94 0.5:92 1:98           # the high-pass at the bright end takes level away
+
+macro SH-LNG 0.5
+  dcy      0:12 0.5:58 1:108
+  snap     0:72 0.5:40 1:22
+  lvl      add 0:6 0.5:0 1:-3          # a click this short needs a lift to be heard
+
+macro SF-HRD 0.5
+  mtl      0:24 0.5:84 1:124
+  snap     add 0:-30 0.5:0 1:44
+  sprd     0:52 0.5:64 1:84
+  lvl      add 0:4 0.5:0 1:-2

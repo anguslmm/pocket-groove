@@ -1,0 +1,43 @@
+# DICE -- family: ODD (stepped, and a macro that only comes alive combined).
+# Idea: nothing here is continuous on purpose. FLAV jumps between five whole
+# bass flavours (every target is stepped); INTV jumps the oscillator to an
+# interval above the note while the sine sub stays on the root, so every note
+# becomes a two-note shape (unison, fifth, octave, minor third, twelfth);
+# GLITCH alone is a faint sample-and-hold flutter, but scaled by FLAV it
+# becomes a stuttering S&H filter and FM/fold scramble on the later flavours.
+#   FLAV 0.0 saw | 0.2 square | 0.4 resonant pulse | 0.6 FM 0.5 (sub-octave
+#   growl) | 0.8 FM 3.5 folded (metallic)
+# The flat stretches between steps are the idea, not dead travel.
+# audit: allow-dead FLAV
+# audit: allow-dead INTV
+# audit: allow-jump FLAV
+# GLITCH is meant to be faint on the first flavours (the audit hears it as
+# dead below 0.75 with FLAV at 0): that is the "boring alone" half of the idea.
+# audit: allow-dead GLITCH
+# Feel if it works: rolling dice; each click is a different instrument, and
+# INTV turns a one-note line into riffs without new notes.
+# Try: FLAV on X, INTV on Y and click around the pad on the beat; then raise
+# GLITCH with FLAV past halfway.
+voice bass
+name DICE
+base cutoff=56 reso=70 envmod=60 decay=42 accent=90 drive=30 sub=70 slide=50 tenv=80 lfoshape=s&h
+
+macro FLAV
+  wave     0:0 0.2:64 0.4:120 0.6:0 step
+  fmix     0:0 0.6:127 step
+  fmratio  0:1 0.6:0.5 0.8:3.5
+  fmdepth  0:40 0.6:104 0.8:96 step
+  fold     0:0 0.8:60 step
+  cutoff   0:56 0.2:62 0.4:44 0.6:82 0.8:84 step
+  reso     0:70 0.2:40 0.4:112 0.6:30 0.8:50 step
+  lvl      0:100 0.2:94 0.4:98 0.6:104 0.8:98 step
+
+macro INTV
+  tune     0:24 0.2:31 0.4:36 0.6:27 0.8:43 step   # 0, +7, +12, +3, +19 semitones; the sub stays put
+  sub      add 0:0 0.2:16 step                     # louder root under the intervals
+
+macro GLITCH
+  lfodepth 0:0 1:30                      # alone: a plain S&H flutter on the filter
+  lfodepth add 0:0 1:70 by FLAV          # with the later flavours: a stutter
+  ltmb     0:0 1:120 by FLAV             # LFO into FM index and fold (only FM / fold flavours)
+  rate     0:1/8 0.5:1/16 0.8:1/16t 1:1/32

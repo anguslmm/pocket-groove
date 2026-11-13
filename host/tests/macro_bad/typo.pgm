@@ -1,0 +1,5 @@
+# A broken set for the macro_audit self-test (host/CMakeLists.txt): it does
+# not parse (no such parameter).
+voice bass
+macro OPEN
+  cutx 0:10 1:100

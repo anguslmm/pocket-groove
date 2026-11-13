@@ -1,0 +1,32 @@
+# BITE -- family: INTERACTION.
+# Idea: BITE means different things depending on PITCH. With PITCH low
+# (a fat, low drum) BITE is distortion: a dirty, compressed thud. With PITCH
+# high (a tight, high drum) BITE is wires and brightness: a crisp, spitting
+# crack. Its targets are scaled "by PITCH" in opposite directions. ROOM opens
+# the reverb and lengthens the wires, and the more BITE, the drier ROOM
+# stays (a driven snare in a big room is mud).
+# Feel if it works: one "harder" move whose flavour follows the drum you are
+# on; the pad has a dirty corner and a crisp corner.
+# Try: PITCH on X, BITE on Y on the backbeat; sweep diagonally.
+voice snare
+name BITE
+base snappy=70 decay=48 tone=66 drive=20 bend=50 ring=56 dtun=50
+
+macro PITCH 0.5
+  tune     0:20 1:104
+  body     0:66 1:30
+  ring     0:44 1:80
+
+macro BITE
+  drive    add 0:0 1:96
+  drive    add 0:0 1:-88 by PITCH    # high drum: hardly any drive ...
+  snappy   add 0:0 1:50 by PITCH     # ... wires instead
+  tone     add 0:0 1:44 by PITCH     # ... and brightness
+  bend     add 0:0 1:50
+  lvl      0:100 1:88                 # drive is louder than its own compensation
+  lvl      add 0:0 1:6 by PITCH       # ... but the crisp end is not
+
+macro ROOM
+  rev      0:0 1:110
+  rev      add 0:0 1:-60 by BITE
+  decay    add 0:0 1:40

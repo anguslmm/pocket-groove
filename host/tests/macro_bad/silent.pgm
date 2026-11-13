@@ -1,0 +1,6 @@
+# A broken set for the macro_audit self-test (host/CMakeLists.txt): at the
+# low end of GONE the track level is 0, so that point is silent.
+voice bass
+name SILENT
+macro GONE 0.5
+  lvl 0:0 1:100

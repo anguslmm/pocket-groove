@@ -1,16 +1,45 @@
-# BOOM: a house kick.
+# BOOM -- family: MATERIAL / BODY.
+# Idea: the macros change what the drum seems to be, not one property each:
+#   SIZE    a small, tight, high kick .. a big, low, long boom (pitch, length,
+#           hold and sweep all scale together, as a bigger drum would)
+#   SKIN    a tight head (fast sweep, crisp click) .. a loose, flappy one
+#           (slow, deep pitch drop, a dull thud of a click)
+#   WD-MTL  wood (a dry knock, soft click, plain body) .. metal (bright clicky
+#           tick, ringing second harmonic, saturated)
+#   FAR     close-miked (bright, clicky, dry) .. across the room (dark, soft,
+#           with the reverb send open)
+# Feel if it works: you choose a drum, not a setting; every corner of SIZE x
+# SKIN is a kick you could have bought.
+# Try: SIZE on X, SKIN on Y, four on the floor; then WD-MTL for character.
 voice kick
 name BOOM
+base lvl=100 drive=26 tone=100 harm=34 cton=56
 
-macro BODY 0.4
-  tune     0:40 1:70
-  decay    0:25 1:85
-  hold     0:10 1:50
-macro SNAP
-  click    0:30 1:110
-  punch    0:50 1:110
-  sweep    0:70 1:30                  # a shorter sweep is snappier
-macro DIRT
-  drive    0:10 1:100
-  tone     0:110 1:70
-  harm     add 0:0 1:40
+macro SIZE 0.45
+  tune     0:84 0.5:56 1:32
+  decay    0:22 0.5:48 1:90
+  hold     0:6 0.5:30 1:56
+  sweep    0:34 0.5:56 1:76
+  punch    0:66 1:84
+  lvl      add 0:2 0.5:0 1:-4    # a long boom carries more energy
+
+macro SKIN 0.35
+  sweep    add 0:-22 0.5:0 1:30
+  punch    add 0:-10 0.5:0 1:34
+  click    0:96 0.5:70 1:36
+  cton     add 0:-20 0.5:0 1:40  # loose: a noisier, duller thwack
+
+macro WD-MTL 0.4
+  harm     0:10 0.4:34 1:96
+  cton     add 0:-24 0.4:0 1:-30  # metal: the short tick
+  click    add 0:-16 0.4:0 1:30
+  drive    add 0:-16 0.4:0 1:44
+  tone     add 0:-20 0.4:0 1:20
+  lvl      add 0:0 0.4:0 1:-4
+
+macro FAR
+  tone     add 0:6 0.4:-30 1:-60
+  click    mul 0:1.1 0.5:0.5 1:0.25
+  punch    mul 0:1 1:0.6            # the attack smears with distance
+  rev      0:0 0.25:34 1:84
+  lvl      add 0:0 1:3

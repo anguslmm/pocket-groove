@@ -53,9 +53,17 @@ Order of work (owner, updated 2026-11-12):
    "by" scaling), and `tools/pg-desktop --lab`: hot-reloaded sets from macros/, sliders and an XY
    pad (standing in for tilt), good/bad marks with a note to lab-notes.txt. The loop: Claude
    writes or edits sets -> the owner `git pull`s (the app picks them up while playing) -> plays,
-   marks -> pastes lab-notes.txt back. Starter sets in macros/ (bass ACID / GROWL, lead STAB, kick
-   BOOM, snare CRACK) only prove the rig; real candidates come in bulk from the owner's marks.
-   Host-verified only (headless: test_desktop_app part 8); not yet run on the owner's Mac.
+   marks -> pastes lab-notes.txt back. Host-verified only (headless: test_desktop_app part 8); not
+   yet run on the owner's Mac.
+   ROUND 1 of candidates (2026-11-13): 24 sets in macros/, every track, each set built on a
+   different family of macro idea (gesture, opposites, journey, morph, material, energy, movement,
+   interaction, odd), listed in macros/INDEX.md with what each family is testing. Written blind
+   but checked by host/tools/macro_audit (renders a phrase over a grid of macro positions; ctest
+   macro_audit fails any silent, clipping or NaN point; docs/MACROLAB.md "Auditing a set"). NEXT:
+   the owner plays and marks them; round 2 keeps the families that score and drops the rest.
+   Found on the way: the engine's delay and reverb returns produce subnormal floats on default
+   settings (one-pole states decaying in silence); harmless on the host so far, not checked on
+   the ESP32-S3.
    Facts found for the redesign (docs/MACROLAB.md, last section; host/tools/zipper_probe):
    parameters are 7-bit (one bass CUT value = 73 cents of cutoff, lead 83). Smoothing: bass
    cutoff CV ~1.2 ms and level-type params ~1.6 ms one-poles, the rest unsmoothed; lead ~5 ms on

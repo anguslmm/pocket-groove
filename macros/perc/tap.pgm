@@ -1,0 +1,33 @@
+# TAP -- family: GESTURE.
+# Idea: a hand drum (the TOM model, tuned up like a conga or bongo) played
+# with gesture-named macros:
+#   HIT    a soft fingertip tap .. a hard open slap: louder harmonics, more
+#          skin noise, drive, a brighter upper mode
+#   PRESS  pressing into the skin while it rings: the pitch rises and
+#          bends, and the ring is damped shorter
+#   LET    letting it ring: long decay, the upper mode sings, a little room
+# Feel if it works: the perc track becomes a drum you play with your
+# fingers; PRESS on the pad while a roll runs feels like a talking drum.
+# Try: HIT on X, PRESS on Y on a 16th pattern with accents.
+voice perc
+name TAP
+base modl=tom tune=78 decay=48 tone=50 bend=24 harm=64 noise=30 drive=24
+
+macro HIT 0.35
+  noise    0:10 1:96
+  tone     0:28 1:96
+  drive    0:8 1:78
+  decay    add 0:6 1:-12
+  lvl      0:104 1:94
+
+macro PRESS
+  tune     add 0:0 1:34
+  bend     add 0:0 1:70
+  decay    mul 0:1 1:0.5
+  harm     add 0:0 1:16
+
+macro LET
+  decay    add 0:0 1:60
+  tone     add 0:0 1:24
+  rev      0:30 1:96
+  lvl      add 0:0 1:-3

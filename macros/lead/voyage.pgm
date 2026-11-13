@@ -1,0 +1,42 @@
+# VOYAGE -- family: JOURNEY.
+# Idea: TRIP is a road through five leads. Osc 1's wave and the filter type
+# are enums and can only jump, so every wave jump sits where osc 2 (a sine an
+# octave up) swells in and covers it: the oscillator mix rises to a peak at
+# each jump and falls back at each station (the last jump, at 0.875, is not
+# covered: a curve has at most 8 points).
+#   0.00 FLUTE   triangle, soft and breathy, sine on top
+#   0.25 LEAD    saw lead, resonant low-pass, snappy envelope
+#   0.50 HOLLOW  narrow pulse through a band-pass, nasal
+#   0.75 SUPER   supersaw, open and wide
+#   1.00 METAL   FM 2 through a high-pass, thin and glassy
+# GRIT and SPACE are spice for any station.
+# audit: allow-jump TRIP
+# Feel if it works: you travel between instruments while a line plays and the
+# trip itself is music; the in-between places are not broken.
+# Try: TRIP on X, GRIT on Y; hold a chord and walk TRIP from 0 to 1 over
+# eight bars.
+voice lead
+name VOYAGE
+base env=34 osc2=sine intv=36 det=40 attack=4 decay=80 release=46 fatk=0 fdcy=56 ktrk=64 vib=10 lfo=96 glide=50
+
+macro TRIP
+  wave     0:tri 0.125:saw 0.375:puls 0.625:supr 0.875:fm2
+  flt      0:lp 0.44:bp 0.6:lp 0.875:hp       # band-pass only where the cutoff is down near the notes
+  mix      0:40 0.125:105 0.25:50 0.375:105 0.5:30 0.625:105 0.75:40 1:20 smooth
+  cutoff   0:62 0.25:92 0.5:40 0.75:100 0.875:54 1:60 smooth   # a band-pass is loud only near the notes
+  reso     0:10 0.25:42 0.5:26 0.75:20 1:56 smooth      # ... and with a wide band
+  lvl      0:102 0.25:100 0.375:116 0.5:122 0.625:104 0.75:100 0.875:116 1:110 smooth   # BP and HP lose level
+  shape    0:0 0.25:20 0.5:84 0.75:84 1:96 smooth
+  sus      0:96 0.25:72 0.5:40 0.75:84 1:30 smooth
+
+macro GRIT
+  drive    0:0 1:100
+  reso     add 0:0 1:20
+  env      add 0:0 1:20
+  lvl      add 0:0 1:-8
+
+macro SPACE
+  dly      0:10 1:90
+  rev      0:24 1:100
+  release  add 0:0 1:40
+  cutoff   add 0:0 1:-10      # far away is a little darker
