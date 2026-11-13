@@ -521,8 +521,10 @@ void Ui::boot(uint32_t nowMs) {
   if (st != Status::Ok) demo::build(*eng_, *proj_, 0);   // first boot or a bad session: the demo
   eng_->sanitizeProject(*proj_);
   eng_->resume();
-  resetForProject(kTrackBass);                          // stopped, BASS selected, focus BASS CUT (14.2)
-  focus_ = ValueRef{false, kTrackBass, 0};
+  // Stopped, BASS selected, the focus on its macro 1 (UX.md 14.2): in the demo
+  // ACID's OPEN, which pattern 1 leaves to the player while BITE moves by
+  // itself; on a CLASSIC bass (an old session) its CUT, as before instruments.
+  resetForProject(kTrackBass);
   if (st == Status::Ok) {
     if (!name[0] && io::isValidName(proj_->name)) copyName(name, proj_->name);
     afterProjectChange(mount, name, wasDirty);

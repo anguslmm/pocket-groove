@@ -1,0 +1,16 @@
+# The real first power-on: no session file, so the ROM demo ACIDJAM loads, as on a
+# new device (docs/ux/first-boot.png, first-play.png, first-sound.png; docs/UX.md 14, 15).
+# Not the mockup project the other scripts use: these show the factory demo itself.
+dev 0
+empty
+boot
+wait 100
+shot first-boot
+# SPACE dismisses the banner and plays P1: the acid line, BITE moving by itself
+tap spc
+wait 2600
+shot first-play
+# SOUND on the bass: ACID, OPEN focused (the player's), BITE's slider moving with the notes
+tap 9
+wait 1900
+shot first-sound

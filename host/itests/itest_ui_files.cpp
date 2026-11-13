@@ -332,6 +332,8 @@ static void testNewProject() {
 
 static void testSessionAndBoot() {
   // first boot: no files -> ROM demo 0, banner, the first key dismisses it AND acts
+  // (as on the device: no developer mode)
+  R->devMode = false;
   R->start(false);
   R->fs = pgtest::MemFs();
   R->boot();
@@ -339,11 +341,22 @@ static void testSessionAndBoot() {
   CHECK_EQ(R->ui.projectMount(), kPmRom);
   CHECK(std::strcmp(R->ui.projectName(), demo::name(0)) == 0);
   CHECK_EQ(R->ui.selTrack(), kTrackBass);
-  CHECK(!R->ui.focus().global && R->ui.focus().track == kTrackBass && R->ui.focus().index == 0);
+  // the demo's bass is an instrument (ACID); the focus is its macro 1 (OPEN), never a bare parameter
+  const macro::MacroSet* bassSet = macro::findBuiltin(instrumentId(R->proj->tracks[kTrackBass]));
+  CHECK(bassSet != nullptr && std::strcmp(bassSet->name, "ACID") == 0);
+  CHECK(!R->ui.focus().global && R->ui.focus().track == kTrackBass && R->ui.focus().index == kMacroIndex0);
   tap("spc");
   R->run(50);
   CHECK(!R->ui.bannerVisible());
   CHECK(R->eng.status().playing);
+  {
+    // pattern 1 moves the bass's BITE (macro 2) by itself, OPEN (macro 1) stays the player's
+    const EngineStatus a = R->eng.status();
+    CHECK((a.motion[kTrackBass] & 2) != 0 && (a.motion[kTrackBass] & 1) == 0);
+    R->run(1000);
+    const EngineStatus b = R->eng.status();
+    CHECK(a.macroPos[kTrackBass][1] != b.macroPos[kTrackBass][1]);
+  }
   // edits while playing are never autosaved, even after 12 s idle
   tap("1");
   R->fs.arm();
@@ -386,6 +399,7 @@ static void testSessionAndBoot() {
   R->env.batteryPct = 80;
   // saveSessionNow for the firmware's power-off path
   CHECK(R->ui.saveSessionNow());
+  R->devMode = true;
 }
 
 static int row(const char* tag, const char* name) {
