@@ -155,7 +155,7 @@ The key-map images are the designer's diagrams; the tables are the implemented b
 | `/` | Hold: key map of this view. Tap: explain mode. |
 | `space` | Play / stop. Play always starts at step 1. |
 | `fn` `shift` `ctrl` `opt` `alt` | Modifiers: hold one and press another key (4.9). |
-| G0 (side button) | Not used by the instrument; the firmware uses it for volume and diagnostics (chapter 16). |
+| G0 (side button) | Hold and tilt the device: the selected track's two tilt macros move with it, from any view (4.4, "Tilt"). Hold + `-`/`=`: headphone volume; two taps: diagnostics (chapter 16). |
 
 ### 4.2 STEP EDIT (a step held in GROOVE)
 
@@ -240,6 +240,24 @@ While it plays, the sliders of macros with motion move by themselves and a white
 ![BITE live in a recording pass](ux/motion-live.png)
 
 **Clearing**: hold `del` and tap one of a macro's keys: that macro's values leave every note of the track in this pattern (`ctrl`+`z` brings them back). To clear one note's value, hold the step and press `del`. When you stop, the sound rests where the motion left it until you move the macro; the page shows the base positions.
+
+#### Tilt
+
+![Tilting the bass: OPEN right, BITE away](ux/tilt-held.png)
+
+Hold **G0** (the small button on the top edge) and tilt the device. Roll it to the right (right side down) and the instrument's X macro goes up, to the left and it goes down; tip the far edge away from you and the Y macro goes up, toward you and it goes down. The angle you held it at when you pressed is the middle, so it works lying on the table or held up in front of you. Let go and the macros glide back to where they were. A comfortable wrist tilt, about 30 degrees, takes a macro from the middle to either end.
+
+Which two macros move is the instrument's choice: usually the first two (OPEN and BITE on ACID), sometimes another pair (VOYAGE: GRIT and SPACE), or only one where the others would just click between settings (DICE: GLITCH). On the instrument page a small arrow beside a macro's name shows it: `↔` for rolling, `↕` for tipping; the arrows light while you hold G0, and the handles move with your hand while the white ticks stay at the macros' positions. Each instrument also chooses how its tilt responds: quick and twitchy, smooth (most), steady for fine moves, or slow and wide.
+
+Tilt never changes your sound for good: the macros' positions, your notes and the saved project are untouched, and letting go brings back exactly what was there (a pattern with motion keeps playing its motion, with your tilt on top). It works from every view; outside the instrument page the status bar shows `TILT` and a dot for how far you are tilting.
+
+![Tilting from GROOVE](ux/tilt-groove.png)
+
+- A quick tap on G0 never moves anything (the double tap still opens the diagnostics strip).
+- G0 + `-`/`=` still sets the headphone volume; pressing one of them ends the tilt for that hold.
+- **Recording**: with REC on while playing, tilt and the notes that start while you hold G0 take what you hear (the macro's name and handle turn red); letting go of G0 ends it. `ctrl`+`z` takes back the pass. Just holding G0 without tilting records nothing.
+- On a CLASSIC track tilt does nothing (a short message says so).
+- On the desktop app (no tilt sensor) hold G0 (F1 or Esc) and move the mouse instead: right is rolling right, up is tipping away.
 
 ### 4.5 MIX (`0`)
 
@@ -650,6 +668,8 @@ Globals (everything in FX except the DUCK amounts) can't be locked. A bass note 
 
 **Bass sweep.** `shift`+`[`/`]` sweeps the bass's macro 1 the same way (OPEN on ACID, the instrument a new project starts with), from any view; `shift`+both returns it to where you started. On a CLASSIC bass (the factory demos) it sweeps the cutoff, as before instruments; steps with a CUT lock ignore it (in the demos most bass steps have one: see chapter 9). While the playing pattern gives macro 1 notes their own values, the sweep moves only its base.
 
+**Tilt.** Hold G0 and tilt: the selected track's two tilt macros move with your hand and glide back when you let go, from any view (4.4, "Tilt"). With REC on it records into the notes like moving the macro keys.
+
 **Erase.** Hold `del` in GROOVE while playing: the selected track's steps are cleared as the playhead passes. `ERASE` shows in the footer. `ctrl`+`z` brings them back.
 
 **Tempo and swing.** Hold `tab`: `-`/`=` tempo, `;`/`.` swing. Tap `tab` three or more times for tap tempo. Swing delays every second sixteenth: 54-58 % for house.
@@ -820,7 +840,7 @@ The gestures in this chapter are handled by the device firmware (`src/app`), whi
 
 **Headphone volume (G0 + `-`/`=`).** Hold G0 (the small button on the top edge) and tap `=` or `-`: the codec's output volume moves 2 dB per tap, shown as `CODEC VOLUME -39.5 DB` with a bar (amber from -7.5 dB up). The default is -39.5 dB; the maximum is 0 dB, the loudest clean setting. It's remembered (saved 2 s after the last change, while stopped), but at power-on it's limited to -12 dB in case you've switched from the speaker to earbuds. This is separate from VOL in FX > MASTER, which is a digital level inside the mix. With headphones plugged in, the built-in speaker is muted by hardware.
 
-**Diagnostics strip (G0 double-tap).** Two quick taps on G0 show three lines at the bottom of the screen; two more hide them.
+**Diagnostics strip (G0 double-tap).** Two quick taps on G0 show three lines at the bottom of the screen; two more hide them. (A tap never tilts: tilt starts when G0 is held a little longer, 4.4 "Tilt". The volume keys end a tilt for the rest of that hold.)
 
 | Line | Shows |
 |---|---|
