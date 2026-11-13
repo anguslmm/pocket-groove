@@ -123,6 +123,22 @@ Order of work (owner, updated 2026-11-12):
    the IRAM placement is unchanged (85 / 84 functions, its checks OK). Note (fixed 2026-11-13 in tools/pio_audio_ram.py): an incremental pio
    build after editing lib/pg can trip the placement check (an object not recompiled); clean
    the env (`pio run -e ENV -t clean`) and build again.
+   STAGE E (first pass) DONE (2026-11-13, branch of the instrument-page worktree): THE PAGE HAS A
+   PICTURE. SOUND shows a live oscilloscope of the selected track's own voice (engine scope tap:
+   engine.h "SCOPE TAP", a 256-float ring, box-averaged decimation, single writer / reader, off
+   unless the page is shown; UI side lib/pg/src/pg/ui/scope.*: synth windows of 2-3 periods of
+   the last note, triggered at a rising crossing matched to the previous frame, drums from the
+   hit's note-on, slow auto-gain, settles to a calm line), the macros as four horizontal sliders
+   in a 2 x 2 block (key caps at the ends, end words, default notch, enum-jump ticks, focused /
+   moving / locked states), a player's `about "..."` line per set (new .pgm statement, 24 lines
+   written; the header comment stays the lab's), the list as a compact column over the picture,
+   CLASSIC with the picture and two pick cards. Frames where only the picture moved push only its
+   band (rows 37..72). Audio unchanged (itest_golden; itest_scope renders a demo with the tap on
+   and off: bit-identical). Host-verified only (itest_scope, itest_ui_instrument, screenshots in
+   docs/ux/instrument*.png); not seen on the real panel. Firmware: both envs warning-free; static
+   RAM +1424 B (USB 228212 -> 229636, jack 227668 -> 229092: ring 1 KB, tap state, the UI's
+   scope state); flash +9.3 KB (1085859 -> 1095187, 1023283 -> 1032703); IRAM placement
+   unchanged (85 / 84 functions, checks OK).
    LATER STAGES (not built, not designed out): (B) finer-than-7-bit, smoothed parameter motion
    for what macros sweep (MACROLAB.md "What a moving parameter sounds like"), cheap per-quantum
    updates in the drums; (C) "motion": per-note values of all four macros with glide (see

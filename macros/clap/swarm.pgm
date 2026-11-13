@@ -16,6 +16,7 @@
 # Try: PITCH on X, RING on Y: set RING high, then click along X in time.
 voice clap
 name SWARM
+about "Count the hands, play the pitch."
 base tone=60 res=40 decay=50 tail=60 air=40 drive=26
 
 macro PITCH 0.4

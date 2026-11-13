@@ -205,12 +205,16 @@ Everything else works as in GROOVE (pads select and play, `;` `.` octave, `l` ch
 
 ![The bass's instrument POLES](ux/instrument-labels.png)
 
-The page shows the selected track's instrument: its name, a line about it, and its macros as four large controls. Each control sits above its own pair of keys on the bottom row, down on the left, up on the right: `z` `x` macro 1, `c` `v` macro 2, `b` `n` macro 3, `m` `,` macro 4. Words at the ends of a control (DARK / BRIGHT) say what each end does.
+The page shows the selected track's instrument: its name, a line about it, a live picture of its sound and its four macros. The picture is the track's own voice as an oscilloscope draws it: a held note stands still, a filter sweep reshapes it as you move, a drum hit draws its shape and decay from the left; it settles to a calm line when the track is silent.
+
+The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `v` macro 2), the right hand's on the right (`b` `n` macro 3, `m` `,` macro 4). Each slider has its two keys at its ends: the left key moves it toward the left end, the right key toward the right. Words at the ends (DARK / BRIGHT) say what each end does. A small notch under a slider marks the instrument's default; ticks above it mark where the sound switches in a jump (a new wave, another filter) instead of moving smoothly. The macro you moved last has its name in the track colour; a macro you are moving right now turns white, with its key lit.
+
+![Moving TONE and LENGTH at once](ux/instrument-moving.png)
 
 | Key | Action |
 |---|---|
 | `z` `x` `c` `v` `b` `n` `m` `,` | Move a macro down / up. Tap = a small step, hold = sweep (it speeds up), `shift` = big steps. Both keys of a pair = the instrument's default. Two macros can move at once: hold a key of each. The macro you moved is the focus, so `-`/`=` keep moving it from any view. |
-| `.`, `9` again | Next instrument for this track: you hear it at once, a list shows where you are. |
+| `.`, `9` again | Next instrument for this track: you hear it at once, a short list at the picture's right shows where you are (`2/5`). |
 | `;` | Previous instrument. |
 | `ctrl`+`z` | Right after changing instruments: back to what the track had (a run of `.` `.` `.` is one step back), again: forward. |
 | `-` `=` | The focused macro. |
@@ -218,7 +222,7 @@ The page shows the selected track's instrument: its name, a line about it, and i
 | steps | Tap toggles a step (the strip at the bottom shows them). Hold + a macro key (or `-`/`=`) = lock that macro on that step (chapter 10); `del` removes the lock. |
 | `'` | Which 16 steps the strip shows. |
 
-A track with no instrument shows **CLASSIC**: it plays its classic sound (the demos, older projects), and `.` or `9` picks its first instrument, `;` its last. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
+A track with no instrument shows **CLASSIC**: it plays its classic sound (the demos, older projects), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
 ### 4.5 MIX (`0`)
 
@@ -596,11 +600,11 @@ A lock gives one step its own value for one macro of the track's instrument (or 
 
 1. Go to the view (SOUND: the instrument page; MIX: choose the row; FX DUCK tab: a pad for its DUCK amount).
 2. Hold the step key. The header turns amber (`◆LOCK`).
-3. SOUND: press the macro's key (or `-`/`=` for the focused one). The lock starts from the macro's current position; both keys of the pair lock its default. The control turns amber and a white tick marks the unlocked position. MIX: `-`/`=`.
+3. SOUND: press the macro's key (or `-`/`=` for the focused one). The lock starts from the macro's current position; both keys of the pair lock its default. The slider's name and handle turn amber and a white tick marks the unlocked position. MIX: `-`/`=`.
 4. While still holding, moving another macro replaces the lock (toast `LOCK BITE REPLACES OPEN`).
 5. Release the step.
 
-![Locking the bass's OPEN on step 4](ux/instrument-lock.png)
+![Locking the bass's TONE on step 3](ux/instrument-lock.png)
 
 On a CLASSIC track the locks are of bare parameters, as before instruments (developer mode); on a track with an instrument such a lock is kept but ignored, and the step edit's LOCK field shows it as `OFF`.
 

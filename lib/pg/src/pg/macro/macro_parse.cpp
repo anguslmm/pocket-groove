@@ -121,7 +121,7 @@ struct Parser {
   ParseError* err;
   Warnings* warn;
   int line = 0;
-  bool haveVoice = false, haveName = false;
+  bool haveVoice = false, haveName = false, haveTagline = false;
   int cur = -1;   // macro being filled
   // resolved at the end of the file (forward references allowed)
   char tBy[kMaxTargets][kMacroNameLen + 1];
@@ -231,8 +231,15 @@ struct Parser {
       haveVoice = true;
       return true;
     }
+    if (ieq(kw, "about")) {
+      if (haveTagline) return fail("'about' given twice");
+      if (n != 2 || !isString(w[1])) return fail("write 'about \"ONE SHORT SENTENCE\"' (up to 38 characters)");
+      haveTagline = true;
+      static_assert(kTaglineLen == 38, "the message above");
+      return str(w[1], set->tagline, kTaglineLen, "the about line");
+    }
     for (int i = 1; i < n; ++i)
-      if (isString(w[i]) && !ieq(kw, "macro")) return fail("'%s': only a 'macro' line takes strings", w[i] + 1);
+      if (isString(w[i]) && !ieq(kw, "macro")) return fail("'%s': only a 'macro' or 'about' line takes strings", w[i] + 1);
     if (ieq(kw, "voice")) return fail("'voice' given twice");
     if (ieq(kw, "name")) {
       if (haveName) return fail("'name' given twice");
@@ -669,6 +676,7 @@ bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out
   };
   tail(out->name, sizeof(out->name));
   tail(out->about, sizeof(out->about));
+  tail(out->tagline, sizeof(out->tagline));
   for (Macro& m : out->macros) {
     tail(m.name, sizeof(m.name));
     tail(m.lo, sizeof(m.lo));
@@ -765,6 +773,12 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
   if (set.name[0]) {
     o.put("name ");
     o.put(set.name);
+    o.nl();
+  }
+  if (set.tagline[0]) {
+    o.put("about \"");
+    o.put(set.tagline);
+    o.put("\"");
     o.nl();
   }
   if (set.baseMask) {

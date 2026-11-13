@@ -20,6 +20,7 @@
 # the middle.
 voice lead
 name SWAP
+about "Six leads, six intervals. Click!"
 base osc2=saw det=30 flt=lp ktrk=64 attack=0 release=40 lfoshape=0 vib=0 lcut=0 lfo=80 fdcy=58 fatk=0
 
 macro FLAV

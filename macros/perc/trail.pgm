@@ -22,6 +22,7 @@
 # a very slow sweep under a long tom will step. Between hits it is clean.
 voice perc
 name TRAIL
+about "Tom, rim, cowbell, clave, zap."
 base tone=64 harm=64 noise=48 drive=28 bend=40
 
 macro TRAIL 0.25

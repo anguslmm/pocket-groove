@@ -10,6 +10,7 @@
 # Try: WD-MTL on X, SIZE on Y on the backbeat; LOOSE for a dubby drop.
 voice snare
 name WOOD
+about "Wood or metal, piccolo or field."
 base snappy=60 drive=20 decay=50
 
 macro WD-MTL 0.35 "WOOD" "METAL"

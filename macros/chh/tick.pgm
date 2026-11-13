@@ -9,6 +9,7 @@
 # Try: DK-BRT on X, SH-LNG on Y with 16ths; then SF-HRD for accents.
 voice chh
 name TICK
+about "Dark or bright, short or long."
 
 macro DK-BRT 0.5 "DARK" "BRIGHT"
   tone     0:14 0.5:80 1:124

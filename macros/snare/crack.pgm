@@ -11,6 +11,7 @@
 # Try: PITCH on X, WIRES on Y, backbeat on 2 and 4; then TOUCH for the fill.
 voice snare
 name CRACK
+about "A 909-ish snare. Pitch it, rattle it."
 base body=52
 
 macro PITCH 0.5 "LOW" "HIGH" "low fat body .. high piccolo crack"

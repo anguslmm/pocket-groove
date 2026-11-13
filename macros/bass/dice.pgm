@@ -20,6 +20,7 @@
 # GLITCH with FLAV past halfway.
 voice bass
 name DICE
+about "Roll for a flavour and an interval."
 base cutoff=56 reso=70 envmod=60 decay=42 accent=90 drive=30 sub=70 slide=50 tenv=80 lfoshape=s&h
 
 macro FLAV

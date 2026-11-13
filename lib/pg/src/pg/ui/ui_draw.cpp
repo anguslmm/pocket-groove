@@ -603,10 +603,11 @@ void miniStrip(Gfx& g, const Ui& ui, int y, int track, int page, int play, int h
 }  // namespace
 
 // ---- the instrument page (UX.md 10.3) -----------------------------------------------
-// Header: track chip, the instrument's name (L), its place in the list; the about
-// line; four macro columns of 60 px, each above its key pair (z x | c v | b n | m ,):
-// name, high label, a 44x30 bar, low label, value with the two keys either side.
-// CLASSIC (no instrument) and an unknown id get a page that invites a choice.
+// Header: track chip, the instrument's name (L), its place in the list; the player's
+// about line; the picture (a live scope of the track's voice, kScopeY0..kScopeY1);
+// the four macros as horizontal sliders in a 2 x 2 grid, the left hand's pairs
+// (z x, c v) on the left, the right hand's (b n, m ,) on the right. CLASSIC (no
+// instrument) and an unknown id keep the picture and invite a choice below it.
 namespace {
 void fitText(char* out, const char* in, int maxChars) {
   int n = 0;
@@ -614,7 +615,95 @@ void fitText(char* out, const char* in, int maxChars) {
   if (in[n] && n >= 2) { out[n - 2] = '.'; out[n - 1] = '.'; }
   out[n] = 0;
 }
+
+constexpr int kCellW = 112;                    // one macro's cell
+constexpr int kCellX[2] = {4, 124};
+constexpr int kLabelY[2] = {75, 104};          // the top row's labels sit above its slider,
+constexpr int kSliderY[2] = {84, 94};          // the bottom row's below: the two sliders meet in the middle
 }  // namespace
+
+bool Ui::scopeShown() const {
+  return view_ == View::Sound && instrumentPage() && !helpVisible();
+}
+
+// Something drawn over the picture's band: a partial redraw would erase it.
+bool Ui::scopeCovered() const {
+  return overlay_ != Overlay::None || dialog_ != Dialog::None || popUntil_ || toastUntil_ || listUntil_ || banner_;
+}
+
+// Enum jump ticks of the shown instrument's macros: each macro's are recomputed
+// (one macro per frame: 201 evaluations) when the other macros have moved.
+void Ui::refreshJumps() {
+  const macro::MacroSet* s = instrumentOf(sel_);
+  if (!s) return;
+  if (s->id != tickId_ || sel_ != tickTrack_) {
+    tickId_ = s->id;
+    tickTrack_ = sel_;
+    tickValid_ = 0;
+  }
+  uint8_t pos[kTrackMacros];
+  for (int m = 0; m < kTrackMacros; ++m) pos[m] = uint8_t(macroValue(sel_, m));
+  for (int m = 0; m < s->numMacros; ++m) {
+    bool same = (tickValid_ >> m) & 1;
+    for (int o = 0; o < kTrackMacros && same; ++o)
+      if (o != m && tickKey_[m][o] != pos[o]) same = false;
+    if (same) continue;
+    macro::ParamTable pt;
+    std::memset(&pt, 0, sizeof(pt));
+    uint8_t under[kParamsPerTrack];
+    for (int i = 0; i < kParamsPerTrack; ++i) {
+      pt.info[s->track][i] = eng_->trackParamInfo(s->track, i);
+      under[i] = pt.info[s->track][i] ? pt.info[s->track][i]->def : 0;
+    }
+    float fpos[kTrackMacros], at[16];
+    uint8_t par[16];
+    for (int o = 0; o < kTrackMacros; ++o) fpos[o] = macro::posFromByte(pos[o]);
+    const int n = macro::enumJumps(*s, pt, m, fpos, under, at, par, 16);
+    int k = 0;
+    for (int j = 0; j < n && k < kMaxTicks; ++j) {
+      const uint8_t b = macro::posToByte(at[j]);
+      if (k && b - tickPos_[m][k - 1] < 4) continue;   // two parameters jumping together: one tick
+      tickPos_[m][k++] = b;
+    }
+    tickN_[m] = uint8_t(k);
+    for (int o = 0; o < kTrackMacros; ++o) tickKey_[m][o] = pos[o];
+    tickValid_ |= uint8_t(1u << m);
+    ++serial_;
+    return;   // one per frame
+  }
+}
+
+// The picture: the box, a centre line, the trace filled toward the centre (track
+// dim) with its edge in the track colour. Silence: the calm centre line.
+void Ui::drawScope(Framebuffer& fb) {
+  Gfx g(fb);
+  const int t = sel_;
+  const int x0 = kScopeX0, y0 = kScopeY0, h = kScopeY1 - kScopeY0 + 1, w = Scope::kCols;
+  const int cy = y0 + h / 2;
+  const float half = float(h / 2 - 2);
+  g.rect(x0 - 4, y0, w + 8, h, BG);
+  g.rrect(x0, y0, w, h, PANEL);
+  const bool muted = this->muted(t);
+  const uint8_t edge = muted ? tc(t, kMid) : tc(t);
+  const uint8_t body = muted ? tc(t, kTint) : tc(t, kDim);
+  const float lv = scope_.track() == t ? scope_.level() : 0.0f;
+  const int8_t* tr = scope_.trace();
+  const int filled = scope_.track() == t ? scope_.filled() : 0;
+  for (int c = 0; c < w; c += 4) g.pixel(x0 + c, cy, RAISED);
+  if (lv <= 0.0f || filled <= 0) {
+    g.rect(x0 + 2, cy, w - 4, 1, tc(t, kMid));
+    return;
+  }
+  int prev = cy - int(float(tr[0]) * (1.0f / 127.0f) * lv * half);
+  for (int c = 0; c < w; ++c) {
+    const int yy = c < filled ? cy - int(float(tr[c]) * (1.0f / 127.0f) * lv * half) : cy;
+    if (yy < cy) g.rect(x0 + c, yy, 1, cy - yy, body);
+    else if (yy > cy) g.rect(x0 + c, cy + 1, 1, yy - cy, body);
+    const int a = prev < yy ? prev : yy, b = prev < yy ? yy : prev;
+    g.rect(x0 + c, a, 1, b - a + 1, edge);
+    prev = yy;
+  }
+}
 
 void Ui::drawInstrument(Framebuffer& fb) {
   Gfx g(fb);
@@ -627,27 +716,27 @@ void Ui::drawInstrument(Framebuffer& fb) {
   int x = g.chip(4, 14, kTrackNames[t], col);
   const int n = macro::instrumentCount(t);
   if (!s) {
+    // CLASSIC (or an id this firmware lacks): the same picture, and two ways in
     const uint16_t id = instrumentIdOf(t);
     g.text(x + 6, 13, id ? "UNKNOWN" : "CLASSIC", id ? AMBER : TEXT, 2);
-    g.text(4, 32, id ? "AN INSTRUMENT THIS FIRMWARE LACKS:" : "THIS TRACK PLAYS ITS CLASSIC SOUND,", TEXT);
-    g.text(4, 41, id ? "IT PLAYS THE SOUND IT WAS SAVED WITH." : "AS IN A DEMO OR AN OLDER PROJECT.", DIM);
-    // the invitation: what . and ; would pick
-    g.rrect(4, 53, 232, 49, PANEL);
-    g.rframe(4, 53, 232, 49, col);
-    g.text(10, 57, "PICK AN INSTRUMENT", WHITE);
-    cat(catInt(buf, n), " FOR THIS TRACK");
-    g.textR(230, 57, buf, DIM);
+    g.text(4, 27, id ? "NOT IN THIS FIRMWARE: PLAYS AS SAVED." : "PLAYS ITS OWN SAVED SOUND.", TEXT);
+    drawScope(fb);
+    g.text(4, 76, "PICK AN INSTRUMENT", WHITE);
+    catInt(buf, n);
+    cat(cat(buf + std::strlen(buf), " FOR "), kTrackNames[t]);
+    g.textR(235, 76, buf, DIM);
     const macro::MacroSet* first = macro::instrumentAt(t, 0);
     const macro::MacroSet* last = macro::instrumentAt(t, n - 1);
-    x = g.chip(10, 69, ".", WHITE);
-    x = g.text(x + 3, 70, "OR", DIM);
-    x = g.chip(x + 3, 69, "9", WHITE);
-    x = g.text(x + 4, 70, "NEXT:", DIM);
-    g.text(x + 4, 70, first ? first->name : "-", col);
-    x = g.chip(10, 81, ";", WHITE);
-    x = g.text(x + 4, 82, "PREVIOUS:", DIM);
-    g.text(x + 4, 82, last ? last->name : "-", col);
-    g.text(10, 91, "CTRL+Z RIGHT AFTER: BACK TO THIS", DIM);
+    for (int c = 0; c < 2; ++c) {   // . or 9: the first one; ;: the last one
+      const int cx0 = kCellX[c], cy0 = 86;
+      g.rrect(cx0, cy0, kCellW, 18, PANEL);
+      g.rframe(cx0, cy0, kCellW, 18, tc(t, kMid));
+      int kx = g.chip(cx0 + 4, cy0 + 5, c ? ";" : ".", WHITE);
+      if (!c) kx = g.chip(kx + 2, cy0 + 5, "9", WHITE);
+      const macro::MacroSet* pick = c ? last : first;
+      g.text(kx + 5, cy0 + 2, pick ? pick->name : "-", col, 2);
+    }
+    g.text(4, 106, "CTRL+Z RIGHT AFTER = BACK TO THIS", DIM);
     miniStrip(g, *this, 114, t, shownPage_, playStep(t), held ? heldStep_ : -1);
     g.text(4, 127, "THEN Z-, MOVE ITS MACROS", DIM);
     footerRight(g, "/ HELP", DIM);
@@ -663,54 +752,73 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const int ex = g.text(sx, 15, buf, WHITE);
     g.chip(ex + 3, 14, PG_ICON_LOCK "LOCK", AMBER);
   } else {
-    cat(cat(catInt(buf, idx + 1), "/"), "");
-    catInt(buf + std::strlen(buf), n);
+    catInt(cat(catInt(buf, idx + 1), "/"), n);
     g.textR(235, 15, buf, DIM);
   }
-  if (s->about[0]) {
-    fitText(buf, s->about, 39);
-    g.text(4, 28, buf, DIM);
+  if (s->tagline[0]) {
+    fitText(buf, s->tagline, 39);
+    g.text(4, 27, buf, TEXT);
   }
-  // the four macro columns
+  drawScope(fb);
+  // the four macros
   for (int m = 0; m < kTrackMacros; ++m) {
-    const int x0 = m * 60, cx = x0 + 30;
+    const int cx0 = kCellX[m / 2], cy0 = kLabelY[m % 2], w = kCellW;
+    const int kLo = kKNote0 + 2 * m, kHi = kLo + 1;
     char k1[2] = {kNoteKeys[2 * m], 0}, k2[2] = {kNoteKeys[2 * m + 1], 0};
-    if (m >= s->numMacros) {
-      g.textC(cx, 68, "-", LINE);
-      g.text(x0 + 6, 98, k1, LINE);
-      g.textR(x0 + 54, 98, k2, LINE);
+    const int sy = kSliderY[m % 2];                  // slider row: key cap, groove, key cap
+    const int tx0 = cx0 + 13, tx1 = cx0 + w - 14;    // the track's ends (the handle's centre travels between them)
+    const int tl = tx1 - tx0;
+    if (m >= s->numMacros) {   // a macro the set does not have: its keys, an empty groove
+      g.rframe(cx0, sy, 9, 9, RAISED);
+      g.textC(cx0 + 4, sy + 1, k1, LINE);
+      g.rframe(cx0 + w - 9, sy, 9, 9, RAISED);
+      g.textC(cx0 + w - 5, sy + 1, k2, LINE);
+      g.rect(tx0, sy + 4, tl + 1, 1, RAISED);
       continue;
     }
     const macro::Macro& mc = s->macros[m];
     const bool f = !focus_.global && focus_.track == t && focus_.index == kMacroIndex0 + m;
     const bool locked = held && hs.lockParam == kLockMacro0 + m;
+    const bool moving = macroMoving(m);
+    const bool lit = f || moving || locked;
     const int v = macroValue(t, m);
     const int shown = locked ? hs.lockValue : v;
-    char nm[8];
+    // the label row: low end, the macro's name, high end
+    char nm[8], lab[10];
     fitText(nm, mc.name, 6);
-    if (f) {
-      const int w = int(std::strlen(nm)) * 6 + 3;
-      g.rrect(cx - w / 2, 37, w, 9, col);
-      g.textC(cx, 38, nm, BG);
+    const uint8_t labInk = lit ? uint8_t(TEXT) : uint8_t(DIM);
+    int loEnd = cx0, hiStart = cx0 + w;   // the name sits centred in the room the labels leave
+    if (mc.lo[0]) { fitText(lab, mc.lo, 8); loEnd = g.text(cx0, cy0, lab, labInk); }
+    if (mc.hi[0]) { fitText(lab, mc.hi, 8); hiStart = cx0 + w - tw(lab); g.text(hiStart, cy0, lab, labInk); }
+    const int ncx = (mc.lo[0] || mc.hi[0]) ? (loEnd + hiStart) / 2 : cx0 + w / 2;
+    if (lit) {
+      const int nw = int(std::strlen(nm)) * 6 + 3;
+      g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col));
+      g.textC(ncx, cy0, nm, BG);
     } else {
-      g.textC(cx, 38, nm, TEXT);
+      g.textC(ncx, cy0, nm, TEXT);
     }
-    char lab[10];
-    if (mc.hi[0]) { fitText(lab, mc.hi, 8); g.textC(cx, 48, lab, f ? TEXT : DIM); }
-    const int bx = x0 + 8, by = 57, bw = 44, bh = 30;
-    g.rect(bx, by, bw, bh, f ? RAISED : PANEL);
-    const int hpx = rnd(float(shown) / 255.0f * float(bh));
-    g.rect(bx, by + bh - hpx, bw, hpx, locked ? uint8_t(AMBER) : (f ? col : tc(t, kMid)));
-    if (locked) {
-      const int ty = by + bh - rnd(float(v) / 255.0f * float(bh));
-      g.rect(bx - 2, ty, bw + 4, 1, WHITE);
-    }
-    if (mc.lo[0]) { fitText(lab, mc.lo, 8); g.textC(cx, 89, lab, f ? TEXT : DIM); }
-    char val[kValueTextCap];
-    formatValue(macroInfo(t, m), ValueRef{false, uint8_t(t), uint8_t(kMacroIndex0 + m)}, shown, val);
-    g.textC(cx, 98, val, locked ? uint8_t(AMBER) : (f ? uint8_t(WHITE) : uint8_t(TEXT)));
-    g.text(x0 + 6, 98, k1, f ? WHITE : DIM);
-    g.textR(x0 + 54, 98, k2, f ? WHITE : DIM);
+    // the keys as caps at the ends: the left one moves toward the left label
+    const bool d1 = isHeld(kLo) && rec_[kLo].act == kActMacro, d2 = isHeld(kHi) && rec_[kHi].act == kActMacro;
+    g.rrect(cx0, sy, 9, 9, d1 ? uint8_t(WHITE) : uint8_t(RAISED));
+    g.textC(cx0 + 4, sy + 1, k1, d1 ? uint8_t(BG) : (lit ? uint8_t(WHITE) : uint8_t(TEXT)));
+    g.rrect(cx0 + w - 9, sy, 9, 9, d2 ? uint8_t(WHITE) : uint8_t(RAISED));
+    g.textC(cx0 + w - 5, sy + 1, k2, d2 ? uint8_t(BG) : (lit ? uint8_t(WHITE) : uint8_t(TEXT)));
+    // the groove, filled up to the handle; enum jumps as ticks above it, the default as a notch below
+    const int hx = tx0 + (shown * tl + 127) / 255;
+    g.rect(tx0, sy + 3, tl + 1, 3, RAISED);
+    const uint8_t fill = locked ? uint8_t(AMBER_D) : (lit ? tc(t, kMid) : tc(t, kDim));
+    g.rect(tx0, sy + 3, hx - tx0 + 1, 3, fill);
+    if (tickId_ == s->id && tickTrack_ == t)
+      for (int k = 0; k < tickN_[m]; ++k) g.rect(tx0 + (tickPos_[m][k] * tl + 127) / 255, sy, 1, 2, TEXT);
+    const int dx = tx0 + (macro::startByte(mc) * tl + 127) / 255;
+    g.pixel(dx, sy + 7, DIM);
+    g.rect(dx - 1, sy + 8, 3, 1, DIM);
+    if (locked) g.rect(tx0 + (v * tl + 127) / 255, sy, 1, 9, WHITE);   // where it is when not locked
+    // the handle: a cap with a dark outline so it reads over the fill
+    const uint8_t hc = locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : (f ? col : tc(t, kMid)));
+    g.rect(hx - 3, sy, 7, 9, BG);
+    g.rrect(hx - 2, sy, 5, 9, hc);
   }
   miniStrip(g, *this, 114, t, shownPage_, playStep(t), held ? heldStep_ : -1);
   if (!held) {
@@ -726,29 +834,34 @@ void Ui::drawInstrument(Framebuffer& fb) {
   if (listUntil_) drawInstrumentList(fb);
 }
 
-// The track's instruments, the current one highlighted (after ; . 9, for 1.5 s).
+// The track's instruments after ; . 9 (for 1.5 s): a column at the picture's right
+// edge, the current one in the middle as a chip, its neighbours (the list wraps)
+// above and below, so the about line under the name stays readable.
 void Ui::drawInstrumentList(Framebuffer& fb) {
   Gfx g(fb);
   const int t = sel_;
   const int n = macro::instrumentCount(t);
   const int cur = macro::instrumentIndex(t, instrumentIdOf(t));
-  constexpr int kRows = 8;
-  int top = 0;
-  if (n > kRows) top = cur - kRows / 2 < 0 ? 0 : (cur - kRows / 2 > n - kRows ? n - kRows : cur - kRows / 2);
-  const int rows = n < kRows ? n : kRows;
-  const int x = 150, y = 26, w = 86, h = rows * 10 + 4;
-  g.rect(x - 1, y - 1, w + 2, h + 2, BG);
+  if (n <= 0 || cur < 0) return;
+  const int w = 92, x = kScopeX0 + Scope::kCols - w, y = kScopeY0, h = kScopeY1 - kScopeY0 + 1;
+  g.rect(x - 2, y, w + 2, h, BG);
   g.rrect(x, y, w, h, RAISED);
   g.rframe(x, y, w, h, tc(t));
-  for (int r = 0; r < rows; ++r) {
-    const macro::MacroSet* s = macro::instrumentAt(t, top + r);
+  for (int r = -1; r <= 1; ++r) {
+    if (n < 2 && r) continue;
+    if (n < 3 && r < 0) continue;
+    const macro::MacroSet* s = macro::instrumentAt(t, ((cur + r) % n + n) % n);
     if (!s) continue;
-    const int yy = y + 2 + r * 10;
-    if (top + r == cur) {
-      g.rrect(x + 2, yy, w - 4, 9, tc(t));
-      g.text(x + 5, yy + 1, s->name, BG);
+    const int yy = y + h / 2 - 5 + r * 11;
+    if (!r) {
+      g.rrect(x + 3, yy, w - 6, 10, tc(t));
+      g.text(x + 7, yy + 2, s->name, BG);
+      char pos[8];
+      catInt(cat(catInt(pos, cur + 1), "/"), n);
+      g.textR(x + w - 7, yy + 2, pos, tc(t, kDim));
     } else {
-      g.text(x + 5, yy + 1, s->name, TEXT);
+      g.text(x + 7, yy + 2, s->name, TEXT);
+      g.text(x + w - 11, yy + 2, r < 0 ? PG_ICON_UP : PG_ICON_DOWN, DIM);
     }
   }
 }
@@ -1225,6 +1338,11 @@ uint32_t Ui::bodySignature() const {
   h = fnv(h, uint32_t(erasing_) | uint32_t(helpVisible()) << 1 | uint32_t(dirty_) << 2 | uint32_t(writeBusy_) << 3);
   if (view_ == View::Song) h = fnv(h, uint32_t(st_.songSlot) | uint32_t(st_.songRepeat) << 8 | uint32_t(st_.masterStep) << 16 | uint32_t(proj_->songMode) << 24);
   if (view_ == View::Project) h = fnv(h, uint32_t(env_.sdPresent));
+  if (view_ == View::Sound) {
+    uint32_t mv = 0;
+    for (int m = 0; m < kTrackMacros; ++m) mv |= uint32_t(macroMoving(m)) << m;
+    h = fnv(h, mv | uint32_t(held_ >> kKNote0 & 0xFF) << 8);   // moving macros, lit key letters
+  }
   return h;
 }
 

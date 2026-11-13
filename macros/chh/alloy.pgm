@@ -10,6 +10,7 @@
 # Try: WD-MTL on X, SIZE on Y with 16ths; DAMP on the off-beats.
 voice chh
 name ALLOY
+about "From seed shaker to metal bell."
 base snap=40 tone=80
 
 macro WD-MTL 0.6 "WOOD" "METAL"

@@ -74,7 +74,8 @@ constexpr int kMacroNameLen = 6;       // characters (fits the 240x135 screen st
 constexpr int kPatchNameLen = 8;       // characters
 constexpr int kLabelLen = 8;           // characters per end label ("DARK", "BRIGHT")
 constexpr int kDescLen = 40;           // characters of a macro's description
-constexpr int kAboutLen = 72;          // characters of the set's about line (longer is cut)
+constexpr int kAboutLen = 72;          // characters of the set's header line (longer is cut)
+constexpr int kTaglineLen = 38;        // characters of the player's line (`about "..."`, fits the screen)
 constexpr int kMaxLineLen = 200;       // characters per line of a .pgm file
 constexpr int kMaxDecimals = 3;        // digits after the point in a .pgm number
 constexpr int kTrimMaxDb = 24;         // a trim point is -24..+24 dB
@@ -164,7 +165,8 @@ struct MacroSet {
   uint8_t numMacros, numTargets, numPoints, numPatches, numPatchValues, numMorphs, numTrims;
   uint16_t id;                  // setId(track, name): how a project names this instrument; 0 = no name yet
   char name[kSetNameLen + 1];   // may be empty: the lab names it after the file
-  char about[kAboutLen + 1];    // the file's first comment line (minus "NAME -- "), may be empty
+  char about[kAboutLen + 1];    // the file's first comment line (minus "NAME -- "), may be empty: the lab's
+  char tagline[kTaglineLen + 1];   // the `about "..."` statement: the player's line on the instrument page
   uint32_t baseMask;            // bit i: base[i] is given
   uint8_t base[kParamsPerTrack];
   Macro macros[kMaxMacros];

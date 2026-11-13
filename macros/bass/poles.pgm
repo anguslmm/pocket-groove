@@ -13,6 +13,7 @@
 # Try: TONE and TOUCH on the pad, start in the centre and push to each edge.
 voice bass
 name POLES
+about "Round house bass. Push either way."
 base wave=36 cutoff=48 reso=50 envmod=50 decay=48 accent=70 sub=60 fmix=0 lfodepth=0 slide=50 ktrk=40
 
 macro TONE 0.5 "DARK" "BRIGHT" "a muffled dub thump .. an open pluck"

@@ -26,6 +26,7 @@ constexpr uint32_t kToastMs[3] = {1500, 2500, 3000};
 constexpr uint32_t kFlashMs = 80;
 constexpr uint8_t kPendFrames = 10;        // a pending value outlives the engine round trip by this much
 constexpr uint32_t kListMs = 1500;         // the instrument list after a change
+constexpr uint32_t kMoveShowMs = 350;      // a macro reads as moving this long after its last step
 constexpr int kMacroTap = 2;               // macro units (0..255) per tap; a repeat moves 2 / 4 / 8
 constexpr int kMacroCoarse = 16;           // with SHIFT
 inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -330,6 +331,7 @@ void Ui::macroKeyDown(int k, int n, bool shift) {
     } else {
       setMacro(sel_, m, def);
     }
+    macMoveMs_[m] = now_ | 1u;
     char buf[24];
     cat(cat(buf, s->macros[m].name), " DEFAULT");
     toast(buf, 0);
@@ -345,6 +347,7 @@ void Ui::macroKeyDown(int k, int n, bool shift) {
 // One move of macro m: on the held step's lock while a step is held (SOUND), else the macro.
 void Ui::macroEvent(int m, int dir, int mag, bool shift) {
   const int d = dir * (shift ? kMacroCoarse : kMacroTap * mag);
+  macMoveMs_[m & 3] = now_ | 1u;
   if (heldStep_ >= 0 && view_ != View::Groove) {
     focus_ = ValueRef{false, heldTrack_, uint8_t(kMacroIndex0 + m)};
     editLock(dir, mag, shift);
@@ -352,6 +355,13 @@ void Ui::macroEvent(int m, int dir, int mag, bool shift) {
   }
   setMacro(sel_, m, macroValue(sel_, m) + d);
   showPopup(ValueRef{false, sel_, uint8_t(kMacroIndex0 + m)});
+}
+
+// Moving now: its key repeats, or it moved within the last moment (a tap reads as a move too).
+bool Ui::macroMoving(int m) const {
+  m &= 3;
+  if (macRep_[m].key >= 0) return true;
+  return macMoveMs_[m] != 0 && int32_t(now_ - macMoveMs_[m]) < int32_t(kMoveShowMs);
 }
 
 // Each macro key repeats on its own, so two macros sweep at once (two fingers).
@@ -850,6 +860,7 @@ void Ui::selectTrack(int t) {
     focus_ = ValueRef{false, sel_, uint8_t(focusIndexFor(t))};
   }
   listUntil_ = 0;
+  for (uint32_t& ms : macMoveMs_) ms = 0;
   const int pages = (trackLen(t) + 15) / 16;
   if (shownPage_ >= pages) shownPage_ = uint8_t(pages - 1);
 }
@@ -1638,22 +1649,43 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   if (env.sdPresent != listedSd_ && view_ == View::Project) refreshFiles();   // SD inserted / pulled
   autosave();
   if (clipUntil_ && after(now_, clipUntil_)) clipUntil_ = 0;
+  // The instrument page's picture: the engine taps the selected track only while it is shown.
+  bool scopeMoved = false;
+  if (scopeShown()) {
+    scopeMoved = scope_.update(*eng_, sel_, now_);
+    if (scope_.track() >= 0 && instrumentOf(sel_)) refreshJumps();
+  } else if (scope_.track() >= 0) {
+    scope_.stop(*eng_);
+  }
   const uint32_t bs = bodySignature();
   const uint32_t ss = statusSignature();
-  if (!drawn_ || bs != lastBodySig_) {
+  if (!drawn_ || bs != lastBodySig_ || (scopeMoved && scopeCovered())) {
     drawAll(fb);
     lastBodySig_ = bs;
     lastStatusSig_ = ss;
     drawn_ = true;
     dirtyStatusOnly_ = false;
+    dirtyY0_ = 0;
+    dirtyY1_ = kScreenH - 1;
     ++fullDraws_;
     return true;
   }
-  if (ss != lastStatusSig_ && !helpVisible()) {   // the help screen covers the status bar
+  const bool statusMoved = ss != lastStatusSig_ && !helpVisible();   // the help screen covers the status bar
+  if (statusMoved) {
     drawStatus(fb);
     lastStatusSig_ = ss;
     dirtyStatusOnly_ = true;
     ++statusDraws_;
+  }
+  if (scopeMoved) {   // only the picture's band: a compact push to the panel
+    drawScope(fb);
+    dirtyY0_ = statusMoved ? 0 : uint8_t(kScopeY0);
+    dirtyY1_ = uint8_t(kScopeY1);
+    return true;
+  }
+  if (statusMoved) {
+    dirtyY0_ = 0;
+    dirtyY1_ = 10;
     return true;
   }
   return false;

@@ -173,6 +173,18 @@ struct State {
   Reverb reverb;
   MasterBus master;
 
+  // ---- scope tap (engine.h "SCOPE TAP"): UI -> audio requests, audio -> UI ring ----
+  std::atomic<uint16_t> scopeReq;     // UI: (track + 1) | decimation << 8; 0 = off
+  std::atomic<uint16_t> scopeCfgA;    // audio: the request in effect (published after scopeSince)
+  std::atomic<uint32_t> scopeEnd, scopeSince, scopeMark, scopeHits;
+  std::atomic<uint8_t> lastNote[kNumTracks];   // each track's last note-on (0 = none yet), for the scope's window
+  uint16_t scopeCfg;                  // audio thread: the request in effect
+  uint8_t scopeTrack, scopeDecim;     // decoded: tapped track (0xFF none), keep 1 sample in scopeDecim
+  int scopePhase;                     // samples summed into scopeAcc so far
+  float scopeAcc, scopeInvD;          // the running sum of the current ring sample, 1 / scopeDecim
+  uint32_t scopeWr, scopeHitCount;    // samples written / note-ons, the audio thread's copies
+  float scopeRing[kScopeRing];
+
 #if PG_STEM_TAP
   // ---- host-only offline rendering hooks (stem_tap.h) ----
   StemTap* tap;
@@ -238,7 +250,14 @@ struct State {
     rng = x;
     return x;
   }
-  void vOn(int t, const NoteEvent& e) { if (voice[t]) voice[t]->noteOn(e); }
+  void vOn(int t, const NoteEvent& e) {
+    if (voice[t]) voice[t]->noteOn(e);
+    lastNote[t].store(e.note, std::memory_order_relaxed);   // the scope's time window for synths
+    if (t == scopeTrack) {   // the scope's trigger: drums draw from here, synths from the attack
+      scopeMark.store(scopeWr, std::memory_order_relaxed);
+      scopeHits.store(++scopeHitCount, std::memory_order_release);
+    }
+  }
   void vOff(int t, uint8_t n) { if (voice[t]) voice[t]->noteOff(n); }
   void vChoke(int t) { if (voice[t]) voice[t]->choke(); }
 };
@@ -268,6 +287,10 @@ void State::init(float sampleRate, Project* p) {
   writesDone = 0;
   instRefreshes = 0;
   qCount = 0;
+  scopeCfg = 0;            // nothing tapped until the first quantum reads the request
+  scopeCfgA.store(0);
+  scopeTrack = 0xFF;
+  scopeDecim = 1;
 #if PG_STEM_TAP
   seqHeld = false;
   endedAt = -1;
@@ -1479,6 +1502,21 @@ void State::render(int16_t* out) {
     tapZero(tp->preMaster, tpos);
   }
 #endif
+  // Scope tap: pick up the UI's request (one load per quantum; a change restarts the ring's history).
+  const uint16_t scReq = scopeReq.load(std::memory_order_relaxed);
+  if (scReq != scopeCfg) {
+    scopeCfg = scReq;
+    scopeTrack = (scReq & 0xFF) ? uint8_t((scReq & 0xFF) - 1) : uint8_t(0xFF);
+    scopeDecim = uint8_t(scReq >> 8) ? uint8_t(scReq >> 8) : uint8_t(1);
+    scopePhase = 0;
+    scopeAcc = 0.0f;
+    scopeInvD = 1.0f / float(scopeDecim);
+    scopeHitCount = 0;
+    scopeHits.store(0, std::memory_order_relaxed);
+    scopeSince.store(scopeWr, std::memory_order_relaxed);
+    scopeCfgA.store(scReq, std::memory_order_release);
+  }
+  const int scT = scopeTrack;
   const float duckEnd = duck.tick();
   const float invN = 1.0f / float(kQuantum);
   bool dSend = false, rSend = false;
@@ -1562,6 +1600,26 @@ void State::render(int16_t* out) {
     if (v && v->active()) {
       float L[kQuantum], R[kQuantum];
       v->render(L, R, kQuantum);
+      if (t == scT) {
+        // Scope tap: the voice's left channel averaged over scopeDecim samples (a box
+        // filter: a decimated bright wave keeps a steady shape) into the ring.
+        float acc = scopeAcc;
+        int ph = scopePhase;
+        uint32_t w = scopeWr;
+        const int d = scopeDecim;
+        for (int i = 0; i < kQuantum; ++i) {
+          acc += L[i];
+          if (++ph == d) {
+            scopeRing[w++ & (kScopeRing - 1)] = acc * scopeInvD;
+            acc = 0.0f;
+            ph = 0;
+          }
+        }
+        scopeAcc = acc;
+        scopePhase = ph;
+        scopeWr = w;
+        scopeEnd.store(w, std::memory_order_release);
+      }
       // Mono voices write L == R: read only L.
       const bool vMono = v->mono();
       const float* Rp = vMono ? L : R;
@@ -2011,6 +2069,45 @@ bool Engine::post(const Command& c) {
 bool Engine::isPlaying() const { return impl_->aPlaying.load(std::memory_order_relaxed); }
 
 uint8_t Engine::instrumentRefreshes() const { return impl_->aInstRefreshes.load(std::memory_order_relaxed); }
+
+void Engine::setScope(int track, int decimation) {
+  const int d = decimation < 1 ? 1 : (decimation > 255 ? 255 : decimation);
+  const uint16_t req = (track >= 0 && track < kNumTracks) ? uint16_t((track + 1) | (d << 8)) : uint16_t(0);
+  impl_->scopeReq.store(req, std::memory_order_relaxed);
+}
+
+// The ring holds sample j at scopeRing[j % kScopeRing] until sample j + kScopeRing
+// is written. The engine writes at most kQuantum samples past the published end
+// before it publishes again, so samples [end2 + kQuantum - kScopeRing, end2) are
+// intact if end2 is read after the copy.
+int Engine::readScope(float* out, int n, ScopeInfo* info) const {
+  const engine_detail::State& s = *impl_;
+  const std::memory_order rx = std::memory_order_relaxed, acq = std::memory_order_acquire;
+  ScopeInfo in;
+  const uint16_t req = s.scopeReq.load(rx);
+  const uint16_t cfg = s.scopeCfgA.load(acq);   // what the audio thread taps now
+  in.hits = s.scopeHits.load(acq);
+  in.mark = s.scopeMark.load(rx);
+  in.note = 0;
+  in.end = s.scopeEnd.load(acq);
+  in.since = s.scopeSince.load(rx);
+  in.track = (cfg & 0xFF) ? uint8_t((cfg & 0xFF) - 1) : uint8_t(0xFF);
+  in.decimation = uint8_t(cfg >> 8) ? uint8_t(cfg >> 8) : uint8_t(1);
+  if (in.track < kNumTracks) in.note = s.lastNote[in.track].load(rx);
+  in.sampleRate = s.sr;
+  if (info) *info = in;
+  const int32_t avail = int32_t(in.end - in.since);
+  if (n > kScopeReadMax) n = kScopeReadMax;
+  if (avail < n) n = avail;
+  if (n <= 0 || !out || cfg != req) return 0;   // nothing, or a change the audio thread has not taken yet
+  const uint32_t first = in.end - uint32_t(n);
+  for (int i = 0; i < n; ++i) out[i] = s.scopeRing[(first + uint32_t(i)) & (kScopeRing - 1)];
+  std::atomic_thread_fence(acq);
+  const uint32_t end2 = s.scopeEnd.load(acq);
+  if (int32_t(end2 + kQuantum - kScopeRing - first) > 0) return 0;          // overwritten while copying
+  if (s.scopeSince.load(rx) != in.since || s.scopeCfgA.load(rx) != cfg) return 0;   // the tap changed
+  return n;
+}
 
 Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4]) {
   Command c;
