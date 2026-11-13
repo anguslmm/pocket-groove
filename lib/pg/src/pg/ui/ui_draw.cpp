@@ -253,7 +253,7 @@ void Ui::drawStatus(Framebuffer& fb) {
     }
     char val[kValueTextCap], name[6];
     formatValue(info, focus_, v, val);
-    upperCopy(info ? info->name : "?", name, sizeof(name));
+    upperCopy(info ? info->name : "?", name, (!focus_.global && isMacroIndex(focus_.index)) ? 5 : int(sizeof(name)));
     const int w = int(std::strlen(tag)) * 6 + 3;
     g.rrect(92, 1, w, 9, col);
     g.text(94, 2, tag, BG);
@@ -539,13 +539,18 @@ void Ui::drawStepEdit(Framebuffer& fb) {
       case kFChord: cat(txt, s.chord ? chordName(s.chord) : "OFF"); break;
       case kFLock: {
         if (s.lockParam) {
-          const ParamInfo* info = eng_->trackParamInfo(t, s.lockParam - 1);
+          // a macro lock reads as the macro (M1..M4 when the track has no such macro); a sound
+          // lock on a track with an instrument is ignored by the engine: drawn DIM
+          const ParamInfo* info = trackInfo(t, s.lockParam - 1);
           char nm[6], v[kValueTextCap];
-          if (info) upperCopy(info->name, nm, sizeof(nm));
+          if (info) upperCopy(info->name, nm, 5);
+          else if (isMacroLock(s.lockParam)) catInt(cat(nm, "M"), s.lockParam - kLockMacro0 + 1);
           else catInt(cat(nm, "P"), s.lockParam - 1);
-          formatValue(info, ValueRef{false, uint8_t(t), uint8_t(s.lockParam - 1)}, s.lockValue, v);
-          g.textC(fx + 14, 68, nm, AMBER);
-          g.textC(fx + 14, 77, v, AMBER);
+          if (info) formatValue(info, ValueRef{false, uint8_t(t), uint8_t(s.lockParam - 1)}, s.lockValue, v);
+          else itoa10(s.lockValue, v);
+          const bool ignored = instrumentOf(t) ? s.lockParam <= kSoundParams : isMacroLock(s.lockParam);
+          g.textC(fx + 14, 68, nm, ignored ? DIM : AMBER);
+          g.textC(fx + 14, 77, ignored ? "OFF" : v, ignored ? DIM : AMBER);
           continue;
         }
         cat(txt, "OFF");
@@ -597,7 +602,159 @@ void miniStrip(Gfx& g, const Ui& ui, int y, int track, int page, int play, int h
 }
 }  // namespace
 
+// ---- the instrument page (UX.md 10.3) -----------------------------------------------
+// Header: track chip, the instrument's name (L), its place in the list; the about
+// line; four macro columns of 60 px, each above its key pair (z x | c v | b n | m ,):
+// name, high label, a 44x30 bar, low label, value with the two keys either side.
+// CLASSIC (no instrument) and an unknown id get a page that invites a choice.
+namespace {
+void fitText(char* out, const char* in, int maxChars) {
+  int n = 0;
+  for (; in[n] && n < maxChars; ++n) out[n] = (in[n] >= 'a' && in[n] <= 'z') ? char(in[n] - 32) : in[n];
+  if (in[n] && n >= 2) { out[n - 2] = '.'; out[n - 1] = '.'; }
+  out[n] = 0;
+}
+}  // namespace
+
+void Ui::drawInstrument(Framebuffer& fb) {
+  Gfx g(fb);
+  const int t = sel_;
+  const uint8_t col = tc(t);
+  const macro::MacroSet* s = instrumentOf(t);
+  const bool held = heldStep_ >= 0 && heldTrack_ == t;
+  const Step hs = held ? stepAt(t, heldStep_) : kDefaultStep;
+  char buf[48];
+  int x = g.chip(4, 14, kTrackNames[t], col);
+  const int n = macro::instrumentCount(t);
+  if (!s) {
+    const uint16_t id = instrumentIdOf(t);
+    g.text(x + 6, 13, id ? "UNKNOWN" : "CLASSIC", id ? AMBER : TEXT, 2);
+    g.text(4, 32, id ? "AN INSTRUMENT THIS FIRMWARE LACKS:" : "THIS TRACK PLAYS ITS CLASSIC SOUND,", TEXT);
+    g.text(4, 41, id ? "IT PLAYS THE SOUND IT WAS SAVED WITH." : "AS IN A DEMO OR AN OLDER PROJECT.", DIM);
+    // the invitation: what . and ; would pick
+    g.rrect(4, 53, 232, 46, PANEL);
+    g.rframe(4, 53, 232, 46, col);
+    g.text(10, 57, "PICK AN INSTRUMENT", WHITE);
+    cat(catInt(buf, n), " FOR THIS TRACK");
+    g.textR(230, 57, buf, DIM);
+    const macro::MacroSet* first = macro::instrumentAt(t, 0);
+    const macro::MacroSet* last = macro::instrumentAt(t, n - 1);
+    x = g.chip(10, 69, ".", WHITE);
+    x = g.text(x + 3, 70, "OR", DIM);
+    x = g.chip(x + 3, 69, "9", WHITE);
+    x = g.text(x + 4, 70, "NEXT:", DIM);
+    g.text(x + 4, 70, first ? first->name : "-", col);
+    x = g.chip(10, 81, ";", WHITE);
+    x = g.text(x + 4, 82, "PREVIOUS:", DIM);
+    g.text(x + 4, 82, last ? last->name : "-", col);
+    g.text(10, 91, "CTRL+Z RIGHT AFTER: BACK TO THIS", DIM);
+    miniStrip(g, *this, 114, t, shownPage_, playStep(t), held ? heldStep_ : -1);
+    g.text(4, 127, "THEN Z-, MOVE ITS MACROS", DIM);
+    footerRight(g, "/ HELP", DIM);
+    if (listUntil_) drawInstrumentList(fb);
+    return;
+  }
+  // header
+  const int idx = macro::instrumentIndex(t, s->id);
+  g.text(x + 6, 13, s->name, WHITE, 2);
+  if (held) {
+    catInt(cat(buf, "STEP "), heldStep_ + 1);
+    const int sx = 235 - tw(buf) - 3 - tw(PG_ICON_LOCK "LOCK") - 4;
+    const int ex = g.text(sx, 15, buf, WHITE);
+    g.chip(ex + 3, 14, PG_ICON_LOCK "LOCK", AMBER);
+  } else {
+    cat(cat(catInt(buf, idx + 1), "/"), "");
+    catInt(buf + std::strlen(buf), n);
+    g.textR(235, 15, buf, DIM);
+  }
+  if (s->about[0]) {
+    fitText(buf, s->about, 39);
+    g.text(4, 28, buf, DIM);
+  }
+  // the four macro columns
+  for (int m = 0; m < kTrackMacros; ++m) {
+    const int x0 = m * 60, cx = x0 + 30;
+    char k1[2] = {kNoteKeys[2 * m], 0}, k2[2] = {kNoteKeys[2 * m + 1], 0};
+    if (m >= s->numMacros) {
+      g.textC(cx, 68, "-", LINE);
+      g.text(x0 + 6, 98, k1, LINE);
+      g.textR(x0 + 54, 98, k2, LINE);
+      continue;
+    }
+    const macro::Macro& mc = s->macros[m];
+    const bool f = !focus_.global && focus_.track == t && focus_.index == kMacroIndex0 + m;
+    const bool locked = held && hs.lockParam == kLockMacro0 + m;
+    const int v = macroValue(t, m);
+    const int shown = locked ? hs.lockValue : v;
+    char nm[8];
+    fitText(nm, mc.name, 6);
+    if (f) {
+      const int w = int(std::strlen(nm)) * 6 + 3;
+      g.rrect(cx - w / 2, 37, w, 9, col);
+      g.textC(cx, 38, nm, BG);
+    } else {
+      g.textC(cx, 38, nm, TEXT);
+    }
+    char lab[10];
+    if (mc.hi[0]) { fitText(lab, mc.hi, 8); g.textC(cx, 48, lab, f ? TEXT : DIM); }
+    const int bx = x0 + 8, by = 57, bw = 44, bh = 30;
+    g.rect(bx, by, bw, bh, f ? RAISED : PANEL);
+    const int hpx = rnd(float(shown) / 255.0f * float(bh));
+    g.rect(bx, by + bh - hpx, bw, hpx, locked ? uint8_t(AMBER) : (f ? col : tc(t, kMid)));
+    if (locked) {
+      const int ty = by + bh - rnd(float(v) / 255.0f * float(bh));
+      g.rect(bx - 2, ty, bw + 4, 1, WHITE);
+    }
+    if (mc.lo[0]) { fitText(lab, mc.lo, 8); g.textC(cx, 89, lab, f ? TEXT : DIM); }
+    char val[kValueTextCap];
+    formatValue(macroInfo(t, m), ValueRef{false, uint8_t(t), uint8_t(kMacroIndex0 + m)}, shown, val);
+    g.textC(cx, 98, val, locked ? uint8_t(AMBER) : (f ? uint8_t(WHITE) : uint8_t(TEXT)));
+    g.text(x0 + 6, 98, k1, f ? WHITE : DIM);
+    g.textR(x0 + 54, 98, k2, f ? WHITE : DIM);
+  }
+  miniStrip(g, *this, 114, t, shownPage_, playStep(t), held ? heldStep_ : -1);
+  if (!held) {
+    x = g.text(4, 127, ";", WHITE);
+    x = g.text(x, 127, "/", DIM);
+    x = g.text(x, 127, ".", WHITE);
+    x = g.text(x, 127, " INSTRUMENT  HOLD STEP+KEY ", DIM);
+    g.text(x, 127, PG_ICON_LOCK, AMBER);
+  } else {
+    g.text(4, 127, "MOVE A MACRO = LOCK  DEL REMOVE", DIM);
+  }
+  footerRight(g, "/ HELP", DIM);
+  if (listUntil_) drawInstrumentList(fb);
+}
+
+// The track's instruments, the current one highlighted (after ; . 9, for 1.5 s).
+void Ui::drawInstrumentList(Framebuffer& fb) {
+  Gfx g(fb);
+  const int t = sel_;
+  const int n = macro::instrumentCount(t);
+  const int cur = macro::instrumentIndex(t, instrumentIdOf(t));
+  constexpr int kRows = 8;
+  int top = 0;
+  if (n > kRows) top = cur - kRows / 2 < 0 ? 0 : (cur - kRows / 2 > n - kRows ? n - kRows : cur - kRows / 2);
+  const int rows = n < kRows ? n : kRows;
+  const int x = 150, y = 26, w = 86, h = rows * 10 + 4;
+  g.rect(x - 1, y - 1, w + 2, h + 2, BG);
+  g.rrect(x, y, w, h, RAISED);
+  g.rframe(x, y, w, h, tc(t));
+  for (int r = 0; r < rows; ++r) {
+    const macro::MacroSet* s = macro::instrumentAt(t, top + r);
+    if (!s) continue;
+    const int yy = y + 2 + r * 10;
+    if (top + r == cur) {
+      g.rrect(x + 2, yy, w - 4, 9, tc(t));
+      g.text(x + 5, yy + 1, s->name, BG);
+    } else {
+      g.text(x + 5, yy + 1, s->name, TEXT);
+    }
+  }
+}
+
 void Ui::drawSound(Framebuffer& fb) {
+  if (instrumentPage()) { drawInstrument(fb); return; }
   Gfx g(fb);
   const int t = sel_;
   const uint8_t col = tc(t);

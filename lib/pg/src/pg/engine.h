@@ -119,7 +119,10 @@ class Engine {
   // lead and 0 elsewhere, lockParam <= 32 naming a param that exists, with
   // lockValue in that param's range). Not real-time; call after setVoice()
   // (param ranges come from the voices) and before handing the project to
-  // the engine. A valid project is left byte-identical.
+  // the engine. A valid project is left byte-identical. A version-1 project
+  // becomes version 2 with no instrument on any track. A track whose
+  // instrument the library knows gets its sound parameters derived (so after
+  // a load they already are what the engine will play).
   void sanitizeProject(Project& p) const;
 
   // Metadata for the generic UI. index 0..23 -> voice, 24..31 -> mixer table.

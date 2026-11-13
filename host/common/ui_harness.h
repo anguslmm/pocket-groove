@@ -174,6 +174,10 @@ struct Rig {
   uint64_t samples = 0;
   uint32_t frames = 0;
   bool engineRuns = true;
+  // Developer mode (Ui::setDevMode) for the next start() / boot(). The tests written
+  // before instruments drive the parameter pages of CLASSIC tracks, which only
+  // developer mode shows; the instrument tests turn it off.
+  bool devMode = true;
   int16_t audio[kBlock * 2];
 
   static pg::Instrument& instrument() {
@@ -199,6 +203,7 @@ struct Rig {
     std::memset(fb.px, 0, sizeof(fb.px));
     matrix.reset();
     ui.init(eng, *proj, &fs);
+    ui.setDevMode(devMode);
     resetClock();
     frame();
   }
@@ -208,6 +213,7 @@ struct Rig {
     pg::ui::initPalette(fb);
     matrix.reset();
     ui.init(eng, *proj, &fs);
+    ui.setDevMode(devMode);
     resetClock();
     ui.boot(now());
     frame();

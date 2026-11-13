@@ -228,6 +228,7 @@ struct State {
   void ensureParams(int t);
   // instruments
   void trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const;
+  void deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const;
   void evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out);
   void refreshInstrument(int t, bool rebind);
   void evalLock(int t);
@@ -416,6 +417,17 @@ bool State::sanitizeTrack(Project& p, int t) const {
     if (v != ts.params[i]) { ts.params[i] = v; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
+  // DECISION: an instrument track's sound parameters are derived values, so the
+  // sanitiser derives them (a project saved with an older version of a set comes
+  // back with what the set gives now; the engine then finds nothing to change).
+  if (const macro::MacroSet* set = macro::findInstrument(instrumentId(ts))) {
+    if (set->track == t) {
+      uint8_t out[kParamsPerTrack];
+      deriveInto(*set, t, ts.macro, out);
+      for (int i = 0; i < kSoundParams; ++i)
+        if (((tr[t].pHas >> i) & 1u) && ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
+    }
+  }
   for (int pt = 0; pt < kNumPatterns; ++pt) {
     TrackPattern& tp = p.patterns[pt].tracks[t];
     const uint8_t len = uint8_t(sanitizeLength(tp.length));
@@ -979,14 +991,20 @@ void State::trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const {
 // the engine) and at a step whose macro lock differs from the one in scope. The
 // values under the set are the voice's defaults, so an instrument sounds the
 // same whatever the track held before. Not on the per-sample or per-quantum path.
-void State::evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out) {
+void State::deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const {
   const ParamInfo* info[kParamsPerTrack];
   uint8_t under[kParamsPerTrack];
   trackInfo(t, info, under);
   float pos[kTrackMacros];
-  const TrackSettings& ts = proj->tracks[t];
-  for (int m = 0; m < kTrackMacros; ++m) pos[m] = macro::posFromByte(m == lockMacro ? lockPos : ts.macro[m]);
-  macro::evaluate(*tr[t].inst, info, pos, under, out);
+  for (int m = 0; m < kTrackMacros; ++m) pos[m] = macro::posFromByte(positions[m]);
+  macro::evaluate(set, info, pos, under, out);
+}
+
+void State::evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out) {
+  uint8_t pos[kTrackMacros];
+  std::memcpy(pos, proj->tracks[t].macro, kTrackMacros);
+  if (lockMacro >= 0 && lockMacro < kTrackMacros) pos[lockMacro] = lockPos;
+  deriveInto(*tr[t].inst, t, pos, out);
 }
 
 void State::refreshInstrument(int t, bool rebind) {

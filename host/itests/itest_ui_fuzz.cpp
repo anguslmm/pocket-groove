@@ -96,6 +96,7 @@ int main(int argc, char** argv) {
       for (int j = 0; j < pg::ui::kNumKeyIds; ++j) held[j] = junkHeld[j] = false;
       rig.fs.powerCycle();
       fullTotal += rig.ui.fullRedraws();
+      rig.devMode = (rnd() & 1) != 0;   // the player's SOUND page and the developer's parameter pages
       rig.boot();
       rig.target = &g.fb;
     }
@@ -118,7 +119,7 @@ int main(int argc, char** argv) {
       const pg::ui::Ui& u = rig.ui;
       if (u.songCursor() > 32 || u.projectCursor() > pg::ui::kMaxFileRows || u.fileRows() > pg::ui::kMaxFileRows ||
           u.selTrack() > 7 || u.heldStep() >= 64 || u.shownPage() > 3 || u.stepCursor() >= 64 ||
-          u.focus().index >= 32 || (!u.focus().global && u.focus().track > 7)) {
+          u.focus().index >= 36 || (!u.focus().global && u.focus().track > 7)) {
         ++fails;
         std::printf("UI state out of range at event %ld\n", i);
       }

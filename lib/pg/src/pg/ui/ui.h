@@ -9,6 +9,7 @@
 #pragma once
 #include <cstdint>
 #include "../engine.h"
+#include "../macro/macro.h"
 #include "../platform.h"
 #include "../project.h"
 #include "format.h"
@@ -36,6 +37,10 @@ constexpr int kNumMixRows = 5;     // LEVEL DUCK DELAY REVERB PAN
 constexpr int kNumRollRates = 4;   // 1/8 1/16 1/16T 1/32
 constexpr int kMaxFileRows = 56;   // PROJECT list: ROM demos + up to 24 per mount + a "+N MORE" row each
 constexpr int kListPerMount = 24;
+// Track value indices: 0..31 are the track's parameters (params.h), 32..35 its
+// instrument's macros (ValueRef::index, trackFocus, and lockParam = index + 1).
+constexpr int kMacroIndex0 = kParamsPerTrack;
+inline bool isMacroIndex(int i) { return i >= kMacroIndex0 && i < kMacroIndex0 + kTrackMacros; }
 
 class Ui {
  public:
@@ -87,6 +92,16 @@ class Ui {
   int mixRow() const { return mixRow_; }
   int fxTab() const { return fxTab_; }
   int soundPage(int t) const { return soundPage_[t & 7]; }
+  // Instruments (UX.md 10.3). Pending-aware like paramValue().
+  uint16_t instrumentIdOf(int t) const;
+  const macro::MacroSet* instrumentOf(int t) const;   // nullptr: CLASSIC or an id the library lacks
+  int macroValue(int t, int m) const;                  // position 0..255
+  bool instrumentPage() const;     // SOUND shows the player's page (instrument / classic), not parameter pages
+  bool listVisible() const { return listUntil_ != 0; }   // the instrument list overlay
+  // Developer mode (desktop --dev / --lab): SOUND can also show the bare parameter
+  // pages (CLASSIC tracks show them, `l` flips between them and the player's page).
+  void setDevMode(bool on) { devMode_ = on; devFlip_ = false; ++serial_; }
+  bool devMode() const { return devMode_; }
   int trackFocus(int t) const { return trackFocus_[t & 7]; }
   Overlay overlay() const { return overlay_; }
   bool popupVisible() const { return popUntil_ != 0; }
@@ -139,11 +154,16 @@ class Ui {
   // once), coalesced, through Engine::post. Nothing is sent when the value is unchanged.
   // For host tools that drive parameters (the desktop macro lab, docs/MACROLAB.md).
   void setTrackParam(int track, int index, int value);
+  // The same for a macro position (0..255) of the track's instrument, and for the
+  // instrument itself (id 0 = CLASSIC; positions nullptr = the set's defaults).
+  void setMacro(int track, int m, int value);
+  void setInstrument(int track, uint16_t id, const uint8_t* positions = nullptr);
 
  private:
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
   enum Act : uint8_t {
     kActNone = 0, kActStep, kActPad, kActNote, kActRoll, kActValue, kActSweep, kActErase, kActTab, kActHelp,
+    kActMacro,
   };
   struct KeyRec {
     uint8_t act, a, b, c;   // meaning depends on act (see ui.cpp)
@@ -181,6 +201,16 @@ class Ui {
   void altCombo(int k);
   void tabUp(int k);
   void columnKey(int n);
+  // instruments (ui.cpp)
+  const ParamInfo* trackInfo(int t, int index) const;   // params and macros
+  const ParamInfo* macroInfo(int t, int m) const;
+  int focusIndexFor(int t) const;
+  void refocus(int t);
+  void macroKeyDown(int k, int n, bool shift);
+  void macroEvent(int m, int dir, int mag, bool shift);
+  void runMacroRepeats();
+  void stepInstrument(int dir);
+  void snapshotInstrument(int t);
 
   // clipboard and undo (ui_edit.cpp)
   void ctrlCombo(int k, bool shift);
@@ -290,6 +320,8 @@ class Ui {
   void drawGroove(Framebuffer& fb);
   void drawStepEdit(Framebuffer& fb);
   void drawSound(Framebuffer& fb);
+  void drawInstrument(Framebuffer& fb);
+  void drawInstrumentList(Framebuffer& fb);
   void drawMix(Framebuffer& fb);
   void drawFx(Framebuffer& fb);
   void drawFxDuck(Framebuffer& fb);
@@ -365,6 +397,24 @@ class Ui {
   bool erasing_ = false;
   uint8_t eraseLast_ = 0;
 
+  // instruments
+  bool devMode_ = false, devFlip_ = false;
+  uint16_t pendInst_[kNumTracks] = {};
+  uint8_t pendInstFrame_[kNumTracks] = {};
+  uint8_t pendInstMask_ = 0;
+  uint8_t pendMac_[kNumTracks][kTrackMacros] = {};
+  uint8_t pendMacFrame_[kNumTracks][kTrackMacros] = {};
+  uint8_t pendMacMask_[kNumTracks] = {};
+  struct MacRep { int8_t key, dir; uint32_t startMs, nextMs; };
+  MacRep macRep_[kTrackMacros] = {{-1, 0, 0, 0}, {-1, 0, 0, 0}, {-1, 0, 0, 0}, {-1, 0, 0, 0}};
+  struct Memo { uint16_t id; uint8_t track, used; uint8_t pos[kTrackMacros]; };   // positions per instrument, this session
+  static constexpr int kMemos = 16;
+  Memo memo_[kMemos] = {};
+  uint8_t memoNext_ = 0;
+  uint32_t listUntil_ = 0;
+  mutable ParamInfo macInfo_[4] = {};   // macroInfo() results (a ring: a frame needs at most a few at once)
+  mutable uint8_t macInfoNext_ = 0;
+
   // feedback
   char toast_[40] = {};
   uint8_t toastKind_ = 0;
@@ -425,6 +475,11 @@ class Ui {
   Pattern clip_ = {};               // a track clip uses clip_.tracks[0]
   uint8_t undoIdx_ = 0, undoPat_ = 0, clipKind_ = 0, clipTrack_ = 0;
   bool undoValid_ = false, undoIsRedo_ = false;
+  // an instrument change is undone without a pattern snapshot (ui_edit.cpp)
+  uint8_t undoKind_ = 0, undoTrack_ = 0;   // 0 pattern, 1 instrument
+  uint16_t undoInst_ = 0;
+  uint8_t undoPos_[kTrackMacros] = {};
+  uint8_t undoParams_[kSoundParams] = {};
   char undoLabel_[20] = {};
   // undo units (ui_edit.cpp): ids from one counter, 0 = none
   uint32_t gestSeq_ = 0, evtGest_ = 0, heldGest_ = 0, eraseGest_ = 0, recGest_ = 0;
