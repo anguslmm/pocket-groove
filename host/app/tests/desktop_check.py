@@ -41,6 +41,16 @@ screen or sound card) and checks it against the rest of the host build:
      stem file, the folder "revealed"; and the error paths in plain words:
      device not found, port busy, project that does not load, pyserial missing.
      (Skipped without pyserial.)
+  8. the macro lab (--lab, docs/MACROLAB.md) with a copy of macros/ and a test
+     set: choosing it, dragging a macro's slider and clicking the XY pad by
+     mouse events puts the evaluated values into the engine's project; a
+     rewrite of the file while the app runs is reloaded and live; a broken
+     rewrite is reported with file, line and reason and changes nothing; Cmd+G
+     with a typed note and the BAD button with Esc write the two lab-notes.txt
+     lines; Cmd+Left steps to "none" and gives every parameter back; the set's
+     macro position is remembered; deleting the active file gives the values
+     back; no lab key, click or note reaches the instrument; the window grows
+     by the panel and the device screen in it is untouched.
 
     python3 host/app/tests/desktop_check.py --bin build/host --work build/host/desktop_test
 """
@@ -621,12 +631,154 @@ def part_stems():
     check("[stems] device: error: pyserial is missing" in log, "pyserial missing: says so")
 
 
+LAB_TEST_SET = """voice bass
+name TEST
+macro A
+  cutoff 0:10 1:110
+  reso   0:20 1:120
+"""
+LAB_SCRIPT = """wait 300
+down sft
+tap j
+up sft
+app lab-select bass test
+app lab-wait-synced
+app lab-print bass
+app lab-drag 0 0.5
+wait 200
+app lab-wait-synced
+app lab-print bass
+app lab-wait-reloads 1 10000
+app lab-wait-synced
+app lab-print bass
+wait 1500
+app lab-print bass
+app lab-pad 1.0 0.0
+wait 200
+app lab-wait-synced
+app lab-print bass
+shot lab
+app winshot lab-window
+sdl down Left GUI
+sdl tap G
+sdl up Left GUI
+wait 100
+app lab-type harsh up here
+wait 100
+sdl tap Return
+wait 100
+app lab-click bad
+wait 100
+sdl tap Escape
+wait 100
+app lab-select bass acid
+app lab-wait-synced
+sdl down Left GUI
+sdl tap Left
+sdl up Left GUI
+wait 200
+app lab-wait-synced
+app lab-print bass
+app lab-select bass test
+app lab-wait-synced
+app lab-print bass
+app lab-wait-reloads 2 10000
+wait 100
+app lab-print bass
+app print-keys
+quit
+"""
+
+
+def engine_values(line):
+    """{SHORT: value} from an [lab-engine] line."""
+    return dict(kv.split("=") for kv in line.split()[2:])
+
+
+def part_lab():
+    print("8. the macro lab: macros follow the mouse into the engine, hot reload, errors, marks, none")
+    cwd = fresh(os.path.join(WORK, "lab"))
+    shutil.copytree(os.path.join(ROOT, "macros"), os.path.join(cwd, "macros"))
+    test_set = os.path.join(cwd, "macros", "bass", "test.pgm")
+    with open(test_set, "w") as f:
+        f.write(LAB_TEST_SET)
+    script = os.path.join(cwd, "lab.txt")
+    with open(script, "w") as f:
+        f.write(LAB_SCRIPT)
+    cmd = [APP, "--lab", "--script", script, "--out", os.path.join(cwd, "shots")]
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    engine, state, log = [], [], []
+    deadline = time.time() + 90
+    for raw in p.stdout:
+        line = raw.decode(errors="replace").rstrip("\n")
+        log.append(line)
+        sys.stdout.write("    | " + line + "\n")
+        if line.startswith("[lab-engine]"):
+            engine.append(engine_values(line))
+            if len(engine) == 2:     # after the drag: a new version of the file (same second, other curve)
+                with open(test_set, "w") as f:
+                    f.write(LAB_TEST_SET.replace("cutoff 0:10 1:110", "cutoff 0:30 1:50"))
+            elif len(engine) == 3:   # then a broken one: the last good version must stay
+                with open(test_set, "w") as f:
+                    f.write(LAB_TEST_SET.replace("reso   0:20 1:120", "reso   0:20 1:300"))
+            elif len(engine) == 7:   # then it goes away: the track falls back to bare parameters
+                os.remove(test_set)
+        elif line.startswith("[lab-state]"):
+            state.append(line)
+        if time.time() > deadline:
+            p.kill()
+            break
+    rc = p.wait()
+    log = "\n".join(log)
+    check(rc == 0, "app exited 0 (every lab script command succeeded)")
+    check(len(engine) == 8, "eight engine snapshots (got %d)" % len(engine))
+    if len(engine) < 8:
+        return
+    e0, e1, e2, e3, e4, e5, e6, e7 = engine
+    check(e0["CUT"] == "10" and e0["RES"] == "20", "set chosen: CUT/RES at the macro's start (10/20): %s/%s"
+          % (e0["CUT"], e0["RES"]))
+    check(e1["CUT"] == "60" and e1["RES"] == "70", "slider dragged to 0.5 by mouse: the engine has 60/70 (%s/%s)"
+          % (e1["CUT"], e1["RES"]))
+    check("[lab] reloaded macros/bass/test.pgm" in log, "the rewritten file was reloaded while playing")
+    check(e2["CUT"] == "40" and e2["RES"] == "70", "the new curve is live at the same position: CUT 40 (%s)"
+          % e2["CUT"])
+    check(re.search(r"\[lab\] macros/bass/test\.pgm:5: 300 is out of range \(0\.\.127\) \(keeping the last good", log)
+          is not None, "the broken version is reported with file, line and reason")
+    check(e3 == e2, "the broken version changed nothing (last good kept)")
+    check(e4["CUT"] == "50" and e4["RES"] == "120", "XY pad clicked at the right edge: A (X and Y with one macro, "
+          "X wins) at 1.0: CUT 50 RES 120 (got %s/%s)" % (e4["CUT"], e4["RES"]))
+    notes = read(os.path.join(cwd, "lab-notes.txt")).decode().splitlines()
+    check(len(notes) == 2, "two marks in lab-notes.txt (%d)" % len(notes))
+    if len(notes) == 2:
+        check(re.match(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d GOOD bass TEST macros/bass/test\.pgm@[0-9a-f]{8} A=1\.00 "
+                       r"\| CUT=50 RES=120 \| harsh up here$", notes[0]) is not None,
+              "the GOOD line: time, track, set, file@version, positions, values, the note: %s" % notes[0])
+        check(re.match(r".* BAD  bass TEST .* A=1\.00 \| CUT=50 RES=120$", notes[1]) is not None,
+              "the BAD line (button, Esc: no note): %s" % notes[1])
+    # Cmd+Left from ACID (the first bass set in path order) goes to none: every parameter as before
+    check("[lab] bass: none" in log, "Cmd+Left stepped from ACID to none")
+    check(all(e5[k] == e0[k] for k in e0 if k not in ("CUT", "RES")),
+          "none: ACID's parameters back to the values from before it")
+    check(e5["CUT"] != "10" or e5["RES"] != "20", "TEST's own values were given back when ACID was chosen")
+    check(e6["CUT"] == "50" and e6["RES"] == "120", "choosing TEST again restores its macro position (A=1.00)")
+    check("[lab] removed macros/bass/test.pgm" in log, "the deleted file was noticed")
+    check(e7 == e5, "deleted while active: every parameter back to the values from before (CUT %s RES %s)"
+          % (e7["CUT"], e7["RES"]))
+    m = re.search(r"\[keys\] (\d+) key events reached the instrument", log)
+    check(m is not None and int(m.group(1)) == 4, "only the script's 4 instrument key events reached the Ui; "
+          "lab keys, clicks and the typed note did not (%s)" % (m and m.group(1)))
+    w, h, win = png_rgb(os.path.join(cwd, "shots", "lab-window.png"))
+    _, _, dev = png_rgb(os.path.join(cwd, "shots", "lab.png"))
+    check(w == 240 + 184 and h == 135 + 47, "window shot with the lab is 424 x 182 (%d x %d)" % (w, h))
+    check([r[:240 * 3] for r in win[:135]] == dev, "the device screen is untouched by the panel, pixel for pixel")
+
+
 def main():
     global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK, ANALYZE
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="host build directory")
     ap.add_argument("--work", required=True, help="scratch directory (wiped)")
-    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems)")
+    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab)")
     a = ap.parse_args()
     b = os.path.abspath(a.bin)
     APP, UI_SHOT = os.path.join(b, "pocket-groove"), os.path.join(b, "ui_shot")
@@ -638,7 +790,7 @@ def main():
     only = set(x for x in a.only.split(",") if x)
     parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
              ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
-             ("listen", part_listen_sdl), ("stems", part_stems)]
+             ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab)]
     for name, fn in parts:
         if not only or name in only:
             fn()

@@ -18,7 +18,17 @@ enum Binding : int16_t {
   kActStats = 101,    // F2: audio stats (in the strip)
   kActListen = 102,   // Cmd+L: hear the connected device through the computer
   kActStems = 103,    // Cmd+B: the Stems list
+  // The macro lab (--lab, docs/MACROLAB.md); nothing without --lab.
+  kActLabGood = 104,   // Cmd+G: mark "good" in lab-notes.txt
+  kActLabBad = 105,    // Cmd+D: mark "bad"
+  kActLabPrev = 106,   // Cmd+Left: the previous macro set of the selected track
+  kActLabNext = 107,   // Cmd+Right: the next one
+  kActLabUp = 108,     // Cmd+Up: the focused macro +5 % (+1 % with Shift); repeats
+  kActLabDown = 109,   // Cmd+Down: -5 % (-1 % with Shift); repeats
+  kActLabMacro1 = 110, // Cmd+1 .. Cmd+4: focus macro 1 .. 4 (kActLabMacro1 + i)
+  kActLast = 113,
 };
+inline bool actionRepeats(int b) { return b == kActLabUp || b == kActLabDown; }
 
 struct KeyMap {
   static constexpr int kScancodes = 512;   // SDL_NUM_SCANCODES

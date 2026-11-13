@@ -27,6 +27,14 @@
 //   param_reference --check-assessment docs/ASSESSMENT.md  fail if they are stale (run by ctest)
 //   [--assess-notes docs/manual/assessment_notes.txt]
 //
+// The macro lab's format reference (docs/MACROLAB.md) has a compact list of every
+// parameter name, raw range and enum value a .pgm file can use:
+//
+//   param_reference --macrolab docs/MACROLAB.md         rewrite the list
+//   param_reference --check-macrolab docs/MACROLAB.md   fail if it is stale (run by ctest)
+//
+// between "<!-- BEGIN MACRO PARAMS -->" and "<!-- END MACRO PARAMS -->".
+//
 // Each block sits between "<!-- BEGIN ASSESS <ID> -->" and "<!-- END ASSESS <ID> -->"
 // (ID = KICK SNAR CLAP CHH OHH PERC BASS LEAD MIX DUCK DELAY REVERB MASTER SWING) and holds a
 // table generated from the ParamInfo tables (names, ranges, defaults as the screen shows them)
@@ -488,6 +496,90 @@ int assessment(const char* path, bool check) {
   return g_problems.empty() ? 0 : 1;
 }
 
+// ---- the macro lab's list ----------------------------------------------------------------
+std::string lowerStr(std::string s) {
+  for (char& c : s)
+    if (c >= 'A' && c <= 'Z') c = char(c - 'A' + 'a');
+  return s;
+}
+
+// One line per parameter: short name, long name, raw range (what a .pgm file writes)
+// with what the screen shows for it, default.
+std::string macroLine(const pg::ParamInfo* in, int t, int i) {
+  const pg::ui::ValueRef r{false, uint8_t(t), uint8_t(i)};
+  std::string rng;
+  if (in->fmt == pg::ParamFormat::Enum) {
+    for (int v = in->min; v <= in->max; ++v) rng += (v > in->min ? " " : "") + lowerStr(in->enumNames[v - in->min]);
+  } else {
+    char b[48];
+    std::snprintf(b, sizeof(b), "%d..%d", in->min, in->max);
+    rng = b;
+    const std::string lo = fmt(in, r, in->min), hi = fmt(in, r, in->max);
+    if (lo != std::to_string(in->min) || hi != std::to_string(in->max)) rng += " (screen " + lo + ".." + hi + ")";
+  }
+  const std::string def = in->fmt == pg::ParamFormat::Enum ? lowerStr(in->enumNames[in->def - in->min])
+                                                           : std::to_string(in->def);
+  char line[256];
+  std::snprintf(line, sizeof(line), "  %-5s %-13s %s  [%s]\n", lowerStr(in->name).c_str(), in->longName, rng.c_str(),
+                def.c_str());
+  return line;
+}
+
+std::string macroList() {
+  static const char* const kVoice[pg::kNumTracks] = {"kick", "snare", "clap", "chh", "ohh", "perc", "bass", "lead"};
+  const pg::Engine& e = g_inst.engine();
+  std::string out = "```\n";
+  for (int t = 0; t < pg::kNumTracks; ++t) {
+    out += std::string("voice ") + kVoice[t] + "\n";
+    for (int i = 0; i < pg::kSoundParams; ++i)
+      if (const pg::ParamInfo* in = e.trackParamInfo(t, i)) out += macroLine(in, t, i);
+  }
+  out += "mixer rows, on every voice (defaults differ per track: the bass's)\n";
+  for (int i = pg::kSoundParams; i < pg::kParamsPerTrack; ++i)
+    if (const pg::ParamInfo* in = e.trackParamInfo(pg::kTrackBass, i)) out += macroLine(in, pg::kTrackBass, i);
+  out += "```\n";
+  return out;
+}
+
+int macroLab(const char* path, bool check) {
+  FILE* f = std::fopen(path, "rb");
+  if (!f) {
+    std::fprintf(stderr, "param_reference: cannot open %s\n", path);
+    return 1;
+  }
+  std::string s;
+  char buf[4096];
+  size_t n;
+  while ((n = std::fread(buf, 1, sizeof(buf), f)) > 0) s.append(buf, n);
+  std::fclose(f);
+  const std::string a = "<!-- BEGIN MACRO PARAMS -->\n", b = "<!-- END MACRO PARAMS -->";
+  const size_t i = s.find(a), j = s.find(b);
+  if (i == std::string::npos || j == std::string::npos || j < i) {
+    std::fprintf(stderr, "param_reference: macro list markers not found in %s\n", path);
+    return 1;
+  }
+  const std::string out = s.substr(0, i + a.size()) + macroList() + s.substr(j);
+  if (check) {
+    if (out != s) {
+      std::fprintf(stderr,
+                   "param_reference: the parameter list in %s is stale. Fix: build/host/param_reference "
+                   "--macrolab %s (from the repository root)\n",
+                   path, path);
+      return 1;
+    }
+    std::fprintf(stderr, "param_reference: %s matches the code\n", path);
+    return 0;
+  }
+  if (out != s) {
+    f = std::fopen(path, "wb");
+    if (!f) return 1;
+    std::fwrite(out.data(), 1, out.size(), f);
+    std::fclose(f);
+    std::fprintf(stderr, "param_reference: rewrote the parameter list of %s\n", path);
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -496,20 +588,25 @@ int main(int argc, char** argv) {
   const char* target = nullptr;
   const char* sheet = nullptr;
   bool check = false;
+  const char* macro = nullptr;
   for (int i = 1; i < argc; ++i) {
     if (!std::strcmp(argv[i], "--notes") && i + 1 < argc) notes = argv[++i];
     else if (!std::strcmp(argv[i], "--splice") && i + 1 < argc) target = argv[++i];
     else if (!std::strcmp(argv[i], "--assess-notes") && i + 1 < argc) assessNotes = argv[++i];
     else if (!std::strcmp(argv[i], "--assessment") && i + 1 < argc) sheet = argv[++i];
     else if (!std::strcmp(argv[i], "--check-assessment") && i + 1 < argc) sheet = argv[++i], check = true;
+    else if (!std::strcmp(argv[i], "--macrolab") && i + 1 < argc) macro = argv[++i];
+    else if (!std::strcmp(argv[i], "--check-macrolab") && i + 1 < argc) macro = argv[++i], check = true;
     else {
       std::fprintf(stderr,
                    "usage: param_reference [--notes FILE] [--splice MANUAL.md]\n"
-                   "       param_reference [--assess-notes FILE] --assessment|--check-assessment ASSESSMENT.md\n");
+                   "       param_reference [--assess-notes FILE] --assessment|--check-assessment ASSESSMENT.md\n"
+                   "       param_reference --macrolab|--check-macrolab MACROLAB.md\n");
       return 2;
     }
   }
   g_inst.init(44100.0f, true);
+  if (macro) return macroLab(macro, check);
   if (sheet) {
     loadAssessNotes(assessNotes);
     return assessment(sheet, check);

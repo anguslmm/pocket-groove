@@ -1,0 +1,22 @@
+# ACID: a 303 line. OPEN couples cutoff and resonance in one move; BITE adds
+# grit, and more squelch the further OPEN is; WOBL is the bass-house LFO.
+# This file uses every feature of the format (docs/MACROLAB.md).
+voice bass
+name ACID
+base wave=0 sub=40 envmod=70 decay=44 accent=90 fmix=0 lfoshape=sine
+
+macro OPEN 0.4
+  cutoff   0:18 0.5:62 1:108 smooth
+  reso     0:70 0.6:112 1:96          # peaks at 60 % and backs off: squelch, not whistle
+  envmod   add 0:10 1:-20             # less envelope once the filter is open by itself
+
+macro BITE
+  drive    0:20 1:95
+  fold     0.5:0 1:70                 # nothing in the first half, then the growl
+  reso     add 0:0 1:12 by OPEN       # extra squelch only counts when the filter is open
+  sub      mul 0:1 1:0.6              # thin the sub so the grit reads
+
+macro WOBL
+  lfodepth 0:0 0.2:0 1:70
+  rate     0:1/4 0.4:1/8 0.75:1/8t 1:1/16   # an enum: stepped
+  cutoff   add 0:0 1:-15              # the LFO only opens: make room under it

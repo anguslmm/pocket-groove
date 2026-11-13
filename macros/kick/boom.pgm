@@ -1,0 +1,16 @@
+# BOOM: a house kick.
+voice kick
+name BOOM
+
+macro BODY 0.4
+  tune     0:40 1:70
+  decay    0:25 1:85
+  hold     0:10 1:50
+macro SNAP
+  click    0:30 1:110
+  punch    0:50 1:110
+  sweep    0:70 1:30                  # a shorter sweep is snappier
+macro DIRT
+  drive    0:10 1:100
+  tone     0:110 1:70
+  harm     add 0:0 1:40

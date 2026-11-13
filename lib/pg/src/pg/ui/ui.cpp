@@ -309,6 +309,14 @@ void Ui::setValue(const ValueRef& r, int v) {
   ++serial_;
 }
 
+void Ui::setTrackParam(int track, int index, int value) {
+  if (track < 0 || track >= kNumTracks || index < 0 || index >= kParamsPerTrack) return;
+  const ParamInfo* info = eng_->trackParamInfo(track, index);
+  if (!info) return;
+  const int v = clampi(value, info->min, info->max);
+  if (v != paramValue(track, index)) setValue(ValueRef{false, uint8_t(track), uint8_t(index)}, v);
+}
+
 void Ui::noteOn(int t, int note, int vel, uint8_t flags, uint8_t chord) {
   if (recOn_ && playing_) undoForRecording();   // the engine records this note into the pattern
   Command c = cmd(CmdType::NoteOn, t, clampi(note, 0, 127), clampi(vel, 1, 127));

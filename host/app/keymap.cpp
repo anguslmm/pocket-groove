@@ -98,6 +98,12 @@ const Bind kDefaultCmdBindings[] = {
     {SDL_SCANCODE_I, kActStats},    // Cmd+I = F2
     {SDL_SCANCODE_L, kActListen},   // Cmd+L: Listen
     {SDL_SCANCODE_B, kActStems},    // Cmd+B: Stems
+    // the macro lab (only with --lab)
+    {SDL_SCANCODE_G, kActLabGood},  {SDL_SCANCODE_D, kActLabBad},
+    {SDL_SCANCODE_LEFT, kActLabPrev}, {SDL_SCANCODE_RIGHT, kActLabNext},
+    {SDL_SCANCODE_UP, kActLabUp},   {SDL_SCANCODE_DOWN, kActLabDown},
+    {SDL_SCANCODE_1, kActLabMacro1}, {SDL_SCANCODE_2, int16_t(kActLabMacro1 + 1)},
+    {SDL_SCANCODE_3, int16_t(kActLabMacro1 + 2)}, {SDL_SCANCODE_4, int16_t(kActLabMacro1 + 3)},
 };
 
 KeyMap::KeyMap() {
@@ -125,6 +131,16 @@ const char* bindingName(int b) {
   if (b == kActStats) return "stats";
   if (b == kActListen) return "listen";
   if (b == kActStems) return "stems";
+  if (b == kActLabGood) return "lab-good";
+  if (b == kActLabBad) return "lab-bad";
+  if (b == kActLabPrev) return "lab-prev";
+  if (b == kActLabNext) return "lab-next";
+  if (b == kActLabUp) return "lab-up";
+  if (b == kActLabDown) return "lab-down";
+  if (b >= kActLabMacro1 && b < kActLabMacro1 + 4) {
+    static const char* const m[4] = {"lab-1", "lab-2", "lab-3", "lab-4"};
+    return m[b - kActLabMacro1];
+  }
   if (b >= 0 && b < kNumKeyIds) return keyLegend(b);
   return "none";
 }
@@ -134,6 +150,8 @@ int bindingFromName(const char* name) {
   if (ieq(name, "stats")) return kActStats;
   if (ieq(name, "listen")) return kActListen;
   if (ieq(name, "stems")) return kActStems;
+  for (int b = kActLabGood; b <= kActLast; ++b)
+    if (ieq(name, bindingName(b))) return b;
   if (ieq(name, "none")) return kUnbound;
   const int k = keyFromName(name);
   return k >= 0 ? k : -2;
