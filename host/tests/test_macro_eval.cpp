@@ -338,8 +338,8 @@ void testParseErrors() {
   expectError("", 0, "empty file");
   expectError("# only a comment\n\n", 0, "empty file");
   expectError("name X\nvoice bass\n", 1, "first line must be 'voice");
-  expectError("voice\n", 1, "one track name");
-  expectError("voice bass lead\n", 1, "one track name");
+  expectError("voice\n", 1, "takes a track name");
+  expectError("voice bass lead\n", 1, "unknown voice kind");   // a second word is a voice kind (`voice perc sampler`)
   expectError("voice tuba\n", 1, "unknown track 'tuba'");
   expectError("voice bass\nvoice bass\n", 2, "'voice' given twice");
   expectError("voice bass\nname A\nname B\n", 3, "'name' given twice");

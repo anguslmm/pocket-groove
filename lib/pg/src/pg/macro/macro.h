@@ -185,6 +185,7 @@ struct MacroSet {
   char name[kSetNameLen + 1];   // may be empty: the lab names it after the file
   char about[kAboutLen + 1];    // the file's first comment line (minus "NAME -- "), may be empty: the lab's
   char tagline[kTaglineLen + 1];   // the `about "..."` statement: the player's line on the instrument page
+  uint8_t voice;                // VoiceKind (voice.h): `voice perc sampler`; 0 = the track's native voice
   uint32_t baseMask;            // bit i: base[i] is given
   uint8_t base[kParamsPerTrack];
   Macro macros[kMaxMacros];
@@ -216,13 +217,24 @@ struct ParamTable {
 // have no whole table (the engine builds it on the stack).
 using TrackParams = const ParamInfo* const*;   // kParamsPerTrack entries
 
+// VOICE KINDS (voice.h): the parameter list a set is parsed, checked and
+// evaluated against comes from its voice kind, not only its track. For the
+// native kind that is params.info[track]; for another kind its own sound
+// parameters (voiceKindParam, pg/sampler/sampler_params.h) with the track's
+// mixer rows (24..31). scratch: kParamsPerTrack entries, used when the kind is
+// not the native one.
+TrackParams kindParams(const ParamTable& params, int track, int kind, const ParamInfo** scratch);
+inline TrackParams paramsFor(const MacroSet& set, const ParamTable& params, const ParamInfo** scratch) {
+  return kindParams(params, set.track, set.voice, scratch);
+}
+
 // out[0..31] = the track's parameters with the set applied at `positions`
 // (set.numMacros entries, each clamped to 0..1). under[0..31] = the values
 // underneath (what the track had before the set); parameters the set does not
 // own are copied from it. Returns set.ownedMask().
 uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* positions, const uint8_t* under,
                   uint8_t* out);
-// The same with only the set's track's metadata (info[0..31] = ParamTable::info[set.track]).
+// The same with only the metadata the set is checked against (paramsFor()).
 uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
                   uint8_t* out);
 
@@ -346,6 +358,7 @@ const char* trackName(int track);              // "kick" ... "lead"
 // -1 if none, kAmbiguous if that start fits more than one.
 constexpr int kAmbiguous = -2;
 int findParam(const ParamTable& params, int track, const char* name);
+int findParam(TrackParams info, const char* name);   // the same in one list (kindParams)
 
 }  // namespace macro
 }  // namespace pg

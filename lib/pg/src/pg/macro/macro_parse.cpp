@@ -8,6 +8,8 @@
 
 #include "macro.h"
 
+#include "../sampler/sampler_params.h"
+
 namespace pg {
 namespace macro {
 
@@ -139,6 +141,8 @@ struct Parser {
   char tiltName[2][kMacroNameLen + 1];   // the macro each tilt line names ("" = none / not given)
   int tiltLine[2];                       // 0 = no tilt line for that axis
   uint8_t tiltResp[2];
+  const ParamInfo* kindScratch[kParamsPerTrack];
+  TrackParams tp = nullptr;   // the list the set is checked against (its track and voice kind), from the voice line
 
   explicit Parser(const ParamTable& p, MacroSet* s, ParseError* e, Warnings* w) : pt(p), set(s), err(e), warn(w) {
     std::memset(tBy, 0, sizeof(tBy));
@@ -178,7 +182,7 @@ struct Parser {
     ++warn->count;
   }
 
-  const ParamInfo* info(int p) const { return pt.info[set->track][p]; }
+  const ParamInfo* info(int p) const { return tp[p]; }
 
   // A parameter value (set targets, base and patch values): an enum name, or a number in range.
   bool paramValue(int p, const char* tok, int32_t* out) {
@@ -206,7 +210,7 @@ struct Parser {
   static uint8_t roundValue(int32_t milli) { return uint8_t(int(milliToFloat(milli) + 0.5f)); }
 
   int param(const char* tok) {
-    const int p = findParam(pt, set->track, tok);
+    const int p = findParam(tp, tok);
     if (p == kAmbiguous) fail("'%s' could be more than one %s parameter: write more of the name", tok, kTrackNames[set->track]);
     else if (p < 0) fail("unknown parameter '%s' for %s", tok, kTrackNames[set->track]);
     return p < 0 ? -1 : p;
@@ -234,10 +238,17 @@ struct Parser {
     if (isString(kw)) return fail("a line cannot start with a string");
     if (!haveVoice) {
       if (!ieq(kw, "voice")) return fail("the first line must be 'voice <track>' (kick snare clap chh ohh perc bass lead)");
-      if (n != 2) return fail("'voice' takes one track name");
+      if (n != 2 && n != 3) return fail("'voice' takes a track name and, optionally, a voice kind ('voice perc sampler')");
       const int t = trackFromName(w[1]);
       if (t < 0) return fail("unknown track '%s' (kick snare clap chh ohh perc bass lead)", w[1]);
       set->track = uint8_t(t);
+      if (n == 3) {
+        const int k = voiceKindFromName(w[2]);
+        if (k < 0) return fail("unknown voice kind '%s' (sampler, or nothing for the track's own voice)", w[2]);
+        if (!voiceKindOnTrack(k, t)) return fail("a %s instrument cannot go on %s (only perc hosts one today)", w[2], w[1]);
+        set->voice = uint8_t(k);
+      }
+      tp = kindParams(pt, t, set->voice, kindScratch);
       haveVoice = true;
       return true;
     }
@@ -629,9 +640,14 @@ int trackFromName(const char* name) {
 const char* trackName(int track) { return track >= 0 && track < kNumTracks ? kTrackNames[track] : "?"; }
 
 int findParam(const ParamTable& params, int track, const char* name) {
-  if (track < 0 || track >= kNumTracks || !name || !*name) return -1;
+  if (track < 0 || track >= kNumTracks) return -1;
+  return findParam(params.info[track], name);
+}
+
+int findParam(TrackParams info, const char* name) {
+  if (!info || !name || !*name) return -1;
   for (int p = 0; p < kParamsPerTrack; ++p) {
-    const ParamInfo* in = params.info[track][p];
+    const ParamInfo* in = info[p];
     if (!in) continue;
     if (looseEq(in->name, name) || looseEq(in->longName, name)) return p;
   }
@@ -641,7 +657,7 @@ int findParam(const ParamTable& params, int track, const char* name) {
   if (n < 3) return -1;
   int found = -1;
   for (int p = 0; p < kParamsPerTrack; ++p) {
-    const ParamInfo* in = params.info[track][p];
+    const ParamInfo* in = info[p];
     if (!in || !loosePrefix(name, in->longName)) continue;
     if (found >= 0) return kAmbiguous;
     found = p;
@@ -810,6 +826,8 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
   buf[0] = 0;
   Out o{buf, cap};
   const int tr = set.track < kNumTracks ? set.track : 0;
+  const ParamInfo* kindScratch[kParamsPerTrack];
+  const TrackParams info = paramsFor(set, params, kindScratch);
   char t[48];
   if (set.about[0]) {
     o.put("# ");
@@ -822,6 +840,10 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
   }
   o.put("voice ");
   o.put(kTrackNames[tr]);
+  if (set.voice != kVoiceNative && voiceKindName(set.voice)) {
+    o.put(" ");
+    o.put(voiceKindName(set.voice));
+  }
   o.nl();
   if (set.name[0]) {
     o.put("name ");
@@ -855,16 +877,16 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
   if (set.baseMask) {
     o.put("base");
     for (int p = 0; p < kParamsPerTrack; ++p) {
-      if (!((set.baseMask >> p) & 1) || !params.info[tr][p]) continue;
+      if (!((set.baseMask >> p) & 1) || !info[p]) continue;
       if (o.col() > 150) {
         o.nl();
         o.put("base");
       }
-      lowerName(params.info[tr][p]->name, t);
+      lowerName(info[p]->name, t);
       o.put(" ");
       o.put(t);
       o.put("=");
-      putValue(o, params.info[tr][p], int32_t(set.base[p]) * 1000);
+      putValue(o, info[p], int32_t(set.base[p]) * 1000);
     }
     o.nl();
   }
@@ -874,7 +896,7 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
     o.put(pa.name);
     for (int e = 0; e < pa.n; ++e) {
       const PatchValue& pv = set.patchValues[pa.first + e];
-      const ParamInfo* in = pv.param < kParamsPerTrack ? params.info[tr][pv.param] : nullptr;
+      const ParamInfo* in = pv.param < kParamsPerTrack ? info[pv.param] : nullptr;
       if (!in) continue;
       if (o.col() > 150) {
         o.nl();
@@ -922,7 +944,7 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
     }
     for (int j = 0; j < m.n && m.first + j < kMaxTargets; ++j) {
       const Target& tg = set.targets[m.first + j];
-      const ParamInfo* in = tg.param < kParamsPerTrack ? params.info[tr][tg.param] : nullptr;
+      const ParamInfo* in = tg.param < kParamsPerTrack ? info[tg.param] : nullptr;
       if (!in) continue;
       lowerName(in->name, t);
       o.put("  ");

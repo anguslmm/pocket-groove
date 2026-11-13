@@ -698,10 +698,10 @@ void Ui::refreshJumps() {
     macro::ParamTable pt;
     std::memset(&pt, 0, sizeof(pt));
     uint8_t under[kParamsPerTrack];
-    for (int i = 0; i < kParamsPerTrack; ++i) {
-      pt.info[s->track][i] = eng_->trackParamInfo(s->track, i);
-      under[i] = pt.info[s->track][i] ? pt.info[s->track][i]->def : 0;
-    }
+    for (int i = 0; i < kParamsPerTrack; ++i) pt.info[s->track][i] = eng_->trackParamInfo(s->track, i);
+    const ParamInfo* kindScratch[kParamsPerTrack];
+    const macro::TrackParams kp = macro::paramsFor(*s, pt, kindScratch);   // the set's voice kind's list
+    for (int i = 0; i < kParamsPerTrack; ++i) under[i] = kp[i] ? kp[i]->def : 0;
     float fpos[kTrackMacros], at[16];
     uint8_t par[16];
     for (int o = 0; o < kTrackMacros; ++o) fpos[o] = macro::posFromByte(pos[o]);

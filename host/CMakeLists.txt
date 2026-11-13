@@ -41,6 +41,10 @@ endforeach()
 if(TARGET pg_engine AND TARGET pg_macro)
   target_link_libraries(pg_engine PUBLIC pg_macro)
 endif()
+# the voice kinds' parameter tables (pg/sampler/sampler_params.h) are read by the macro module
+if(TARGET pg_macro AND TARGET pg_sampler)
+  target_link_libraries(pg_macro PUBLIC pg_sampler)
+endif()
 
 file(GLOB test_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
 foreach(src ${test_srcs})

@@ -64,7 +64,11 @@ enum class CmdType : uint8_t {
 // is followed; evaluation itself runs only on a change, at a quantum edge).
 // The mixer rows stay the player's and combine with the instrument's level and
 // sends (macro::combineMixer). An id the library does not know plays the
-// stored parameters (as CLASSIC) and is kept. An instrument track has no
+// stored parameters (as CLASSIC) and is kept; so does a set whose voice kind
+// (voice.h VOICE KINDS: `voice perc sampler`) the track does not host. The voice
+// that renders the track is the bound set's kind: the parameters 0..23 are that
+// voice's (derived and sanitised against it), and back on the native voice
+// without an instrument they restart from the native defaults. An instrument track has no
 // parameter locks: its notes carry their own macro values instead (MOTION,
 // below). A CLASSIC track keeps its one parameter lock per step, as before.
 //
@@ -225,6 +229,14 @@ class Engine {
   // the engine has no compile-time dependency on concrete synths.
   void init(float sampleRate, Project* project);
   void setVoice(int track, Voice* voice);
+  // VOICE KINDS (voice.h): track also hosts a voice of `kind` (not kVoiceNative); an
+  // instrument of that kind on the track plays through it. The engine switches at the
+  // quantum edge where the bound instrument's kind changes: the notes the old voice
+  // holds are released, it is choked and rendered until its fade ends, and the
+  // parameter ranges follow the voice that renders. Same rules as setVoice (not while
+  // process() runs; the caller has run Voice::init). nullptr removes it.
+  void setAltVoice(int track, int kind, Voice* voice);
+  bool hostsKind(int track, int kind) const;   // kVoiceNative: the track has a voice at all
   // Device mode: render one bus and mono FX; process() then writes L == R.
   // Call after init/setVoice and before audio starts; forwards to every voice.
   void setMonoOutput(bool mono);
@@ -251,7 +263,10 @@ class Engine {
   void sanitizeProject(Project& p) const;
 
   // Metadata for the generic UI. index 0..23 -> voice, 24..31 -> mixer table.
+  // The native voice's (what CLASSIC tracks play and the parameter pages show);
+  // the second form gives a hosted kind's (nullptr if the track hosts none).
   const ParamInfo* trackParamInfo(int track, int index) const;
+  const ParamInfo* trackParamInfo(int track, int kind, int index) const;
   static const ParamInfo* globalParamInfo(int id);
 
   // ---- audio thread -------------------------------------------------------
