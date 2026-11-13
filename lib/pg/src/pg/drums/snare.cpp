@@ -24,7 +24,39 @@ constexpr float kNominalPeak = 0.8f;  // of body + noise before the saturator
 inline uint32_t bit(int i) { return 1u << i; }
 }  // namespace
 
-SnareVoice::SnareVoice() : DrumVoice(kParams, kNumParams) {}
+// While a macro moves (DrumVoice::setParamsFine): TUNE, DETUNE, TONE, BEND,
+// SNAPPY, RING and DRIVE follow continuously (the mode pitches and the noise
+// filter also inside a ringing hit; the levels of the parts are set per hit
+// anyway); DECAY and BODY DECAY are envelope times and take their new value at
+// the next hit.
+SnareVoice::SnareVoice() : DrumVoice(kParams, kNumParams) {
+  contMask_ = bit(kTune) | bit(kDetune) | bit(kTone) | bit(kBend) | bit(kSnap) | bit(kRing) | bit(kDrive);
+}
+
+void SnareVoice::updateFine(uint32_t ch) {
+  if (ch & bit(kTune)) tuneHz_ = 110.0f * exp2Fast(1.5849625f * unit(pf_[kTune]));   // 110..330 Hz
+  if (ch & bit(kDetune)) ratio_ = 1.2f + 1.4f * unit(pf_[kDetune]);
+  if (ch & (bit(kTune) | bit(kDetune))) setPitch(true);
+  if (ch & bit(kBend)) {
+    const float t = unit(pf_[kBend]);
+    bend_ = 2.0f * t * t;
+  }
+  if (ch & (bit(kSnap) | bit(kRing))) {
+    const float s = unit(pf_[kSnap]), r = unit(pf_[kRing]);
+    bodyAmt_ = 0.45f - 0.25f * s;
+    ringAmt_ = bodyAmt_ * 1.1f * r;
+    noiseAmt_ = 0.1f + 0.68f * s;
+    snapAmt_ = 0.6f * s;
+  }
+  if (ch & bit(kTone)) {
+    toneHz_ = 700.0f * exp2Fast(3.6844982f * unit(pf_[kTone]));   // 700..9000 Hz
+    setFilter(true);
+  }
+  if (ch & bit(kDrive)) {
+    drive_ = 0.6f * exp2Fast(4.5f * unit(pf_[kDrive]));
+    post_ = driveNorm(drive_, kNominalPeak);
+  }
+}
 
 void SnareVoice::resetState() {
   x1_ = x2_ = 0.0f; y1_ = y2_ = 1.0f;
@@ -35,57 +67,59 @@ void SnareVoice::resetState() {
   level_ = 0.0f;
 }
 
-void SnareVoice::setPitch() {
+void SnareVoice::setPitch(bool fast) {
   const float f1 = clampf(tuneHz_ * noteRatio_, 40.0f, 2000.0f);
-  eps1_ = oscEps(f1, fs_);
-  eps2_ = oscEps(f1 * ratio_, fs_);
+  eps1_ = fast ? oscEpsFast(f1, fs_) : oscEps(f1, fs_);
+  eps2_ = fast ? oscEpsFast(f1 * ratio_, fs_) : oscEps(f1 * ratio_, fs_);
 }
 
-void SnareVoice::setFilter() {
+void SnareVoice::setFilter(bool fast) {
   const float fc = clampf(toneHz_ * bright_, 300.0f, 14000.0f), q = 0.8f;
-  svf_.set(fc, q, fs_);
+  if (fast) svf_.setFast(fc, q, fs_);
+  else svf_.set(fc, q, fs_);
   // Normalise the band-passed noise to a constant RMS (see clap.cpp).
   noiseNorm_ = 0.3f / sqrtf((1.0f / 3.0f) * kPi * q * fc / fs_);
 }
 
 void SnareVoice::updateCoefs(uint32_t ch) {
   const float fs = fs_;
-  if (ch & bit(kTune)) tuneHz_ = expMap(unit(p_[kTune]), 110.0f, 330.0f);
-  if (ch & bit(kDetune)) ratio_ = 1.2f + 1.4f * unit(p_[kDetune]);
+  if (ch & bit(kTune)) tuneHz_ = expMap(unit(pf_[kTune]), 110.0f, 330.0f);
+  if (ch & bit(kDetune)) ratio_ = 1.2f + 1.4f * unit(pf_[kDetune]);
   if (ch & (bit(kTune) | bit(kDetune))) setPitch();
   if (ch & bit(kDecay)) {
-    const float tau = expMap(unit(p_[kDecay]), 0.015f, 0.4f);
+    const float tau = expMap(unit(pf_[kDecay]), 0.015f, 0.4f);
     cn_ = decayCoef(tau, fs);
     cf_ = decayCoef(0.004f + 0.08f * tau, fs);
   }
   if (ch & bit(kBody)) {
-    const float tau = expMap(unit(p_[kBody]), 0.012f, 0.25f);
+    const float tau = expMap(unit(pf_[kBody]), 0.012f, 0.25f);
     c1_ = decayCoef(tau, fs);
     c2_ = decayCoef(0.7f * tau, fs);
     pitchCoef_ = decayCoef(clampf(0.25f * tau, 0.004f, 0.03f), fs);
   }
   if (ch & bit(kBend)) {
-    const float t = unit(p_[kBend]);
+    const float t = unit(pf_[kBend]);
     bend_ = 2.0f * t * t;
   }
   if (ch & (bit(kSnap) | bit(kRing))) {
-    const float s = unit(p_[kSnap]), r = unit(p_[kRing]);
+    const float s = unit(pf_[kSnap]), r = unit(pf_[kRing]);
     bodyAmt_ = 0.45f - 0.25f * s;
     ringAmt_ = bodyAmt_ * 1.1f * r;
     noiseAmt_ = 0.1f + 0.68f * s;
     snapAmt_ = 0.6f * s;
   }
   if (ch & bit(kTone)) {
-    toneHz_ = expMap(unit(p_[kTone]), 700.0f, 9000.0f);
+    toneHz_ = expMap(unit(pf_[kTone]), 700.0f, 9000.0f);
     setFilter();
   }
   if (ch & bit(kDrive)) {
-    drive_ = 0.6f * powf(2.0f, 4.5f * unit(p_[kDrive]));
+    drive_ = 0.6f * powf(2.0f, 4.5f * unit(pf_[kDrive]));
     post_ = driveNorm(drive_, kNominalPeak);
   }
 }
 
 void SnareVoice::noteOn(const NoteEvent& e) {
+  applyPending();
   level_ = kLevel * velocityGain(e.vel) * (e.accent ? 1.3f : 1.0f);
   beginHit(true, level_);
   noteRatio_ = noteRatio(int(e.note), 24);

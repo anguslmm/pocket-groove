@@ -28,6 +28,16 @@ class DrumVoice : public Voice {
     return (index >= 0 && index < numParams_) ? &table_[index] : nullptr;
   }
   void setParams(const uint8_t* soundParams) override;
+  // Fractional values (a macro in motion; voice.h). Each voice divides its
+  // parameters into two kinds (contMask_, listed in each voice's comment below):
+  //   continuous  follow at the engine's control rate, also while a hit rings,
+  //               through updateFine (cheap: no libm, polynomials instead)
+  //   latched     take their new value at the next hit (applyPending at the start
+  //               of noteOn, through updateCoefs with libm, once per hit)
+  // so a macro sweep over a roll recomputes no expf/powf per control tick and
+  // never changes an envelope or a model in the middle of a hit. Back on the
+  // 7-bit path (setParams), whatever the fractions touched is recomputed exactly.
+  void setParamsFine(const float* soundParams) override;
   void noteOff(uint8_t) override {}
   void choke() override;
   bool active() const override { return active_; }
@@ -37,8 +47,18 @@ class DrumVoice : public Voice {
   DrumVoice(const ParamInfo* table, int numParams);
   // Clear all DSP state (init time).
   virtual void resetState() = 0;
-  // Recompute coefficients for the params whose bit is set in `changed`.
+  // Recompute coefficients for the params whose bit is set in `changed`, from pf_.
   virtual void updateCoefs(uint32_t changed) = 0;
+  // The continuous params among `changed` (a subset of contMask_), cheaply.
+  virtual void updateFine(uint32_t /*changed*/) {}
+  // First thing in noteOn: latched params that moved since the last hit take effect.
+  void applyPending() {
+    if (!pend_) return;
+    const uint32_t c = pend_;
+    pend_ = 0;
+    touched_ |= c;
+    updateCoefs(c);
+  }
 
   // Call first in noteOn. If the voice is still sounding and `declick` is
   // set, the last output value is turned into a short fading offset so the
@@ -54,7 +74,12 @@ class DrumVoice : public Voice {
   int   numParams_;
   float fs_ = 44100.0f;
   uint8_t raw_[kMaxParams];  // last values seen by setParams
-  uint8_t p_[kMaxParams];    // same, clamped to each param's range
+  uint8_t p_[kMaxParams];    // same, clamped to each param's range (rounded, while fractional)
+  float pf_[kMaxParams];     // what the mappings read: float(p_), or the fractional values
+  uint32_t contMask_ = 0;    // set by each voice: its continuous params (see setParamsFine)
+  uint32_t pend_ = 0;        // latched params changed by fractions, applied at the next hit
+  uint32_t touched_ = 0;     // params whose coefficients came from fractions
+  bool  fine_ = false;       // pf_ holds fractional values
   bool  active_ = false;
 
  private:
@@ -71,13 +96,15 @@ class KickVoice final : public DrumVoice {
     kTune, kDecay, kPunch, kSweep, kClick, kDrive, kTone, kHold, kHarm, kClickTone, kNumParams
   };
   KickVoice();
+  float debugTuneHz() const { return tuneHz_; }   // body pitch before the note and the sweep (tests)
   void noteOn(const NoteEvent& e) override;
   void render(float* outL, float* outR, int frames) override;
 
  private:
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
-  void setPitch();
+  void updateFine(uint32_t changed) override;
+  void setPitch(bool fast = false);
 
   // coefficients
   float tuneHz_ = 50.0f, noteRatio_ = 1.0f, depthBase_ = 4.0f, accentDepth_ = 1.0f;
@@ -106,8 +133,9 @@ class SnareVoice final : public DrumVoice {
  private:
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
-  void setPitch();
-  void setFilter();
+  void updateFine(uint32_t changed) override;
+  void setPitch(bool fast = false);
+  void setFilter(bool fast = false);
 
   float tuneHz_ = 185.0f, ratio_ = 1.75f, noteRatio_ = 1.0f, toneHz_ = 3000.0f, bright_ = 1.0f;
   float eps1_ = 0.02f, eps2_ = 0.04f, bend_ = 0.4f, pitchCoef_ = 0.99f;
@@ -134,7 +162,8 @@ class ClapVoice final : public DrumVoice {
  private:
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
-  void setFilter();
+  void updateFine(uint32_t changed) override;
+  void setFilter(bool fast = false);
 
   float toneHz_ = 1150.0f, q_ = 1.6f, noteRatio_ = 1.0f, bright_ = 1.0f;
   float bpGain_ = 1.0f, airGain_ = 0.2f, airAmt_ = 0.3f;
@@ -162,8 +191,9 @@ class HatVoice final : public DrumVoice {
  private:
   void resetState() override;
   void updateCoefs(uint32_t changed) override;
-  void setPitch();
-  void setFilter();
+  void updateFine(uint32_t changed) override;
+  void setPitch(bool fast = false);
+  void setFilter(bool fast = false);
 
   bool  open_;
   float noteRatio_ = 1.0f, bright_ = 1.0f;

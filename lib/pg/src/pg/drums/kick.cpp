@@ -25,7 +25,30 @@ constexpr uint32_t kNoiseSeed = 0x1F2E3D4Cu;  // identical click on every hit
 inline uint32_t bit(int i) { return 1u << i; }
 }  // namespace
 
-KickVoice::KickVoice() : DrumVoice(kParams, kNumParams) {}
+// While a macro moves (DrumVoice::setParamsFine): TUNE, PUNCH, DRIVE, HARM and
+// TONE follow continuously, also inside a ringing hit (pitch and sweep depth,
+// saturation and its make-up, the low-pass); DECAY, SWEEP, HOLD, CLICK and
+// CLICK TONE are envelope shapes and take their new value at the next hit.
+KickVoice::KickVoice() : DrumVoice(kParams, kNumParams) {
+  contMask_ = bit(kTune) | bit(kPunch) | bit(kDrive) | bit(kHarm) | bit(kTone);
+}
+
+void KickVoice::updateFine(uint32_t ch) {
+  if (ch & bit(kTune)) tuneHz_ = 28.0f * exp2Fast(1.85f * unit(pf_[kTune]));
+  if (ch & bit(kPunch)) {
+    const float t = unit(pf_[kPunch]);
+    depthBase_ = 12.0f * t * t;
+  }
+  if (ch & (bit(kTune) | bit(kPunch))) setPitch(true);
+  if (ch & (bit(kDrive) | bit(kHarm))) {
+    const float t = unit(pf_[kDrive]);
+    h2_ = 0.7f * unit(pf_[kHarm]);
+    drive_ = 0.5f * exp2Fast(5.5f * t);
+    post_ = driveNorm(drive_, 1.0f);
+    driveComp_ = 1.0f - 0.3f * t * t;
+  }
+  if (ch & bit(kTone)) lpG_ = onePoleCoefFast(150.0f * exp2Fast(6.6f * unit(pf_[kTone])), fs_);
+}
 
 void KickVoice::resetState() {
   x_ = 0.0f; y_ = 1.0f;
@@ -36,9 +59,9 @@ void KickVoice::resetState() {
   accentDepth_ = 1.0f;
 }
 
-void KickVoice::setPitch() {
+void KickVoice::setPitch(bool fast) {
   const float f0 = clampf(tuneHz_ * noteRatio_, 16.0f, 1200.0f);
-  eps0_ = oscEps(f0, fs_);
+  eps0_ = fast ? oscEpsFast(f0, fs_) : oscEps(f0, fs_);
   // Keep the top of the sweep well under Nyquist.
   float d = depthBase_ * accentDepth_;
   const float dMax = 0.2f * fs_ / f0 - 1.0f;
@@ -47,37 +70,38 @@ void KickVoice::setPitch() {
 
 void KickVoice::updateCoefs(uint32_t ch) {
   const float fs = fs_;
-  if (ch & bit(kTune)) tuneHz_ = 28.0f * powf(2.0f, 1.85f * unit(p_[kTune]));
+  if (ch & bit(kTune)) tuneHz_ = 28.0f * powf(2.0f, 1.85f * unit(pf_[kTune]));
   if (ch & bit(kPunch)) {
-    const float t = unit(p_[kPunch]);
+    const float t = unit(pf_[kPunch]);
     depthBase_ = 12.0f * t * t;
   }
   if (ch & (bit(kTune) | bit(kPunch))) setPitch();
-  if (ch & bit(kDecay)) ampCoef_ = decayCoef(expMap(unit(p_[kDecay]), 0.02f, 1.0f), fs);
-  if (ch & bit(kSweep)) pitchCoef_ = decayCoef(expMap(unit(p_[kSweep]), 0.003f, 0.12f), fs);
+  if (ch & bit(kDecay)) ampCoef_ = decayCoef(expMap(unit(pf_[kDecay]), 0.02f, 1.0f), fs);
+  if (ch & bit(kSweep)) pitchCoef_ = decayCoef(expMap(unit(pf_[kSweep]), 0.003f, 0.12f), fs);
   if (ch & (bit(kClick) | bit(kClickTone))) {
-    const float c = unit(p_[kClick]), t = unit(p_[kClickTone]);
+    const float c = unit(pf_[kClick]), t = unit(pf_[kClickTone]);
     clickAmt_ = 0.75f * c * (0.8f + 0.2f * c);
     clickCoef_ = decayCoef(expMap(t, 0.0005f, 0.008f), fs);
     pulseShare_ = 0.6f * (1.0f - 0.8f * t);  // short: a tick with some pulse
     noiseShare_ = 0.6f + 0.4f * t;           // long: a noisy thwack
   }
   if (ch & (bit(kDrive) | bit(kHarm))) {
-    const float t = unit(p_[kDrive]);
-    h2_ = 0.7f * unit(p_[kHarm]);
+    const float t = unit(pf_[kDrive]);
+    h2_ = 0.7f * unit(pf_[kHarm]);
     drive_ = 0.5f * powf(2.0f, 5.5f * t);
     post_ = driveNorm(drive_, 1.0f);
     // Heavy clipping raises RMS a lot at constant peak: pull the level down a bit.
     driveComp_ = 1.0f - 0.3f * t * t;
   }
-  if (ch & bit(kTone)) lpG_ = onePoleCoef(150.0f * powf(2.0f, 6.6f * unit(p_[kTone])), fs);
+  if (ch & bit(kTone)) lpG_ = onePoleCoef(150.0f * powf(2.0f, 6.6f * unit(pf_[kTone])), fs);
   if (ch & bit(kHold)) {
-    const float t = unit(p_[kHold]);
+    const float t = unit(pf_[kHold]);
     holdSamples_ = int(0.18f * t * t * fs);
   }
 }
 
 void KickVoice::noteOn(const NoteEvent& e) {
+  applyPending();
   const float v = float(e.vel) * (1.0f / 127.0f);
   level_ = kLevel * velocityGain(e.vel) * (e.accent ? 1.3f : 1.0f);
   beginHit(true, 1.1f * level_);
