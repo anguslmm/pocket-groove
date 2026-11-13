@@ -100,6 +100,16 @@ inline void typicalProject(pg::Project& p, uint32_t seed = 7) {
     }
   for (int i = 0; i < 8; ++i) { p.song[i].pattern = uint8_t(i); p.song[i].repeats = 2; }
   p.globals[pg::kGTempo] = 126;
+  // instruments (project version 2) on most tracks, with macro locks on some steps
+  for (int t = 0; t < pg::kNumTracks; ++t) {
+    if (t == pg::kTrackPerc) continue;   // one CLASSIC track
+    pg::setInstrumentId(p.tracks[t], uint16_t(0x1234 + 0x0F0F * t));
+    for (int m = 0; m < pg::kTrackMacros; ++m) p.tracks[t].macro[m] = r.byte();
+    pg::Step& s = p.patterns[0].tracks[t].steps[3];
+    s.flags |= pg::kStepOn;
+    s.lockParam = uint8_t(pg::kLockMacro0 + t % pg::kTrackMacros);
+    s.lockValue = r.byte();
+  }
 }
 
 // Every pattern, every track, all 64 steps with content (unlikely in practice).

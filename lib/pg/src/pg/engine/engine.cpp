@@ -2065,6 +2065,10 @@ bool fxIdle() { return g_state ? !g_state->fxRunning : true; }
 void setRumbleFilterBypass(bool bypass) {
   if (g_state) g_state->master.setRumbleBypass(bypass);
 }
+void effectiveParams(int track, uint8_t* out) {
+  if (!g_state || track < 0 || track >= kNumTracks) return;
+  std::memcpy(out, g_state->tr[track].eff, kParamsPerTrack);
+}
 uint32_t faultCount() { return g_state ? g_state->faults + g_state->master.faults() : 0; }
 
 #if PG_STEM_TAP

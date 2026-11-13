@@ -34,5 +34,10 @@ uint32_t faultCount();
 // call it in the firmware.
 void setRumbleFilterBypass(bool bypass);
 
+// TEST ONLY: the parameters the engine last built for the track's voice
+// (locks applied, an instrument's mixer rule applied), out[0..31]. Read it
+// only while process() is not running.
+void effectiveParams(int track, uint8_t* out);
+
 }  // namespace engine_detail
 }  // namespace pg

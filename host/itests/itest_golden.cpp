@@ -9,12 +9,22 @@
 // libm), so they are only enforced on the platform they were taken on
 // (x86-64 Linux, GCC); elsewhere the test prints the values and passes.
 //
+// Instruments (project version 2) must not change any of this: every demo is
+// CLASSIC. The "v1 file" cases save the demo as a version-1 project through
+// pg::io (with an instrument id planted in the bytes version 1 kept reserved),
+// load it back and render it: it must load with no instrument and give the
+// same hash as the demo built directly. The song cases of BASSHAUS and
+// WAREHOUS were taken at ed5fe13, just before instruments were added.
+//
 //   build/host/itest_golden --print     prints the current hashes
 #include <cmath>
 #include <cstring>
 
+#include "common/memfs.h"
 #include "itests/itest_util.h"
 #include "pg/demo/demo.h"
+#include "pg/io/project_io.h"
+#include "pg/macro/macro.h"
 
 using namespace pg;
 
@@ -35,18 +45,41 @@ struct Case {
   bool mono;
   float sr;
   uint64_t hash;  // expected FNV-1a of the interleaved int16 bytes
+  bool v1File;    // through a version-1 file (see the top)
 };
 
 // Taken at commit 1971ca6 (before the stem tap), host build, GCC x86-64.
 Case g_cases[] = {
-    {"acidjam song mono 44k", 0, -1, true, 44100.0f, 0x17a76a05b8e3e21bull},
-    {"acidjam p1 stereo 44k", 0, 0, false, 44100.0f, 0x22d4f5d730c86fb9ull},
-    {"basshaus p1 stereo 44k", 1, 0, false, 44100.0f, 0x6e8364d9b9018eefull},
-    {"warehous p1 stereo 44k", 2, 0, false, 44100.0f, 0x454f74f33961ffb6ull},
-    {"basshaus p1 mono 44k", 1, 0, true, 44100.0f, 0x7640829b2ba10f2bull},
-    {"warehous p1 mono 32k", 2, 0, true, 32000.0f, 0x5b41d2c973aeb313ull},
-    {"acidjam p2 stereo 32k", 0, 1, false, 32000.0f, 0xf829a6ffa02b67f9ull},
+    {"acidjam song mono 44k", 0, -1, true, 44100.0f, 0x17a76a05b8e3e21bull, false},
+    {"acidjam p1 stereo 44k", 0, 0, false, 44100.0f, 0x22d4f5d730c86fb9ull, false},
+    {"basshaus p1 stereo 44k", 1, 0, false, 44100.0f, 0x6e8364d9b9018eefull, false},
+    {"warehous p1 stereo 44k", 2, 0, false, 44100.0f, 0x454f74f33961ffb6ull, false},
+    {"basshaus p1 mono 44k", 1, 0, true, 44100.0f, 0x7640829b2ba10f2bull, false},
+    {"warehous p1 mono 32k", 2, 0, true, 32000.0f, 0x5b41d2c973aeb313ull, false},
+    {"acidjam p2 stereo 32k", 0, 1, false, 32000.0f, 0xf829a6ffa02b67f9ull, false},
+    {"basshaus song mono 44k", 1, -1, true, 44100.0f, 0xd59fda34bfb95bd7ull, false},
+    {"warehous song stereo 44k", 2, -1, false, 44100.0f, 0x2a552b7e908ced43ull, false},
+    {"acidjam song mono 44k, v1 file", 0, -1, true, 44100.0f, 0x17a76a05b8e3e21bull, true},
+    {"basshaus song mono 44k, v1 file", 1, -1, true, 44100.0f, 0xd59fda34bfb95bd7ull, true},
+    {"warehous song stereo 44k, v1 file", 2, -1, false, 44100.0f, 0x2a552b7e908ced43ull, true},
 };
+
+// Saves p as a version-1 project and loads it back (the bytes version 1 kept
+// reserved carry an instrument id that must be ignored).
+void throughV1File(Project& p) {
+  p.version = 1;
+  for (int t = 0; t < kNumTracks; ++t) {
+    setInstrumentId(p.tracks[t], macro::builtinAt(0).id);
+    p.tracks[t].macro[0] = 200;
+  }
+  pgtest::MemFs fs;
+  it::check(io::saveProject(fs, io::kMountInt, "V1", p) == io::Status::Ok, "v1 save");
+  static Project q;
+  io::HeaderInfo hi{};
+  it::check(io::loadProject(fs, io::kMountInt, "V1", q, &hi) == io::Status::Ok, "v1 load");
+  it::check(hi.projectVersion == 1, "v1 header says version %d", hi.projectVersion);
+  p = q;
+}
 
 // Same sequence of calls as host/tools/render_demo.cpp (song or 2 loops of a
 // pattern, Stop, 1 s tail, 256-frame blocks).
@@ -55,7 +88,10 @@ uint64_t render(const Case& c, long* framesOut) {
   Engine& eng = g_inst.engine();
   Project& p = g_inst.project();
   demo::build(eng, p, c.demo);
+  if (c.v1File) throughV1File(p);
   eng.sanitizeProject(p);
+  for (int t = 0; t < kNumTracks; ++t)
+    it::check(instrumentId(p.tracks[t]) == 0 && p.tracks[t].macro[0] == 0, "%s: track %d has an instrument", c.name, t);
   long steps = 0;
   if (c.pattern < 0) {
     p.songMode = 1;
@@ -106,8 +142,8 @@ int main(int argc, char** argv) {
     long frames = 0;
     const uint64_t h = render(c, &frames);
     if (print || !kEnforce)
-      std::printf("    {\"%s\", %d, %d, %s, %.1ff, 0x%016llxull},   // %ld frames\n", c.name, c.demo, c.pattern,
-                  c.mono ? "true" : "false", double(c.sr), (unsigned long long)h, frames);
+      std::printf("    {\"%s\", %d, %d, %s, %.1ff, 0x%016llxull, %s},   // %ld frames\n", c.name, c.demo, c.pattern,
+                  c.mono ? "true" : "false", double(c.sr), (unsigned long long)h, c.v1File ? "true" : "false", frames);
     if (kEnforce && !print) it::check(h == c.hash, "%s: hash %016llx, golden %016llx", c.name, (unsigned long long)h,
                                       (unsigned long long)c.hash);
   }
