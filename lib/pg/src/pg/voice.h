@@ -39,9 +39,10 @@ class Voice {
 
   // Fractional parameters (docs/MACROLAB.md "What a moving parameter sounds
   // like"): while an instrument's macro moves, the engine calls this instead of
-  // setParams, at its control rate (every kFineQuanta quanta) and only when a
-  // value changed, with the track's 24 sound params as floats within their
-  // ranges (enums and semitone intervals already whole numbers). The voice keeps
+  // setParams, at its control rate (every kFineQuanta quanta for the synths,
+  // every kFineEvalQuanta for the drums), with the track's 24 sound params as
+  // floats within their ranges (enums and semitone intervals whole numbers).
+  // Must be cheap when nothing changed (the values may repeat). The voice keeps
   // these values until the next call or the next setParams, which returns it to
   // the 7-bit path (and must then re-map whatever the fractional values touched,
   // so the result is exactly what setParams alone gives). A voice that has no

@@ -9,8 +9,8 @@
 # bass-house wobble, SLIDE for the 303 performance (longer glides, harder
 # accents).
 # Slow sweeps: OPEN is the set most likely to be swept slowly; near the
-# resonance peak (OPEN 0.4..0.7) each 7-bit cutoff step is ~0.7 semitone and
-# may be heard as a staircase today (docs/MACROLAB.md, "What a moving
+# resonance peak (OPEN 0.4..0.7) each 7-bit cutoff step is ~0.7 semitone; a
+# moving macro glides between them since stage B (docs/MACROLAB.md, "What a moving
 # parameter sounds like"). Judge the sound, not the stepping.
 voice bass
 name ACID
