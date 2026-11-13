@@ -69,7 +69,7 @@ up x
 up n
 wait 400
 
-# a step held + a macro key: a macro lock on that step (TONE darker on step 3)
+# a step held + a macro key: that note's own value of the macro (TONE darker on step 3)
 down 3
 wait 300
 down shift

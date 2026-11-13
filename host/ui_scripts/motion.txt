@@ -1,0 +1,97 @@
+# Motion on the instrument page (docs/ux/motion*.png, docs/UX.md 10.3 "Motion"):
+# notes with their own macro values, the page while they play, a recording pass.
+#   build/host/ui_shot host/ui_scripts/motion.txt docs/ux
+dev 0
+
+# a new project and a bass line with a kick
+empty
+down ctl
+tap n
+up ctl
+wait 1600
+steppost 0 0 1
+steppost 0 4 1
+steppost 0 8 1
+steppost 0 12 1
+steppost 6 0 1 36 100
+steppost 6 3 1 36 100
+steppost 6 4 1 48 100
+steppost 6 8 1 36 100
+steppost 6 10 1 39 100
+steppost 6 12 1 43 100
+steppost 6 14 1 36 100
+
+# the bass's ACID page; step 1 held: OPEN down and BITE up on that note (amber, the
+# base as the white mark)
+down shift
+tap j
+up shift
+tap 9
+wait 300
+down 1
+wait 300
+tap z
+tap z
+tap z
+tap z
+tap z
+tap z
+tap z
+tap z
+tap v
+tap v
+tap v
+tap v
+tap v
+tap v
+wait 60
+shot motion-held
+up 1
+wait 100
+
+# step 9 (q): OPEN up on that note
+down q
+wait 300
+down shift
+tap x
+tap x
+tap x
+up shift
+up q
+wait 100
+
+# playing: OPEN glides from note 1 to note 9 and back, the slider moves by itself
+tap spc
+wait 1000
+until 6 4
+wait 200
+shot motion-playing
+
+# GROOVE: the notes with their own values carry the lock marker
+tap `
+wait 100
+shot groove-motion
+# STEP EDIT on an instrument track: the MOVE field (k) shows which macros the note
+# has values of (marks) and the focused macro's value; k again: the next macro
+down 1
+wait 300
+tap k
+tap k
+wait 50
+shot step-edit-motion
+up 1
+wait 50
+tap 9
+wait 100
+
+# record on: hold v (BITE up) while it plays: BITE is live (record colour) and
+# its value goes into every note it passes
+tap ent
+down v
+wait 700
+shot motion-live
+up v
+tap ent
+wait 300
+tap spc
+wait 300

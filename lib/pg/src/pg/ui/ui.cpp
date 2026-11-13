@@ -172,6 +172,27 @@ bool Ui::clearStepOwn(int t, Step& s) const {
   return true;
 }
 
+uint8_t Ui::motionMask(int t) const {
+  if (!instrumentIdOf(t)) return 0;
+  const int len = trackLen(t) < patternLen() ? trackLen(t) : patternLen();
+  uint32_t w = 0;
+  for (int i = 0; i < len; ++i) {
+    const Step s = stepAt(t, i);
+    if (s.on()) w |= s.extWord();
+  }
+  uint8_t mask = 0;
+  for (int m = 0; m < kTrackMacros; ++m)
+    if ((w >> (6 * m)) & 63u) mask = uint8_t(mask | (1u << m));
+  return mask;
+}
+
+int Ui::shownMacro(int t, int m) const {
+  t &= 7;
+  m &= 3;
+  if (playing_ && ((st_.motion[t] >> m) & 1u) && !((st_.live[t] >> m) & 1u)) return st_.macroPos[t][m];
+  return macroValue(t, m);
+}
+
 bool Ui::patternUsed(int pat) const {
   const Pattern& P = proj_->patterns[pat & 15];
   for (int t = 0; t < kNumTracks; ++t) {
@@ -267,6 +288,9 @@ void Ui::setMacro(int t, int m, int v) {
   pendMac_[t][m] = uint8_t(v);
   pendMacFrame_[t][m] = frame_;
   pendMacMask_[t] |= uint8_t(1u << m);
+  // Record on and playing: the move is recorded into the notes it passes (the engine
+  // writes them; one undo unit with the pass's notes).
+  if (recOn_ && playing_ && instrumentOf(t)) undoForRecording("RECORDED MOTION");
   send(cmd(CmdType::SetMacro, t, m, v));
   ++serial_;
 }
@@ -333,6 +357,11 @@ void Ui::macroKeyDown(int k, int n, bool shift) {
   }
   const int m = n / 2, dir = (n & 1) ? 1 : -1;
   if (m >= s->numMacros) return;
+  if (heldStep_ < 0 && isHeld(kKDel)) {   // DEL held + a macro key: clear that macro's motion
+    rec_[k] = KeyRec{kActNone, 0, 0, 0};
+    clearMotion(m);
+    return;
+  }
   trackFocus_[sel_] = uint8_t(kMacroIndex0 + m);
   focus_ = ValueRef{false, sel_, uint8_t(kMacroIndex0 + m)};
   rec_[k] = KeyRec{kActMacro, uint8_t(m), 0, 0};

@@ -107,6 +107,12 @@ class Ui {
   // parameter lock, on an instrument track the note's value of that macro
   // (index kMacroIndex0 + m); -1 = none.
   int stepOwnValue(int t, const Step& s, int index) const;
+  // Motion (UX.md 10.3): bit m = a note of track t in the shown pattern has its own
+  // value of macro m. Where the page shows macro m: the engine's heard position
+  // while the playing pattern's motion moves it, else macroValue().
+  uint8_t motionMask(int t) const;
+  int shownMacro(int t, int m) const;
+  bool macroLive(int t, int m) const { return playing_ && ((st_.live[t & 7] >> (m & 3)) & 1u); }
   bool instrumentPage() const;     // SOUND shows the player's page (instrument / classic), not parameter pages
   bool listVisible() const { return listUntil_ != 0; }   // the instrument list overlay
   // Developer mode (desktop --dev / --lab): SOUND can also show the bare parameter
@@ -230,7 +236,7 @@ class Ui {
   uint32_t gestureNow() const;
   bool undoCovers(uint32_t gest) const;
   void undoForStep(int t, int idx, const char* what);
-  void undoForRecording();
+  void undoForRecording(const char* label = "RECORDED NOTES");
   void undo();
   void cutCopyTrack(bool cut);
   void cutCopyPattern(bool cut);
@@ -291,6 +297,7 @@ class Ui {
   void editField(int dir, int mag, bool shift);
   void editLock(int dir, int mag, bool shift);
   void stepMacroEdit(int t, Step& s, int m, int dir, int mag, bool shift);
+  void clearMotion(int m);
   bool clearStepOwn(int t, Step& s) const;
   void setValue(const ValueRef& ref, int v);
   const ParamInfo* infoFor(const ValueRef& ref) const;

@@ -516,7 +516,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
       g.text(fx + 3, 50, key, LINE);
       continue;
     }
-    const char* fname = (k == kFGate && drum) ? "PTCH" : kFieldNames[k];
+    const char* fname = (k == kFGate && drum) ? "PTCH" : (k == kFLock && instrumentIdOf(t) ? "MOVE" : kFieldNames[k]);
     const bool selF = k == stepField_;
     g.rrect(fx, 48, 27, 37, selF ? RAISED : BG);
     if (selF) g.rframe(fx, 48, 27, 37, WHITE);
@@ -549,7 +549,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
           const int f = focusIndexFor(t);
           const int fm = isMacroIndex(f) ? f - kMacroIndex0 : 0;
           for (int m = 0; m < kTrackMacros; ++m)
-            g.rect(fx + 5 + m * 5, 64, 4, 2, s.hasMacro(m) ? uint8_t(AMBER) : (m == fm ? uint8_t(LINE) : uint8_t(RAISED)));
+            g.rect(fx + 10 + m * 4, 52, 3, 3, s.hasMacro(m) ? uint8_t(AMBER) : (m == fm ? uint8_t(TEXT) : uint8_t(LINE)));
           const ParamInfo* info = trackInfo(t, kMacroIndex0 + fm);
           char nm[6], v[kValueTextCap];
           if (info) upperCopy(info->name, nm, 5);
@@ -596,7 +596,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
   x = g.text(4, 127, "TAP STEP", WHITE);
   x = g.text(x, 127, " COPY HERE  ", DIM);
   x = g.text(x, 127, "DEL", WHITE);
-  g.text(x, 127, " NO LOCK", DIM);
+  g.text(x, 127, instrumentIdOf(t) ? " CLEAR" : " NO LOCK", DIM);
   footerRight(g, "/ HELP", DIM);
 }
 
@@ -780,6 +780,7 @@ void Ui::drawInstrument(Framebuffer& fb) {
   }
   drawScope(fb);
   // the four macros
+  const uint8_t motion = motionMask(t);
   for (int m = 0; m < kTrackMacros; ++m) {
     const int cx0 = kCellX[m / 2], cy0 = kLabelY[m % 2], w = kCellW;
     const int kLo = kKNote0 + 2 * m, kHi = kLo + 1;
@@ -799,9 +800,11 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const bool f = !focus_.global && focus_.track == t && focus_.index == kMacroIndex0 + m;
     const bool locked = held && hs.hasMacro(m);
     const bool moving = macroMoving(m);
-    const bool lit = f || moving || locked;
-    const int v = macroValue(t, m);
-    const int shown = locked ? hs.macroValue(m) : v;
+    const bool live = macroLive(t, m);              // motion recording: the hand is written into the notes
+    const bool lit = f || moving || locked || live;
+    const int v = macroValue(t, m);                  // the base
+    const int heard = shownMacro(t, m);              // the motion moves it while playing
+    const int shown = locked ? hs.macroValue(m) : heard;
     // the label row: low end, the macro's name, high end
     char nm[8], lab[10];
     fitText(nm, mc.name, 6);
@@ -812,10 +815,15 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const int ncx = (mc.lo[0] || mc.hi[0]) ? (loEnd + hiStart) / 2 : cx0 + w / 2;
     if (lit) {
       const int nw = int(std::strlen(nm)) * 6 + 3;
-      g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col));
+      g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col)));
       g.textC(ncx, cy0, nm, BG);
     } else {
       g.textC(ncx, cy0, nm, TEXT);
+    }
+    // motion: notes of this pattern carry their own values of this macro
+    if ((motion >> m) & 1u) {
+      const int mx = ncx - (int(std::strlen(nm)) * 6 + 3) / 2 - 7;
+      if (mx >= loEnd + 1) g.text(mx, cy0, "~", AMBER);
     }
     // the keys as caps at the ends: the left one moves toward the left label
     const bool d1 = isHeld(kLo) && rec_[kLo].act == kActMacro, d2 = isHeld(kHi) && rec_[kHi].act == kActMacro;
@@ -833,9 +841,9 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const int dx = tx0 + (macro::startByte(mc) * tl + 127) / 255;
     g.pixel(dx, sy + 7, DIM);
     g.rect(dx - 1, sy + 8, 3, 1, DIM);
-    if (locked) g.rect(tx0 + (v * tl + 127) / 255, sy, 1, 9, WHITE);   // where it is when not locked
+    if (locked || shown != v) g.rect(tx0 + (v * tl + 127) / 255, sy, 1, 9, WHITE);   // the base, where it differs
     // the handle: a cap with a dark outline so it reads over the fill
-    const uint8_t hc = locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : (f ? col : tc(t, kMid)));
+    const uint8_t hc = live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : (f ? col : tc(t, kMid))));
     g.rect(hx - 3, sy, 7, 9, BG);
     g.rrect(hx - 2, sy, 5, 9, hc);
   }
@@ -847,7 +855,7 @@ void Ui::drawInstrument(Framebuffer& fb) {
     x = g.text(x, 127, " INSTRUMENT  HOLD STEP+KEY ", DIM);
     g.text(x, 127, PG_ICON_LOCK, AMBER);
   } else {
-    g.text(4, 127, "MOVE A MACRO = LOCK  DEL REMOVE", DIM);
+    g.text(4, 127, "MOVE A MACRO = NOTE VALUE  DEL", DIM);
   }
   footerRight(g, "/ HELP", DIM);
   if (listUntil_) drawInstrumentList(fb);

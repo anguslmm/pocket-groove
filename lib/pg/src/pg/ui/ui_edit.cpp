@@ -128,11 +128,40 @@ void Ui::undoForStep(int t, int idx, const char* what) {
 // writes the step itself, so the UI snapshots when it sends the note. The
 // snapshot is of the playing pattern; a note quantised onto step 1 of the NEXT
 // pattern (pressed just before a pattern change) is not in it.
-void Ui::undoForRecording() {
+void Ui::undoForRecording(const char* label) {
   if (!recGest_) recGest_ = ++gestSeq_;
   const uint32_t g = heldStep_ >= 0 ? heldGest_ : recGest_;
   if (undoCovers(g)) return;
-  snapshotUndo(pat_, "RECORDED NOTES", g);
+  snapshotUndo(pat_, label, g);
+}
+
+// Hold DEL + a macro key on the instrument page: that macro's values leave every
+// note of the selected track in the shown pattern (one undo unit, a WriteTrack).
+void Ui::clearMotion(int m) {
+  const int t = sel_;
+  const macro::MacroSet* s = instrumentOf(t);
+  if (!s || m < 0 || m >= s->numMacros) return;
+  char buf[40];
+  char* o = cat(buf, s->macros[m].name);
+  if (!((motionMask(t) >> m) & 1u)) {
+    bool any = false;   // (beyond the track's length counts too)
+    for (int i = 0; i < kMaxSteps; ++i) any |= stepAt(t, i).hasMacro(m);
+    if (!any) {
+      cat(o, " HAS NO MOTION HERE");
+      toast(buf, 0);
+      return;
+    }
+  }
+  if (writeBusy_) { toast("BUSY - TRY AGAIN", 0); return; }
+  o = cat(o, " MOTION CLEARED");
+  snapshotUndo(pat_, buf);
+  const int spare = 1 - undoIdx_;
+  TrackPattern& d = snap_[spare].tracks[t];
+  d = snap_[undoIdx_].tracks[t];   // the track as shown
+  for (Step& st : d.steps) st.clearMacro(m);
+  postWrite(pat_, t, spare);
+  cat(o, "  CTRL+Z UNDO");
+  toast(buf, 1);
 }
 
 bool Ui::postWrite(int pat, int track, int buf) {

@@ -16,6 +16,10 @@
 //                 macro, one per macro (both keys: the default), in whole levels
 //                 of 63; DEL removes the focused macro's, then all; the STEP EDIT
 //                 MOTION field (its pad again: the next macro)
+//   motion        while playing the sliders follow the engine (the base stays);
+//                 a move of a macro with motion only moves its base; record on +
+//                 a held macro key = live (written into the notes passed, one
+//                 undo unit); hold DEL + a macro key clears its motion (undo)
 //   sweep         SHIFT+[ ] moves the bass's macro 1 (CLASSIC: the cutoff)
 //   help          key labels and explain texts of the page and its SHIFT layer
 #include <cstdio>
@@ -317,6 +321,82 @@ static void testLocks() {
   tap("space");
 }
 
+// Motion on the page: the sliders follow the engine while the pattern plays (the
+// base stays), the clear gesture (hold DEL + a macro key), a recording pass of a
+// moved macro (live: the chip in the record colour, written into the notes, one
+// undo unit).
+static void testMotion() {
+  newProjectOnBass();
+  const int p0 = MAC(kTrackBass, 0), p1 = MAC(kTrackBass, 1);
+  // two notes with their own OPEN, set by hand (hold the step, tap the macro key)
+  down("1"); R->run(300);
+  for (int i = 0; i < 20; ++i) tap("z");
+  up("1");
+  down("5"); R->run(300);
+  for (int i = 0; i < 20; ++i) tap("x");
+  up("5");
+  const int lo = R->step(kTrackBass, 0).macroValue(0), hi = R->step(kTrackBass, 4).macroValue(0);
+  CHECK(lo < p0 && hi > p0);
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 1);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), p0);  // stopped: the page shows the base
+  // playing: the slider follows the engine; the base does not move
+  tap("space");
+  int seenLo = 999, seenHi = -1, follow = 0, frames = 0;
+  for (int f = 0; f < 120; ++f) {
+    R->run(33);
+    const int v = R->ui.shownMacro(kTrackBass, 0);
+    seenLo = v < seenLo ? v : seenLo;
+    seenHi = v > seenHi ? v : seenHi;
+    ++frames;
+    // (the page shows the status of its last frame: within one frame's movement, ~11)
+    follow += std::abs(v - int(engine_detail::macroPosition(kTrackBass, 0) + 0.5f)) <= 16;
+  }
+  CHECK(seenLo <= lo + 2 && seenHi >= hi - 2);
+  CHECK(follow >= frames - 2);
+  CHECK_EQ(MAC(kTrackBass, 0), p0);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 1), p1);  // no motion: its position
+  // a move of OPEN while the motion owns it: only its base
+  tap("x");
+  CHECK_EQ(MAC(kTrackBass, 0), p0 + 2);
+  // record on: a moved macro is live (heard, written into the notes it passes)
+  tap("ent");
+  down("v");
+  R->run(2500);                                   // more than a bar: every note passes
+  CHECK(R->ui.macroLive(kTrackBass, 1));
+  R->frame();                                     // drawn: BITE's chip in the record colour
+  up("v");
+  CHECK(R->step(kTrackBass, 0).hasMacro(1) && R->step(kTrackBass, 4).hasMacro(1));
+  CHECK(!R->step(kTrackBass, 2).hasExt());        // no values on empty steps
+  CHECK(R->ui.undoAvailable());
+  tap("ent");                                     // record off: the pass ends, BITE plays its new motion
+  R->run(100);
+  CHECK(!R->ui.macroLive(kTrackBass, 1));
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 3);
+  ctrl("z");                                      // the pass is one undo unit
+  R->run(100);
+  CHECK(!R->step(kTrackBass, 0).hasMacro(1) && !R->step(kTrackBass, 4).hasMacro(1));
+  CHECK(R->step(kTrackBass, 0).hasMacro(0) && R->step(kTrackBass, 4).hasMacro(0));   // the hand-set ones stay
+  // clear OPEN's motion: hold DEL, tap one of its keys
+  down("del");
+  tap("z");
+  up("del");
+  R->run(50);
+  CHECK(toastHas("MOTION CLEARED"));
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 0);
+  CHECK(!R->step(kTrackBass, 0).hasExt() && !R->step(kTrackBass, 4).hasExt());
+  CHECK(R->step(kTrackBass, 0).on());             // the notes stay
+  R->run(400);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), MAC(kTrackBass, 0));
+  down("del"); tap("z"); up("del");
+  CHECK(toastHas("NO MOTION"));
+  ctrl("z");                                      // undo brings the values back
+  R->run(100);
+  CHECK(R->step(kTrackBass, 0).hasMacro(0) && R->step(kTrackBass, 4).hasMacro(0));
+  tap("space");
+  R->run(100);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), MAC(kTrackBass, 0));   // stopped: the base again
+}
+
 static void testSweep() {
   newProjectOnBass();
   tap("`");
@@ -350,7 +430,7 @@ static void testHelp() {
   tap("x");
   R->ui.explainText(title, &l1, &l2);
   CHECK(std::strcmp(title, "x: OPEN UP") == 0 || std::strstr(title, "OPEN UP") != nullptr);
-  CHECK(std::strstr(l2, "LOCK") != nullptr);
+  CHECK(std::strstr(l2, "NOTE VALUE") != nullptr);
   tap(".");
   R->ui.explainText(title, &l1, &l2);
   CHECK(std::strstr(title, "NEXT INSTRUMENT") != nullptr);
@@ -384,6 +464,7 @@ int main() {
     testInstrumentSteps();
     testClassic();
     testLocks();
+    testMotion();
     testSweep();
     testHelp();
   }
