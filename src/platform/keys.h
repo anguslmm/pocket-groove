@@ -62,6 +62,7 @@ bool poll(Event* out);
 bool waitEvent(Event* out, uint32_t timeoutMs);
 // Unused stack of the reader task (bytes, high-water mark), 0 if not running.
 uint32_t taskStackFree();
+constexpr uint32_t kTaskStackBytes = 4096;   // the reader task's stack
 
 // Keys currently held as seen by the reader task (bit n = key id n, bit 56 = G0).
 uint64_t heldMask();

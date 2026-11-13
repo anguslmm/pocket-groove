@@ -25,6 +25,8 @@
 //            the lead on HANDS, every macro standing (RUN mot-still) against two
 //            macros of each sweeping all the time (RUN mot-sweep): the difference as
 //            a share of one core, and the worst blocks of the sweep
+//   SAMPLER  ACIDJAM with PERC on CHOP, then STUTTER (stage F1): the sampler voice's own
+//            render cost while it sounds (cycles per frame and % of a core), its noteOn
 //   TAIL     cost of each voice over its decay after one note, and of the engine after
 //            Stop (FX tails): a rise at the end = denormals
 //   LIVE     the real audio task + I2S for 20 s per configuration (DMA 4/8, UI on/off,
@@ -54,6 +56,7 @@
 
 #include "../platform/audio_out.h"
 #include "../platform/display.h"
+#include "../platform/sample_flash.h"
 #include "../platform/system.h"
 #include "pg/bass/bass_math.h"
 #include "pg/demo/demo.h"
@@ -248,9 +251,11 @@ class Probe final : public pg::Voice {
   bool active() const override { return in->active(); }
   bool mono() const override { return in->mono(); }
   void setMonoOutput(bool m) override { in->setMonoOutput(m); }
+  void setSampleSlot(uint8_t slot) override { in->setSampleSlot(slot); }
 };
 
 Probe g_probe[pg::kNumTracks];
+Probe g_smpProbe;   // the PERC track's sampler (VOICE KINDS), when a sampler instrument plays
 const char* const kTrackName[pg::kNumTracks] = {"kick", "snare", "clap", "hatC", "hatO", "perc", "bass", "lead"};
 
 size_t voiceSize(int t) {
@@ -294,6 +299,7 @@ struct RunCfg {
   int tailSec;              // after the bars: Stop and render this long (TAIL buckets of 1 s)
   int leadChord = -1;       // >= 0: every lead step plays this ChordType (0 = single note)
   int motion = 0;           // 1: bass ACID + lead HANDS bound, still; 2: the same with two macros of each sweeping
+  const char* percInst = nullptr;   // PERC plays this instrument (a sampler one: CHOP, TAPE, STUTTER)
 };
 
 constexpr int kBins = 1024, kBinCyc = 2048;   // block histogram: 2048-cycle bins up to 2.1 M
@@ -341,6 +347,12 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
     g_probe[t].st = VStat{};
     eng.setVoice(t, &g_probe[t]);
   }
+  g_smpProbe.in = &g_inst.sampler();
+  g_smpProbe.size = sizeof(pg::sampler::SamplerVoice);
+  g_smpProbe.gate = true;
+  g_smpProbe.warm = false;
+  g_smpProbe.st = VStat{};
+  eng.setAltVoice(pg::kTrackPerc, pg::kVoiceSampler, &g_smpProbe);
   pg::demo::build(eng, p, demo);
   if (c) {
     for (int t = 0; t < pg::kNumTracks; ++t) {
@@ -353,6 +365,16 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
       for (auto& pat : p.patterns)
         for (auto& st : pat.tracks[pg::kTrackLead].steps) st.setChord(static_cast<uint8_t>(c->leadChord));
   }
+  if (c && c->percInst) {
+    // A chop on every off-beat 8th at least, so the sampler sounds through the run.
+    pg::TrackPattern& tp = p.patterns[pattern].tracks[pg::kTrackPerc];
+    const int len = tp.length ? tp.length : 16;
+    for (int i = 2; i < len && i < pg::kMaxSteps; i += 4)
+      if (!tp.steps[i].on()) {
+        tp.steps[i] = pg::kDefaultStep;
+        tp.steps[i].addFlags(pg::kStepOn);
+      }
+  }
   p.songMode = 0;
   eng.sanitizeProject(p);
   if (c && c->motion) {
@@ -362,6 +384,11 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
     const pg::macro::MacroSet* hands = byName(pg::kTrackLead, "HANDS");
     if (acid) eng.post(pg::setInstrumentCommand(pg::kTrackBass, acid->id, bassPos));
     if (hands) eng.post(pg::setInstrumentCommand(pg::kTrackLead, hands->id, leadPos));
+  }
+  if (c && c->percInst) {
+    const uint8_t mid[4] = {128, 128, 128, 128};
+    if (const pg::macro::MacroSet* m = byName(pg::kTrackPerc, c->percInst))
+      eng.post(pg::setInstrumentCommand(pg::kTrackPerc, m->id, mid));
   }
   pg::Command q{};
   q.type = pg::CmdType::QueuePattern;
@@ -426,11 +453,13 @@ void runEngine(const RunCfg& c) {
     const uint32_t pm0 = cyc();
     for (int q = 0; q < audio::kBlockFrames / pg::kQuantum; ++q) {
       for (auto& p : g_probe) { p.qCyc = 0; p.qExcl = 0; p.qNotes = 0; }
+      g_smpProbe.qCyc = 0; g_smpProbe.qExcl = 0; g_smpProbe.qNotes = 0;
       const uint32_t t0 = cyc();
       g_inst.process(g_buf + 2 * pg::kQuantum * q, pg::kQuantum);
       uint32_t dt = cyc() - t0;
       uint32_t vc = 0, ex = 0, qn = 0, a = 0;
       for (auto& p : g_probe) { vc += p.qCyc; ex += p.qExcl; qn += p.qNotes; a += p.active() ? 1 : 0; }
+      vc += g_smpProbe.qCyc; ex += g_smpProbe.qExcl; qn += g_smpProbe.qNotes;
       dt = dt > ex ? dt - ex : 0;
       const uint32_t own = dt > vc ? dt - vc : 0;
       blk += dt;
@@ -1137,6 +1166,30 @@ void profileTask(void*) {
          static_cast<unsigned long>(max0 / audio::kBlockFrames), static_cast<unsigned long>(g_res.max / audio::kBlockFrames));
     }
 
+    // The sampler (stage F1): ACIDJAM with PERC on each sampler instrument at its
+    // macros' middle; the sampler's own render cost while it sounds (the probe
+    // wraps it like the other voices), and the whole run's worst blocks.
+    {
+      const char* const smp[2] = {"CHOP", "STUTTER"};
+      for (const char* name : smp) {
+        RunCfg S{name, 0, 0, 8, all, false, false, false, 0, 0, -1, 0, name};
+        snprintf(st, sizeof(st), "%dHZ: SAMPLER %s", g_rate, name);
+        setStatus(st);
+        runEngine(S); printRun(S);
+        const VStat& v = g_smpProbe.st;
+        const Dec cf = dec(v.rSum, static_cast<uint64_t>(v.rN) * pg::kQuantum);
+        const uint64_t perFrame = 240000000ull / static_cast<uint64_t>(g_rate);   // cycles per frame = 100 % of a core
+        const Dec pc = dec(v.rSum * 100ull, static_cast<uint64_t>(v.rN) * pg::kQuantum * perFrame);
+        rp("SAMPLER %dHz %s: render c/f while sounding %d.%d = %d.%d %% of a core | quanta sounding %lu of %lu | "
+           "noteOn n %lu mean %lu max %lu cyc | setParams mean %lu max %lu cyc | pool %s\n",
+           g_rate, name, DF(cf), DF(pc), static_cast<unsigned long>(v.rN),
+           static_cast<unsigned long>(g_res.ownN), static_cast<unsigned long>(v.nN),
+           static_cast<unsigned long>(v.nN ? v.nSum / v.nN : 0), static_cast<unsigned long>(v.nMax),
+           static_cast<unsigned long>(v.pN ? v.pSum / v.pN : 0), static_cast<unsigned long>(v.pMax),
+           plat::samples::info().ok ? "app1 mapped" : "built-in sounds only");
+      }
+    }
+
     RunCfg T{"tail", 0, 0, 2, all, false, false, false, 0, 12};
     snprintf(st, sizeof(st), "%dHZ: TAILS / DENORMALS", g_rate);
     setStatus(st);
@@ -1171,6 +1224,7 @@ void setup() {
   disp::setBrightness(120);
   g_rep = static_cast<char*>(heap_caps_malloc(kRepCap, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   g_inst.init(44100.0f, true);
+  if (plat::samples::begin()) g_inst.setSamplePool(&plat::samples::pool());   // the SAMPLER runs read app1 as the instrument does
 #if PG_PROFILE_UI
   pg::ui::initPalette(g_fb);
   g_ui.init(g_inst.engine(), g_inst.project(), nullptr);

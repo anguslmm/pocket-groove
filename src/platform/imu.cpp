@@ -35,6 +35,21 @@ volatile bool s_run = false;
 Listener s_fn = nullptr;
 void* s_user = nullptr;
 volatile uint32_t s_reads = 0, s_errors = 0, s_busAvg = 0, s_busMax = 0, s_stack = 0;
+volatile uint32_t s_workAvg = 0;   // one reading's whole work on the task: bus + listener, running average (us)
+Raw s_last = {};                   // the newest reading (diagnostics; a torn read is harmless)
+
+bool readBurst(Raw* r, uint32_t* us) {
+  uint8_t b[12];
+  const int64_t t0 = esp_timer_get_time();
+  const bool ok = M5.In_I2C.readRegister(s_addr, 0x0C, b, sizeof(b), kI2cHz);
+  if (us) *us = static_cast<uint32_t>(esp_timer_get_time() - t0);
+  if (!ok) return false;
+  for (int i = 0; i < 3; ++i) {
+    r->acc[i] = static_cast<int16_t>(b[2 * i] | (b[2 * i + 1] << 8));
+    r->gyr[i] = static_cast<int16_t>(b[6 + 2 * i] | (b[7 + 2 * i] << 8));
+  }
+  return true;
+}
 
 bool wr(uint8_t reg, uint8_t v) {
   const bool ok = M5.In_I2C.writeRegister(s_addr, reg, &v, 1, kI2cHz);
@@ -47,20 +62,17 @@ void task(void*) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // asleep until start()
     TickType_t last = xTaskGetTickCount();
     while (s_run) {
-      uint8_t b[12];
+      Raw r;
+      uint32_t us = 0;
       const int64_t t0 = esp_timer_get_time();
-      const bool ok = M5.In_I2C.readRegister(s_addr, 0x0C, b, sizeof(b), kI2cHz);
-      const uint32_t us = static_cast<uint32_t>(esp_timer_get_time() - t0);
-      if (ok) {
-        Raw r;
-        for (int i = 0; i < 3; ++i) {
-          r.acc[i] = static_cast<int16_t>(b[2 * i] | (b[2 * i + 1] << 8));
-          r.gyr[i] = static_cast<int16_t>(b[6 + 2 * i] | (b[7 + 2 * i] << 8));
-        }
+      if (readBurst(&r, &us)) {
         if (s_fn) s_fn(r, s_user);
+        s_last = r;
+        const uint32_t work = static_cast<uint32_t>(esp_timer_get_time() - t0);
         s_reads = s_reads + 1;
         s_busAvg = s_busAvg ? s_busAvg + ((static_cast<int32_t>(us) - static_cast<int32_t>(s_busAvg)) / 16) : us;
         if (us > s_busMax) s_busMax = us;
+        s_workAvg = s_workAvg ? s_workAvg + ((static_cast<int32_t>(work) - static_cast<int32_t>(s_workAvg)) / 16) : work;
       } else {
         s_errors = s_errors + 1;
       }
@@ -124,7 +136,32 @@ Stats stats() {
   st.busAvgUs = s_busAvg;
   st.busMaxUs = s_busMax;
   st.stackFree = s_stack;
+  st.workAvgUs = s_workAvg;
+  st.last = s_last;
   return st;
+}
+
+bool sampleAtRest(Raw* avg, int n) {
+  if (!s_present || s_run || n <= 0) return false;
+  int32_t sum[6] = {};
+  int got = 0;
+  for (int i = 0; i < n; ++i) {
+    Raw r;
+    if (readBurst(&r, nullptr)) {
+      for (int k = 0; k < 3; ++k) {
+        sum[k] += r.acc[k];
+        sum[3 + k] += r.gyr[k];
+      }
+      ++got;
+    }
+    vTaskDelay(pdMS_TO_TICKS(1000 / kOdrHz));
+  }
+  if (!got) return false;
+  for (int k = 0; k < 3; ++k) {
+    avg->acc[k] = static_cast<int16_t>(sum[k] / got);
+    avg->gyr[k] = static_cast<int16_t>(sum[3 + k] / got);
+  }
+  return true;
 }
 
 }  // namespace imu

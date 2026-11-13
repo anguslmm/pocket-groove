@@ -39,7 +39,7 @@ constexpr int      kPinInt   = 11;
 constexpr int      kPinG0    = 0;
 constexpr int      kTaskPrio = 10;      // above the UI loop (1), far below audio (20)
 constexpr int      kTaskCore = 1;       // with the UI; core 0 is left to audio
-constexpr uint32_t kTaskStack = 4096;   // bytes; I2C via M5GFX + queue + listener
+constexpr uint32_t kTaskStack = kTaskStackBytes;   // I2C via M5GFX + queue + listener
 
 // TCA8418 registers (datasheet names)
 constexpr uint8_t REG_CFG = 0x01, REG_INT_STAT = 0x02, REG_KEY_LCK_EC = 0x03, REG_KEY_EVENT_A = 0x04;
