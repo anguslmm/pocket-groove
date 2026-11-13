@@ -8,7 +8,7 @@
 // and glides between them; ROAD itself stays the player's in the jam
 // patterns and moves only in the intro, build and outro. Tight punchy kick
 // (BOOM), clap (HYPE) layered with a short wood snare (WOOD), shuffled hats,
-// heavy ducking, sparse M1-style organ stabs (KEYS).
+// heavy ducking, sparse M1-style organ stabs (KEYS), a shaker (SHAKE).
 // Every pattern is four bars (64 steps); the riff is two bars. Instruments
 // and macro positions were chosen by measurement against the CLASSIC version
 // (host/tools/demo_compare, docs/STATE.md stage G).
@@ -18,7 +18,7 @@
 //   P3 DROP 2   riff A/B alternating, extra perc, more organ
 //   P4 BREAK    no kick: held organ chords, one long LFO growl per bar, clap build
 //   P5 BUILD    + clap/snare, open hats; the riff opens; snare roll in bar 4
-//   P6 INTRO    kick, hats, a ticking perc; the riff plain, ROAD opening
+//   P6 INTRO    kick, hats, the shaker; the riff plain, ROAD opening
 //   P7 OUTRO    kick, hats and the riff closing down
 //   P8 TOOL     drums only (jam over it)
 #include "demo_songs.h"
@@ -243,7 +243,7 @@ void buildBassHaus(const Engine& engine, Project& p) {
   instrument(p, CP, "HYPE", 135, 0);              // MORE 53 %
   instrument(p, CH, "TICK", 151, 63, 111);
   instrument(p, OH, "BLAST", 127, 23);
-  instrument(p, PC, "TRAIL", 230, 0, 255);        // the zap end, high and dirty: a ticking texture (was a shaker)
+  instrument(p, PC, "SHAKE", 127, 127, 127, 127); // the middle of every macro: the CLASSIC shaker exactly
   instrument(p, BS, "ROAD", kRoadBase, kDirtBase, kMoveBase);   // ROAD 55 %: past HOLLOW toward GROWL
   instrument(p, LD, "KEYS", 0, 0);                // the organ
 
@@ -254,7 +254,7 @@ void buildBassHaus(const Engine& engine, Project& p) {
   mix(p, CP, 115, 64, 0, 36, 10);
   mix(p, CH, 96, 58, 0, 6, 0);
   mix(p, OH, 84, 70, 0, 9, 40);
-  mix(p, PC, 42, 76, 12, 20, 30);
+  mix(p, PC, 72, 76, 12, 20, 30);   // SHAKE plays +5.9 dB (lvl 108): 72 x 108 / 86 = the CLASSIC 90
   mix(p, BS, 104, 64, 0, 0, 120);
   mix(p, LD, 117, 64, 40, 40, 96);
 

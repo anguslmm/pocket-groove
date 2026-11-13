@@ -9,7 +9,7 @@ namespace pg {
 namespace macro {
 namespace detail {
 
-extern const int kBuiltinCount = 27;
+extern const int kBuiltinCount = 28;
 
 extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
@@ -297,6 +297,30 @@ extern const MacroSet kBuiltin[] = {
       0x030d42eeu, 0x0445c3e8u, 0x030d4000u, 0x0445c0fau, 0x03a981f4u, 0x048442eeu, 0x04e203e8u, 0x057e4000u,
       0x067840fau, 0x077241f4u, 0x0733c2eeu, 0x0639c3e8u, 0x00000000u, 0x075303e8u, 0x00000000u, 0x00fa03e8u,
       0x00000000u, 0xfec783e8u, 0x00fa0000u, 0x06b6c3e8u, 0x00000000u, 0x027103e8u, 0x00000000u, 0xffa243e8u}},
+    // perc/shake.pgm
+    {5, 4, 13, 52, 0, 0, 0, 3,
+     {0x90, 0x92},   // tilt x, y
+     0x511a, "SHAKE",
+     "family: OPPOSITES.",
+     "A shaker on the SHKR model.", 0,   // voice kind
+     0x010000ffu, {4, 64, 64, 64, 64, 64, 64, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 108, 0, 0, 0, 0, 0, 0, 0},
+     {{"TONE", "DARK", "BRIGHT", "", 500, 0, 3},
+      {"LENGTH", "TIGHT", "LONG", "", 500, 3, 1},
+      {"GRAIN", "SAND", "BEADS", "", 500, 4, 4},
+      {"STROKE", "SOFT", "HARD", "", 500, 8, 5}},
+     {},
+     {},
+     {{0, 255, 0, 9, 4}, {1, 255, 0, 16, 5}, {3, 255, 0, 48, 4}},
+     {{1, 112, 0, 3}, {3, 113, 3, 3}, {6, 113, 6, 3}, {2, 112, 13, 3}, {5, 112, 21, 3}, {3, 113, 24, 3}, {6, 113, 27, 3}, {2, 113, 30, 3},
+      {4, 112, 33, 3}, {2, 113, 36, 3}, {7, 112, 39, 3}, {6, 113, 42, 3}, {1, 113, 45, 3}},
+     {},
+     {0x00000000u, 0x03e801f4u, 0x07c063e8u, 0x01770000u, 0x000001f4u, 0xff4483e8u, 0xfe2b4000u, 0x000001f4u,
+      0x017703e8u, 0xfff83000u, 0x000001f4u, 0x000fa2eeu, 0x002713e8u, 0x00000000u, 0x03e801f4u, 0x079183e8u,
+      0x00465000u, 0x001f40fau, 0x000001f4u, 0xffd8f2eeu, 0xffc953e8u, 0x00000000u, 0x03e801f4u, 0x06b6c3e8u,
+      0xfdecc000u, 0x000001f4u, 0x03a983e8u, 0x01388000u, 0x000001f4u, 0xfd8f03e8u, 0x00000000u, 0x000001f4u,
+      0x00fa03e8u, 0x06b6c000u, 0x03e801f4u, 0x000003e8u, 0x00bb8000u, 0x000001f4u, 0xff8303e8u, 0x009c4000u,
+      0x01f401f4u, 0x057e43e8u, 0xfe2b4000u, 0x000001f4u, 0x027103e8u, 0xff254000u, 0x000001f4u, 0x00dac3e8u,
+      0x0007d000u, 0x000001f4u, 0xffc182eeu, 0xff8ad3e8u}},
     // perc/chop.pgm
     {5, 4, 9, 38, 0, 0, 0, 0,
      {0x91, 0x92},   // tilt x, y

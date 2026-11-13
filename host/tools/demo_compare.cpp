@@ -5,7 +5,7 @@
 //
 //   demo_compare --dump DIR
 //       writes every demo as built now (raw Project bytes) to DIR/demoN.prj
-//   demo_compare --compare DIR [--demo N] [--pattern P|song] [--song] [--wav WAVDIR]
+//   demo_compare --compare DIR [--demo N] [--pattern P|song] [--song] [--wav WAVDIR [--wav-track T]]
 //       renders each pattern of each demo twice, from DIR/demoN.prj ("before")
 //       and as built now ("after"), through the stereo engine with the stem tap
 //       (host/common/bounce.h), and prints per track and for the mix: RMS and
@@ -15,7 +15,8 @@
 //       faults (NaN / absurd signal) and the ducker (lowest and mean gain over
 //       the render, and the bass stem's level just after the kick against just
 //       before it). With --wav, writes the mixes as 16-bit WAVs:
-//       WAVDIR/demoN_pP_before.wav / _after.wav (song: _song_).
+//       WAVDIR/demoN_pP_before.wav / _after.wav (song: _song_); --wav-track T also
+//       writes track T's dry stem, WAVDIR/demoN_pP_TRACK_before.wav / _after.wav.
 //   demo_compare --fit FILE --track T --pattern P [--top K] [--grid G] [--only NAME]
 //       FILE is a CLASSIC project (from --dump). For every built-in instrument
 //       of track T, a grid of macro positions (G levels per macro) is ranked by
@@ -279,16 +280,16 @@ void printRow(const char* what, const Features& a, const Features& b) {
               a.high, b.low, b.mid, b.high);
 }
 
-void writeWav(const std::string& path, const Render& r) {
-  std::vector<int16_t> pcm(r.mix[0].size() * 2);
-  for (size_t i = 0; i < r.mix[0].size(); ++i) {
-    pcm[2 * i] = int16_t(std::lround(double(r.mix[0][i]) * 32768.0));
-    pcm[2 * i + 1] = int16_t(std::lround(double(r.mix[1][i]) * 32768.0));
-  }
+void writeWav(const std::string& path, const std::vector<float> (&lr)[2]) {
+  std::vector<int16_t> pcm(lr[0].size() * 2);
+  for (size_t i = 0; i < lr[0].size(); ++i)
+    for (size_t c = 0; c < 2; ++c)
+      pcm[2 * i + c] = int16_t(std::clamp(std::lround(double(lr[c][i]) * 32768.0), -32768L, 32767L));
   if (!wav::write(path.c_str(), pcm, int(kSr), 2)) std::fprintf(stderr, "cannot write %s\n", path.c_str());
 }
 
-int compare(const std::string& dir, int onlyDemo, int onlyPattern, bool songToo, const std::string& wavDir) {
+int compare(const std::string& dir, int onlyDemo, int onlyPattern, bool songToo, const std::string& wavDir,
+            int wavTrack) {
   static Project before, after;
   int bad = 0;
   for (int d = 0; d < demo::count(); ++d) {
@@ -357,8 +358,12 @@ int compare(const std::string& dir, int onlyDemo, int onlyPattern, bool songToo,
         mkdirs(wavDir);
         const std::string stem =
             wavDir + "/demo" + std::to_string(d) + (pt < 0 ? std::string("_song") : "_p" + std::to_string(pt + 1));
-        writeWav(stem + "_before.wav", a);
-        writeWav(stem + "_after.wav", b);
+        writeWav(stem + "_before.wav", a.mix);
+        writeWav(stem + "_after.wav", b.mix);
+        if (wavTrack >= 0) {   // the track's own stem too (dry: without the FX returns)
+          writeWav(stem + "_" + kTrackNames[wavTrack] + "_before.wav", a.trk[wavTrack]);
+          writeWav(stem + "_" + kTrackNames[wavTrack] + "_after.wav", b.trk[wavTrack]);
+        }
       }
     }
   }
@@ -550,7 +555,7 @@ int inverse(int track, const char* name, int m, int param, const uint8_t* pos, c
 void usage() {
   std::fprintf(stderr,
                "usage: demo_compare --dump DIR\n"
-               "       demo_compare --compare DIR [--demo N] [--pattern P|song] [--song] [--wav WAVDIR]\n"
+               "       demo_compare --compare DIR [--demo N] [--pattern P|song] [--song] [--wav WAVDIR [--wav-track T]]\n"
                "       demo_compare --fit FILE --track T --pattern P [--top K] [--grid G] [--only NAME]\n"
                "                    [--try NAME:A,B,C,D ...]\n"
                "       demo_compare --inverse NAME --track T --macro M --param P --pos A,B,C,D --values V,V,..\n");
@@ -560,7 +565,7 @@ void usage() {
 
 int main(int argc, char** argv) {
   std::string dump, cmp, fitFile, wavDir;
-  int demoN = -1, pattern = -1, track = -1, top = 30, grid = 9;
+  int demoN = -1, pattern = -1, track = -1, top = 30, grid = 9, wavTrack = -1;
   bool song = false, songOnly = false;
   const char* only = nullptr;
   const char* invName = nullptr;
@@ -578,6 +583,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(a, "--compare")) cmp = next();
     else if (!std::strcmp(a, "--fit")) fitFile = next();
     else if (!std::strcmp(a, "--wav")) wavDir = next();
+    else if (!std::strcmp(a, "--wav-track")) wavTrack = std::atoi(next());
     else if (!std::strcmp(a, "--demo")) demoN = std::atoi(next());
     else if (!std::strcmp(a, "--pattern")) {
       const char* v = next();
@@ -627,7 +633,7 @@ int main(int argc, char** argv) {
   if (!cmp.empty()) {
     // --pattern song: the song chain only; --song: every pattern (or --pattern P) and the song
     const bool onlySong = songOnly && pattern < 0;
-    return compare(cmp, demoN, onlySong ? kNumPatterns : pattern, song, wavDir);
+    return compare(cmp, demoN, onlySong ? kNumPatterns : pattern, song, wavDir, wavTrack);
   }
   if (invName) return inverse(track, invName, invMacro, invParam, invPos, invValues);
   if (!fitFile.empty()) {

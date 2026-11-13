@@ -773,7 +773,7 @@ Every track of every demo plays a built-in instrument (SOUND, `9`, shows which; 
 | CLAP | HYPE | HYPE | HYPE |
 | CHH | TICK | TICK | TICK |
 | OHH | SWISH | BLAST | BLAST |
-| PERC | TRAIL (rim) | TRAIL (zap) | TRAIL (clave) |
+| PERC | TRAIL (rim) | SHAKE | TRAIL (clave) |
 | BASS | ACID | ROAD | POLES |
 | LEAD | HANDS | KEYS (organ) | HANDS |
 
@@ -1179,7 +1179,7 @@ Key = FX tab (`o` cycles DUCK, SPACE, MASTER) and column key.
 
 ![CHOP playing slice 1 of a sample](ux/sampler-chop.png)
 
-The PERC track can play a **sample** instead of its percussion sound: step its instrument (`9`, then `.`) past TAP and TRAIL to **CHOP**, **TAPE** or **STUTTER**. The picture becomes the sample's waveform: the part the next note plays is lit in the track colour, dotted lines mark the slices, a white line runs through it while it sounds. Top left: the slot number and the sample's name.
+The PERC track can play a **sample** instead of its percussion sound: step its instrument (`9`, then `.`) past TAP, TRAIL and SHAKE to **CHOP**, **TAPE** or **STUTTER**. The picture becomes the sample's waveform: the part the next note plays is lit in the track colour, dotted lines mark the slices, a white line runs through it while it sounds. Top left: the slot number and the sample's name.
 
 **Twelve slots.** The device keeps up to twelve samples (about 6 seconds each, mono). Each PERC track setting remembers which slot it plays (saved with the project); `shift`+`;` / `shift`+`.` on the instrument page choose the previous / next slot (`ctrl`+`z` takes a run of them back). An **empty slot plays a built-in sound** (three short sung phrases: OHYEAH, HEY and AHOO), and the page says `BUILT-IN`, so the instruments work before you have put anything in.
 

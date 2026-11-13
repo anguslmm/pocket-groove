@@ -1,0 +1,52 @@
+# SHAKE -- family: OPPOSITES.
+# Idea: the bright, noisy small percussion the slot lacked, on the voice's
+# shaker model (band-passed, optionally sparse noise; no pitch). The middle
+# of every macro is that model at its default values, the shaker of the
+# CLASSIC BASSHAUS demo; each macro runs it a long way both ways:
+#   TONE    dark: the band at 2.5 kHz, more resonant, no dry hiss .. bright:
+#           the band at 11 kHz, open, with air on top
+#   LENGTH  tight: an 8 ms tick .. long: a 250 ms wash (the tight end is
+#           lifted, the long end held down)
+#   GRAIN   sand: dense white grains, a wide band, a little dry hiss ..
+#           beads: sparse grains through a narrow, ringing band, a little
+#           longer (a rattle, the nearest this voice gets to jingles)
+#   STROKE  soft: a slow swell into the hit, darker, a little longer, clean
+#           .. hard: an instant attack, brighter, driven, dry noise on top
+#           (the drive's loudness is trimmed back)
+# Corners to try: TIGHT + HARD + BRIGHT is a closed-hat tick; LONG + SAND +
+# SOFT a cabasa push; BEADS + LONG + BRIGHT a tambourine-ish rattle (no
+# metal: the shaker model has no partials to ring).
+# Every parameter is latched at the next hit on this voice, so a sweep is
+# heard hit by hit (fine on a 16th line).
+# Try: TONE on X, GRAIN on Y on 16ths with ghost notes; then STROKE on the
+# accents.
+voice perc
+name SHAKE
+about "A shaker on the SHKR model."
+tilt x TONE                   # tilt: brighter / darker
+tilt y GRAIN                  # tilt: sand / beads
+base modl=shkr tune=64 decay=64 tone=64 bend=64 harm=64 noise=64 drive=32 lvl=108
+
+macro TONE 0.5 "DARK" "BRIGHT"
+  tune     0:0 0.5:64 1:127
+  tone     add 0:24 0.5:0 1:-12
+  noise    add 0:-30 0.5:0 1:24
+  trim     0:-0.5 0.5:0 0.75:1 1:2.5
+
+macro LENGTH 0.5 "TIGHT" "LONG"
+  decay    0:0 0.5:64 1:124
+  trim     0:4.5 0.25:2 0.5:0 0.75:-2.5 1:-3.5
+
+macro GRAIN 0.5 "SAND" "BEADS"
+  harm     0:0 0.5:64 1:110
+  tone     add 0:-34 0.5:0 1:60
+  noise    add 0:20 0.5:0 1:-40
+  decay    add 0:0 0.5:0 1:16
+
+macro STROKE 0.5 "SOFT" "HARD"
+  bend     0:110 0.5:64 1:0
+  decay    add 0:12 0.5:0 1:-8
+  drive    0:10 0.5:32 1:90
+  noise    add 0:-30 0.5:0 1:40
+  tune     add 0:-14 0.5:0 1:14
+  trim     0:0.5 0.5:0 0.75:-4 1:-7.5
