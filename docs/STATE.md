@@ -203,7 +203,7 @@ Order of work (owner, updated 2026-11-12):
    The old macro lock is gone (no locks on instrument tracks). UI: hold a step + macro key =
    that note's value of that macro (all four on one note; DEL: the focused macro's, then all;
    STEP EDIT field MOVE, `k` again = next macro), sliders follow the engine while playing (base =
-   white tick), amber ~ = the macro has motion here, red chip = live, hold DEL + macro key =
+   white tick), amber diamond (was a ~ until 2026-11-13) = the macro has motion here, red chip = live, hold DEL + macro key =
    clear its motion (undo), a recording pass is one undo unit. Docs: UX.md 7 and 10.3 "Motion",
    MANUAL.md 4.4 "Motion" and 10, MACROLAB.md "Motion"; screenshots docs/ux/motion-*.png,
    groove-motion.png, step-edit-motion.png. Host tests: itest_format (v1/v2 files built byte
