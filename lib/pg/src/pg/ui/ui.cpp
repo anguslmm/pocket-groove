@@ -887,7 +887,7 @@ void Ui::keyDown(int k, bool shift) {
     case kKSemicolon: if (shift && stepSampleSlot(-1)) return; semicolonDot(1, false); return;
     case kKDot: if (shift && stepSampleSlot(1)) return; semicolonDot(-1, false); return;
     case kKQuote: pageKey(shift); return;
-    case kKL: chordKey(shift); return;
+    case kKL: if (micKey(k)) return; chordKey(shift); return;
     case kKEnter: recToggle(); return;
     case kKDel: delDown(k); return;
     default: return;
@@ -924,6 +924,7 @@ void Ui::keyUp(int k) {
       eraseFinished();
       break;
     case kActTab: tabUp(k); break;
+    case kActMic: micRelease(); break;
     case kActHelp:
       if (!after(now_, helpDownMs_ + 400)) {      // tap: explain mode
         explain_ = true;
@@ -1834,6 +1835,7 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   trackDirty();
   updateFocusLock();
   if (env.sdPresent != listedSd_ && view_ == View::Project) refreshFiles();   // SD inserted / pulled
+  micTick();
   autosave();
   if (clipUntil_ && after(now_, clipUntil_)) clipUntil_ = 0;
   // The instrument page's picture: the engine taps the selected track only while it is shown.
@@ -1854,6 +1856,7 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   } else if (scope_.track() >= 0) {
     scope_.stop(*eng_);
   }
+  if (micState_ == kMicArmed && micPicture()) scopeMoved = true;   // the level and the growing wave
   const uint32_t bs = bodySignature();
   const uint32_t ss = statusSignature();
   if (!drawn_ || bs != lastBodySig_ || (scopeMoved && scopeCovered())) {

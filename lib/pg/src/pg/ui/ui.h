@@ -12,6 +12,7 @@
 #include "../macro/macro.h"
 #include "../platform.h"
 #include "../project.h"
+#include "../sampler/recorder.h"
 #include "../sampler/sampler.h"
 #include "format.h"
 #include "ghost.h"
@@ -207,6 +208,15 @@ class Ui {
   void setSampleSlot(int t, int slot);
   // A host's short message in the toast line (the desktop: a sample file dropped on the window).
   void notify(const char* text, bool error = false) { toast(text, error ? 2 : 0); }
+  // MICROPHONE (stage F2, UX.md 10.3 "Recording"): hold L on a sampler instrument's
+  // page to record into the track's slot. The platform's microphone; nullptr = none
+  // (L then says NO MIC). Call after init() (which forgets it).
+  void setMic(sampler::MicInput* m) { mic_ = m; ++serial_; }
+  // A recording (or the erase before one) is under way: the host keeps other flash
+  // writes (settings, transfers) off meanwhile; the UI's own autosave waits too.
+  bool micBusy() const { return micState_ != kMicIdle; }
+  bool micErasing() const { return micState_ == kMicErase; }
+  const sampler::RecView& micView() const { return micView_; }   // as of the last update()
 
   // ---- tilt (UX.md 10.3 "Tilt") --------------------------------------------
   // The host owns G0 (the firmware: volume, diagnostics) and reports the gesture
@@ -241,7 +251,7 @@ class Ui {
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
   enum Act : uint8_t {
     kActNone = 0, kActStep, kActPad, kActNote, kActRoll, kActValue, kActSweep, kActErase, kActTab, kActHelp,
-    kActMacro,
+    kActMacro, kActMic,
   };
   struct KeyRec {
     uint8_t act, a, b, c;   // meaning depends on act (see ui.cpp)
@@ -289,6 +299,15 @@ class Ui {
   void runMacroRepeats();
   void stepInstrument(int dir);
   void snapshotInstrument(int t);
+  // microphone (ui_mic.cpp)
+  enum : uint8_t { kMicIdle = 0, kMicErase, kMicArmed };
+  bool micKey(int k);          // L down: true if it is the record key here
+  void micStart();
+  void micRelease();
+  void micConfirmed();         // ENTER on "REPLACE SLOT n?"
+  void micTick();              // update(): the erase once ERASING is on screen; poll while armed
+  bool micPicture() const;     // the sampler page shows the recording instead of the sample
+  void drawMic(Framebuffer& fb);
   // tilt (ui_tilt.cpp)
   void tiltEngage();
   void tiltSend(bool force);
@@ -566,6 +585,11 @@ class Ui {
   const sampler::SamplerVoice* sampler_ = nullptr;
   int32_t wavePlayhead_ = -1;                // the playhead the picture last drew (-1 none)
   uint32_t wavePoolGen_ = 0;
+  // microphone (ui_mic.cpp)
+  sampler::MicInput* mic_ = nullptr;
+  uint8_t micState_ = kMicIdle, micSlot_ = 0;
+  bool micEraseShown_ = false, micThenStart_ = false;
+  sampler::RecView micView_{};
 
   // outbox: commands the engine queue had no room for, retried in order
   Command outbox_[kOutbox] = {};

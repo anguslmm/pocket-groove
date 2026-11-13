@@ -816,6 +816,7 @@ void Ui::drawScope(Framebuffer& fb) {
 // the sample's name (or BUILT-IN) in the top left corner, its length on the right.
 static_assert(sampler::kOverviewCols == Scope::kCols, "one overview column per pixel column of the box");
 void Ui::drawWave(Framebuffer& fb) {
+  if (micState_ != kMicIdle) { drawMic(fb); return; }   // erasing or recording (ui_mic.cpp)
   Gfx g(fb);
   const int t = sel_;
   const int x0 = kScopeX0, y0 = kScopeY0, h = kScopeY1 - kScopeY0 + 1, w = Scope::kCols;
@@ -995,15 +996,17 @@ void Ui::drawInstrument(Framebuffer& fb) {
     x = g.text(x, 127, "+MOVE", DIM);
     x = g.text(x + 12, 127, "DEL", WHITE);
     g.text(x, 127, "+KEY", DIM);
-  } else if (!held && samplerOn(t)) {   // a sampler: SHIFT+; / . steps the sample slot
+  } else if (!held && samplerOn(t)) {   // a sampler: SHIFT+; / . steps the sample slot, L records
     x = g.text(4, 127, ";", WHITE);
     x = g.text(x, 127, "/", DIM);
     x = g.text(x, 127, ".", WHITE);
-    x = g.text(x, 127, " INSTRUMENT  SFT+", DIM);
+    x = g.text(x, 127, " INST  SFT+", DIM);
     x = g.text(x, 127, ";", WHITE);
     x = g.text(x, 127, "/", DIM);
     x = g.text(x, 127, ".", WHITE);
-    g.text(x, 127, " SLOT", DIM);
+    x = g.text(x, 127, " SLOT  ", DIM);
+    x = g.text(x, 127, "L", WHITE);
+    g.text(x, 127, " MIC", DIM);
   } else if (!held) {
     x = g.text(4, 127, ";", WHITE);
     x = g.text(x, 127, "/", DIM);
