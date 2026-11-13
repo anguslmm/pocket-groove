@@ -1,10 +1,18 @@
 // Step-programming helpers shared by the factory demo songs (demo_*.cpp).
 // Not real-time; used only while building a Project.
+//
+// Since stage G (docs/STATE.md) every demo track plays a built-in instrument
+// (macros/*.pgm, named by voice and name): instrument() binds it with its
+// macro positions (the base the instrument page shows), and a note's own value
+// of a macro (motion: engine.h "MOTION") is set with mv(). Instrument tracks
+// have no parameter locks; the builders end with Engine::sanitizeProject,
+// which derives each instrument's sound parameters.
 #pragma once
 #include <cstdint>
 #include <cstring>
 
 #include "../engine.h"
+#include "../macro/macro.h"
 #include "../project.h"
 
 namespace pg::demo::util {
@@ -39,11 +47,13 @@ inline Step& ratchet(Step& s, int hits) {
   return s;
 }
 inline Step& chord(Step& s, int c) { s.setChord(uint8_t(c)); return s; }
-// One parameter lock: `param` is the track-param index (0..23 sound, 24..31 mixer).
-inline Step& lock(Step& s, int param, int value) {
-  s.setLock(uint8_t(param + 1), uint8_t(value));
+// The note's own value of macro m (0..3), position 0..255 (clamped; stored on 63 levels).
+inline Step& mv(Step& s, int m, int pos) {
+  s.setMacroValue(m, pos);
   return s;
 }
+// A straight line from a (k = 0) to b (k = n), rounded: per-note values of a ramp.
+inline int ramp(int a, int b, int k, int n) { return n > 0 ? a + (b - a) * k / n : a; }
 
 inline void clearTrack(Pattern& P, int track) {
   for (int i = 0; i < kMaxSteps; ++i) P.tracks[track].steps[i] = kDefaultStep;
@@ -89,17 +99,14 @@ inline void drumsRep(Pattern& P, int track, const char* s, int times, int scale 
 
 // ---- synth lines -------------------------------------------------------------
 // A note of a monophonic line or a stab. flags: kStepAccent / kStepSlide.
-// lockP < 0 = no lock.
+// tone: what the demo makes of this note (its own macro values), 0 = nothing.
+// Bytes, so the tables stay small in flash.
 struct N {
-  int step, note, vel;
-  uint8_t flags;
-  int gate;
-  int lockP, lockV;
+  uint8_t step, note, vel, flags, gate, tone;
 };
 inline Step& noteStep(Pattern& P, int track, const N& n, int offset = 0, int transpose = 0) {
   Step& s = put(P, track, n.step + offset, n.vel, n.note + transpose, n.gate > 0 ? n.gate : 2);
   s.addFlags(uint8_t(n.flags & (kStepAccent | kStepSlide)));
-  if (n.lockP >= 0) lock(s, n.lockP, n.lockV);
   return s;
 }
 
@@ -108,11 +115,13 @@ inline void name(Project& p, const char* n) {
   std::memset(p.name, 0, sizeof(p.name));
   std::strncpy(p.name, n, sizeof(p.name) - 1);
 }
-inline void param(Project& p, int track, int index, int value) { p.tracks[track].params[index] = uint8_t(value); }
-struct PV { int index, value; };
-template <int K>
-inline void params(Project& p, int track, const PV (&v)[K]) {
-  for (int i = 0; i < K; ++i) param(p, track, v[i].index, v[i].value);
+// The track's instrument: the built-in of that voice and name (macros/builtin.txt),
+// its macros at these positions (0..255; macros the set lacks stay 0).
+inline void instrument(Project& p, int track, const char* setName, int m0, int m1 = 0, int m2 = 0, int m3 = 0) {
+  TrackSettings& ts = p.tracks[track];
+  setInstrumentId(ts, macro::setId(track, setName));
+  const int m[kTrackMacros] = {m0, m1, m2, m3};
+  for (int i = 0; i < kTrackMacros; ++i) ts.macro[i] = uint8_t(m[i] < 0 ? 0 : (m[i] > 255 ? 255 : m[i]));
 }
 // Mixer row for one track: level, pan, delay send, reverb send, duck amount.
 inline void mix(Project& p, int track, int level, int pan, int dly, int rev, int duck) {

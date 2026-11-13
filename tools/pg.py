@@ -271,24 +271,16 @@ def hello(link):
 
 
 def list_projects(link):
-    rep = link.request("LS", until=lambda b: b.startswith("END "))
-    end = check(rep[-1], "list")
-    ents = []
-    for b in rep[:-1]:
-        p = b.split()
-        if len(p) == 6 and p[0] == "ENT":
-            ents.append({"mount": p[1], "name": p[2], "size": int(p[3]), "bpm": int(p[4]), "valid": p[5] == "1"})
-    e = end.split()
-    if len(e) < 4 or int(e[1]) != len(ents):
-        # an ENT line was lost: ask again (LS is read-only)
+    # An ENT line can be lost on a bad link (END counts them): ask again, as
+    # often as the link retries a line (LS is read-only, so repeating is safe).
+    for _ in range(max(2, link.retries)):
         rep = link.request("LS", until=lambda b: b.startswith("END "))
-        ents = [dict(zip(("mount", "name", "size", "bpm", "valid"),
-                         (p[1], p[2], int(p[3]), int(p[4]), p[5] == "1")))
+        e = check(rep[-1], "list").split()
+        ents = [{"mount": p[1], "name": p[2], "size": int(p[3]), "bpm": int(p[4]), "valid": p[5] == "1"}
                 for p in (b.split() for b in rep[:-1]) if len(p) == 6 and p[0] == "ENT"]
-        e = rep[-1].split()
-        if len(e) < 4 or int(e[1]) != len(ents):
-            raise PgError("the project list keeps arriving incomplete (bad cable?)")
-    return ents, e[2] == "1", e[3] == "1"
+        if len(e) >= 4 and int(e[1]) == len(ents):
+            return ents, e[2] == "1", e[3] == "1"
+    raise PgError("the project list keeps arriving incomplete (bad cable?)")
 
 
 def get_file(link, mount, name, progress=None):

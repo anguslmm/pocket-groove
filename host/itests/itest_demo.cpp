@@ -1,7 +1,11 @@
 // System test for the factory demo songs (pg::demo):
 //   1. every demo builds a project that Engine::sanitizeProject leaves
-//      byte-identical (only legal values), with the right name, tempo, loop
-//      mode at boot, a song chain of 1.5 .. 3.5 minutes and the ducker on;
+//      byte-identical (only legal values, the instruments' sound already
+//      derived), with the right name, tempo, loop mode at boot, a song chain of
+//      1.5 .. 3.5 minutes and the ducker on; every track plays a built-in
+//      instrument (stage G: no CLASSIC track in a demo), the jam patterns leave
+//      the bass's and lead's macro 1 to the player, and pattern 1 of the first
+//      demo (what plays at power-on) has motion on the bass;
 //   2. each one plays through its whole chain in device mode (mono, 44.1 kHz)
 //      without engine faults, int16 wrap or a pinned limiter, with integrated
 //      loudness (BS.1770, gated) and sample peak inside the bounds the mix was
@@ -15,6 +19,7 @@
 
 #include "itests/itest_util.h"
 #include "pg/demo/demo.h"
+#include "pg/macro/macro.h"
 
 using namespace pg;
 
@@ -133,15 +138,32 @@ void testStatic(int d) {
             g_a.globals[kGTempo]);
   const double sec = double(songSteps(g_a)) * 15.0 / double(g_a.globals[kGTempo]);
   it::check(sec >= 90.0 && sec <= 210.0, "demo %d: song chain lasts %.0f s (want 1.5 .. 3.5 min)", d, sec);
-  // Jam patterns (P1-P3 and the P8 loop): the bass and lead CUT must not be
-  // locked, or the CUT knob / SHIFT+[ ] bass sweep would do nothing.
+  // Every track plays a built-in instrument, its macros the set has at their
+  // positions, the others 0.
+  for (int t = 0; t < kNumTracks; ++t) {
+    const macro::MacroSet* set = macro::findBuiltin(instrumentId(g_a.tracks[t]));
+    it::check(set != nullptr, "demo %d: track %d is not a built-in instrument (CLASSIC or unknown)", d, t);
+    for (int m = set ? set->numMacros : kTrackMacros; m < kTrackMacros; ++m)
+      it::check(g_a.tracks[t].macro[m] == 0, "demo %d: track %d macro %d (the set has no such macro) is not 0", d, t, m);
+  }
+  // Jam patterns (P1-P3 and the P8 loop): the bass's and lead's macro 1 must
+  // carry no motion, or its keys / the SHIFT+[ ] bass sweep would only move a
+  // base nobody hears there (engine.h "MOTION").
   for (int pt : {0, 1, 2, 7})
     for (int t : {int(kTrackBass), int(kTrackLead)})
       for (int s = 0; s < kMaxSteps; ++s) {
         const Step& st = g_a.patterns[pt].tracks[t].steps[s];
-        it::check(!((st.flags() & kStepOn) && st.lockParam() == 1), "demo %d P%d: %s CUT locked on step %d (jam pattern)",
-                  d, pt + 1, t == kTrackBass ? "bass" : "lead", s + 1);
+        it::check(!(st.on() && st.hasMacro(0)), "demo %d P%d: %s macro 1 has motion on step %d (jam pattern)", d,
+                  pt + 1, t == kTrackBass ? "bass" : "lead", s + 1);
       }
+  // Power-on plays pattern 1 of demo 0: its bass moves by itself, so the
+  // instrument page's sliders move at first power-on (docs/UX.md 15).
+  if (d == 0) {
+    int moving = 0;
+    for (const Step& st : g_a.patterns[0].tracks[kTrackBass].steps)
+      if (st.on() && st.hasExt()) ++moving;
+    it::check(moving >= 8, "demo 0 P1: only %d bass notes carry macro values (want motion at power-on)", moving);
+  }
   it::check(g_a.songMode == 0, "demo %d: must boot in loop mode (songMode 0) on pattern 1", d);
   it::check(g_a.song[0].repeats > 0, "demo %d: the song chain must be programmed for the SONG view", d);
   it::check(g_a.globals[kGDuckSource] != 0 && g_a.tracks[kTrackBass].params[kMixDuck] > 0,
