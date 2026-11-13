@@ -109,6 +109,16 @@ class Recorder {
 
   // Starts listening (any state; everything is reset). maxSamples <= kSlotMaxSamples.
   void start(RecordSink* sink, uint32_t maxSamples = kSlotMaxSamples);
+  // DIRECT mode (resampling, resampler.h): a digital source that has no room, no key
+  // click and no DC. Recording at once: the half-band only (no DC block, no
+  // threshold, no pre-roll, no tail), the first `skip` decimated samples dropped (the
+  // filter's warm-up: the source sends the history it needs in front). It fills up
+  // as start()'s does (Full); the source ends it with end().
+  void startDirect(RecordSink* sink, uint32_t maxSamples, uint32_t skip);
+  // Writer thread, direct mode: flushes and ends as `s` (Done / Full with the
+  // sample's length `len`, at most what was recorded; shorter than kMinSamples is
+  // Cancelled; Cancelled / Failed as they are). A recorder that Failed stays so.
+  void end(RecState s, uint32_t len);
   // Writer thread: input at kInRate. Does nothing outside Settling / Waiting / Recording.
   void feed(const int16_t* in, int n);
   // Any thread: the key went up. The writer thread then calls finish().
@@ -141,6 +151,8 @@ class Recorder {
   uint32_t max_ = kSlotMaxSamples;
   HalfBand hb_;
   DcBlock dc_;
+  bool direct_ = false;
+  uint32_t skip_ = 0;
   bool havePend_ = false;
   float pend_ = 0.0f;
   uint32_t n_ = 0;   // output samples seen since start
@@ -180,10 +192,19 @@ struct RecView {
   const int16_t (*cols)[2] = nullptr;   // the growing picture (Recorder::cols)
   int colsUsed = 0;
   const char* why = "";        // Failed: what failed (a short upper-case word)
+  // Resampling (resampler.h; SHIFT+L): the source is the engine's output. sync: in
+  // time with the groove (Waiting = counting to the bar line); barAt[0..bars-1]: the
+  // bar lines inside the recording so far, in samples from its start.
+  bool resample = false;
+  bool sync = false;
+  int bars = 0;
+  const uint32_t* barAt = nullptr;
 };
 
 // The microphone as the UI sees it (Ui::setMic). UI thread only. The UI's gesture
-// (UX.md 10.3 "Recording"): hold L on a sampler instrument's page.
+// (UX.md 10.3 "Recording"): hold L on a sampler instrument's page. Resampling
+// (Ui::setResample, SHIFT+L) is the same interface over the engine's output
+// (resampler.h): its view sets RecView::resample and has no threshold.
 class MicInput {
  public:
   // Can it record now? why: a short upper-case reason for a toast otherwise.

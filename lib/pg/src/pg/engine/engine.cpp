@@ -187,6 +187,8 @@ struct State {
   float qPerMs;                       // quanta per millisecond (SetMacroOffset ramps)
   uint32_t qCount;                    // quanta processed (record timing)
   uint32_t absStep;                   // master steps fired since Play (roll phase lock)
+  uint32_t barCount;                  // bar lines fired (master step % 16 == 0), never reset: the output tap
+  std::atomic<OutputTap*> outTap;     // engine.h OUTPUT TAP; nullptr = none
   int masterPos, masterNext;
   int64_t gridCd;                     // Q32 samples until the next STRAIGHT 16th grid line
   uint64_t stepLenFP;                 // Q32 samples per 16th
@@ -2068,6 +2070,7 @@ void State::fireMasterStep() {
   const int idx = masterNext;
   masterPos = idx;
   masterNext = idx + 1;
+  if ((idx & 15) == 0) ++barCount;   // a bar line (the output tap's kTapBar)
 
   // `frac`: where the ideal (fractional) step time sits relative to this
   // quantum edge; note-offs and ratchets are timed from the ideal time.
@@ -2903,6 +2906,9 @@ void Engine::process(int16_t* out, int frames) {
   // suspendReq; suspend() raises suspendReq, THEN waits for inProcess to drop.
   // With sequentially consistent atomics one side always sees the other.
   s.inProcess.store(true);
+  // After inProcess (both sequentially consistent): setOutputTap(nullptr) either
+  // makes this load see nullptr or waits for this call to end.
+  OutputTap* const tap = s.outTap.load();
   const int quanta = frames / kQuantum;
   for (int q = 0; q < quanta; ++q, out += 2 * kQuantum) {
     if (!s.inited) {
@@ -2957,7 +2963,14 @@ void Engine::process(int16_t* out, int frames) {
       s.bump();
     }
     s.suspendFade = engine_detail::kSuspendFadeQuanta;
-    s.quantum(out);
+    if (tap) {
+      const uint32_t bars = s.barCount;
+      s.quantum(out);
+      tap->quantum(out, kQuantum,
+                   uint8_t((s.playing ? OutputTap::kTapPlaying : 0) | (s.barCount != bars ? OutputTap::kTapBar : 0)));
+    } else {
+      s.quantum(out);
+    }
   }
   const int rest = frames - quanta * kQuantum;
   if (rest > 0) std::memset(out, 0, sizeof(int16_t) * 2 * size_t(rest));
@@ -2980,6 +2993,17 @@ uint32_t Engine::queuePeak() const { return impl_->qPeak; }
 bool Engine::isPlaying() const { return impl_->aPlaying.load(std::memory_order_relaxed); }
 
 uint8_t Engine::instrumentRefreshes() const { return impl_->aInstRefreshes.load(std::memory_order_relaxed); }
+
+void Engine::setOutputTap(OutputTap* tap) {
+  engine_detail::State& s = *impl_;
+  s.outTap.store(tap);
+  if (tap) return;
+  // process() loads the tap once per call after raising inProcess: once inProcess
+  // has been seen low, no call is inside the old tap (a call that starts later
+  // loads nullptr). A call lasts one audio block at most.
+  while (s.inProcess.load()) {
+  }
+}
 
 void Engine::setScope(int track, int decimation) {
   const int d = decimation < 1 ? 1 : (decimation > 255 ? 255 : decimation);

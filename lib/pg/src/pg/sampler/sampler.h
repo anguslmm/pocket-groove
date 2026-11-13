@@ -68,6 +68,14 @@ class SamplerVoice final : public Voice {
   // The slot the sounding (or last) chop came from.
   uint8_t playingSlot() const { return chopSlot_; }
 
+  // RESAMPLING (UX.md 10.3 "Resampling"): while a slot is being recorded from the
+  // engine's output it plays nothing (it is empty until the commit), so the track
+  // cannot feed its own recording: a note of that slot starts no chop (and cuts the
+  // one sounding, as any note does), a sounding chop of it is choked within a
+  // quantum, its repeats stop. -1 = none (the default: nothing changes). Any thread.
+  void setSilentSlot(int slot) { silent_.store(int8_t(slot >= 0 && slot < kPoolSlots ? slot : -1), std::memory_order_relaxed); }
+  int silentSlot() const { return silent_.load(std::memory_order_relaxed); }
+
   // The region a chop with these parameters plays in a sample of `length`
   // samples: [*a, *b), b - a >= min(kMinRegion, length). Shared with the screen.
   static void region(const uint8_t* p, uint32_t length, uint32_t sampleRate, int32_t* a, int32_t* b);
@@ -135,6 +143,7 @@ class SamplerVoice final : public Voice {
   bool filterOn_ = false;
 
   bool active_ = false;
+  std::atomic<int8_t> silent_{-1};
   std::atomic<int32_t> playhead_{-1};
 };
 

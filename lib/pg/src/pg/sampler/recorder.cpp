@@ -54,6 +54,8 @@ const char* recStateName(RecState s) {
 
 void Recorder::start(RecordSink* sink, uint32_t maxSamples) {
   sink_ = sink;
+  direct_ = false;
+  skip_ = 0;
   max_ = maxSamples < kMinSamples ? kMinSamples : (maxSamples > kSlotMaxSamples ? kSlotMaxSamples : maxSamples);
   hb_.reset();
   dc_.reset();
@@ -81,6 +83,24 @@ void Recorder::start(RecordSink* sink, uint32_t maxSamples) {
   state_.store(uint8_t(RecState::Settling), std::memory_order_release);
 }
 
+void Recorder::startDirect(RecordSink* sink, uint32_t maxSamples, uint32_t skip) {
+  start(sink, maxSamples);
+  direct_ = true;
+  skip_ = skip;
+  state_.store(uint8_t(RecState::Recording), std::memory_order_release);
+}
+
+void Recorder::end(RecState s, uint32_t len) {
+  if (state() == RecState::Failed) return;
+  if (s == RecState::Done || s == RecState::Full) {
+    if (!flush()) return;
+    const uint32_t r = recorded_.load(std::memory_order_relaxed);
+    final_ = len < r ? len : r;
+    if (final_ < kMinSamples) s = RecState::Cancelled;
+  }
+  state_.store(uint8_t(s), std::memory_order_release);
+}
+
 bool Recorder::ended() const {
   const RecState s = state();
   return s == RecState::Done || s == RecState::Full || s == RecState::Cancelled || s == RecState::Failed;
@@ -97,7 +117,8 @@ void Recorder::feed(const int16_t* in, int n) {
       continue;
     }
     havePend_ = false;
-    out(dc_.run(hb_.run(pend_, x)));
+    const float h = hb_.run(pend_, x);
+    out(direct_ ? h : dc_.run(h));
   }
 }
 
@@ -151,6 +172,10 @@ void Recorder::out(float y) {
   const int16_t v = int16_t(yr > 32767.0f ? 32767 : (yr < -32768.0f ? -32768 : int(yr)));
   const RecState s = state();
   if (s == RecState::Recording) {
+    if (skip_) {
+      --skip_;
+      return;
+    }
     put(v);
     return;
   }
