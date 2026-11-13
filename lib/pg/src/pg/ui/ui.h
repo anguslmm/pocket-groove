@@ -212,11 +212,17 @@ class Ui {
   // page to record into the track's slot. The platform's microphone; nullptr = none
   // (L then says NO MIC). Call after init() (which forgets it).
   void setMic(sampler::MicInput* m) { mic_ = m; ++serial_; }
+  // RESAMPLING (UX.md 10.3 "Resampling"): SHIFT+L held on the same page records what
+  // the groove plays (pg/sampler/resampler.h) into the slot, in whole bars while it
+  // plays. The platform's engine-output recorder; nullptr = none. After init().
+  void setResample(sampler::MicInput* r) { rs_ = r; ++serial_; }
   // A recording (or the erase before one) is under way: the host keeps other flash
   // writes (settings, transfers) off meanwhile; the UI's own autosave waits too.
   bool micBusy() const { return micState_ != kMicIdle; }
   bool micErasing() const { return micState_ == kMicErase; }
   const sampler::RecView& micView() const { return micView_; }   // as of the last update()
+  // Resampling's count-in: beats (4 steps) to the playing pattern's next bar line, 4 3 2 1.
+  int beatsToBar() const;
 
   // ---- tilt (UX.md 10.3 "Tilt") --------------------------------------------
   // The host owns G0 (the firmware: volume, diagnostics) and reports the gesture
@@ -301,7 +307,8 @@ class Ui {
   void snapshotInstrument(int t);
   // microphone (ui_mic.cpp)
   enum : uint8_t { kMicIdle = 0, kMicErase, kMicArmed };
-  bool micKey(int k);          // L down: true if it is the record key here
+  bool micKey(int k, bool shift);   // L down (SHIFT: resample): true if it is the record key here
+  sampler::MicInput* micSrc() const { return micRs_ ? rs_ : mic_; }   // what this recording uses
   void micStart();
   void micRelease();
   void micConfirmed();         // ENTER on "REPLACE SLOT n?"
@@ -587,8 +594,10 @@ class Ui {
   uint32_t wavePoolGen_ = 0;
   // microphone (ui_mic.cpp)
   sampler::MicInput* mic_ = nullptr;
+  sampler::MicInput* rs_ = nullptr;          // resampling (SHIFT+L)
   uint8_t micState_ = kMicIdle, micSlot_ = 0;
   bool micEraseShown_ = false, micThenStart_ = false;
+  bool micRs_ = false;                       // the recording (or its erase / confirm) is a resample
   sampler::RecView micView_{};
 
   // outbox: commands the engine queue had no room for, retried in order

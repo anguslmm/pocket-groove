@@ -996,6 +996,14 @@ void Ui::drawInstrument(Framebuffer& fb) {
     x = g.text(x, 127, "+MOVE", DIM);
     x = g.text(x + 12, 127, "DEL", WHITE);
     g.text(x, 127, "+KEY", DIM);
+  } else if (!held && samplerOn(t) && isHeld(kKShift)) {   // a sampler, SHIFT held: its layer
+    x = g.text(4, 127, "SFT+ ", DIM);
+    x = g.text(x, 127, ";", WHITE);
+    x = g.text(x, 127, "/", DIM);
+    x = g.text(x, 127, ".", WHITE);
+    x = g.text(x, 127, " SLOT  ", DIM);
+    x = g.text(x, 127, "L", WHITE);
+    g.text(x, 127, " RESAMPLE", DIM);
   } else if (!held && samplerOn(t)) {   // a sampler: SHIFT+; / . steps the sample slot, L records
     x = g.text(4, 127, ";", WHITE);
     x = g.text(x, 127, "/", DIM);
@@ -1528,7 +1536,7 @@ uint32_t Ui::bodySignature() const {
   if (view_ == View::Sound) {
     uint32_t mv = 0;
     for (int m = 0; m < kTrackMacros; ++m) mv |= uint32_t(macroMoving(m)) << m;
-    h = fnv(h, mv | uint32_t(held_ >> kKNote0 & 0xFF) << 8);   // moving macros, lit key letters
+    h = fnv(h, mv | uint32_t(held_ >> kKNote0 & 0xFF) << 8 | uint32_t(isHeld(kKShift)) << 16);   // moving macros, lit key letters, SHIFT's footer
     // tilt: the handles move with the engine's heard positions, the marks light
     uint32_t tp = uint32_t(tilt_.engaged && tilt_.track == sel_);
     for (int m = 0; m < kTrackMacros; ++m)

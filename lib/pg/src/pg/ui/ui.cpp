@@ -887,7 +887,7 @@ void Ui::keyDown(int k, bool shift) {
     case kKSemicolon: if (shift && stepSampleSlot(-1)) return; semicolonDot(1, false); return;
     case kKDot: if (shift && stepSampleSlot(1)) return; semicolonDot(-1, false); return;
     case kKQuote: pageKey(shift); return;
-    case kKL: if (micKey(k)) return; chordKey(shift); return;
+    case kKL: if (micKey(k, shift)) return; chordKey(shift); return;
     case kKEnter: recToggle(); return;
     case kKDel: delDown(k); return;
     default: return;

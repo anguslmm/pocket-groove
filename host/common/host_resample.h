@@ -58,7 +58,7 @@ class HostResample final : public pg::sampler::MicInput {
       return false;
     }
     if (std::lround(rate_) != 44100) {   // the recorder halves 44.1 kHz into the pool's 22,050
-      *why = "44.1K ONLY";
+      *why = "RESAMPLE: 44.1K ONLY";
       return false;
     }
     return true;
@@ -106,6 +106,7 @@ class HostResample final : public pg::sampler::MicInput {
         lastError = err;
       } else {
         ++commits;
+        if (rs_.endReason() == pg::sampler::Resampler::kNoBarFits) why_ = "NO WHOLE BAR";
       }
     } else if (s == pg::sampler::RecState::Failed) {
       why_ = rs_.endReason() == pg::sampler::Resampler::kOverrun ? "OVERRUN" : "WRITE";
