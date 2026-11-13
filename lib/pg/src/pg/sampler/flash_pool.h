@@ -78,14 +78,38 @@ class SampleWriter {
   uint32_t written() const { return written_; }
   uint32_t total() const { return bytes_; }
 
-  Result remove(int slot);            // the slot becomes empty (its header erased)
+  // The slot becomes empty: EVERY sector of it is erased (header and audio), so a
+  // microphone recording can go straight in later without an erase (stage F2). One
+  // driver call of kSlotBytes (the device: about 1-2 s, both cores stalled).
+  Result remove(int slot);
   // The audio of a valid slot (offset in bytes), through the driver.
   Result read(int slot, uint32_t offset, uint8_t* data, uint32_t bytes);
+
+  // ---- MICROPHONE RECORDING (stage F2, docs/STATE.md) ----------------------------
+  // A recording streams into a slot while the transport may play, so it must never
+  // erase (an erase stalls both cores for tens of ms; a 512-byte write ~0.35 ms):
+  //   erased(slot)        every byte of the slot reads 0xFF through the mapping (the
+  //                       CPU's view; a 4-byte compare per word, 272 KB, no driver call)
+  //   remove(slot)        makes it so (above), with the output faded by the caller
+  //   beginRecording      the slot must be empty and erased (checked again here); its
+  //                       length is not known yet: write() takes up to kSlotAudioBytes
+  //   write()             as for a put, in order, never erasing
+  //   commitRecording     the first `samples` samples are the sample (the tail after
+  //                       them is left as written: a filled slot's tail is never read);
+  //                       CRC through the driver vs the mapping as for commit(), then the
+  //                       header with the playback gain (setPlaybackGain), read back
+  //   cancel()            nothing was committed: the slot stays empty (and dirty: the
+  //                       next recording finds it not erased and erases it first)
+  bool erased(int slot) const;
+  Result beginRecording(int slot);
+  Result commitRecording(uint32_t samples, const char* name);
+  bool recording() const { return slot_ >= 0 && rec_; }
 
  private:
   FlashDriver* drv_ = nullptr;
   FlashPool* pool_ = nullptr;
   int slot_ = -1;
+  bool rec_ = false;
   uint32_t bytes_ = 0, written_ = 0, erasedTo_ = 0;
 };
 

@@ -266,7 +266,7 @@ void SamplerVoice::render(float* outL, float* outR, int frames) {
     updateRate();
   }
   const int16_t* data = ref_.data;
-  const float gain = velGain_ * repGain_ * tapeGain_;
+  const float gain = velGain_ * repGain_ * tapeGain_ * ref_.gain;   // x 1.0 (exact) but for a mic recording
   float peak = 0.0f;
   for (int n = 0; n < frames; ++n) {
     float x = 0.0f;
