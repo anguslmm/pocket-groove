@@ -467,6 +467,9 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       } else if (ui.recOn() && ui.playing()) {
         *l1 = "RECORDING: MOVED, IT GOES INTO EVERY";
         *l2 = "NOTE IT PASSES (RED NAME: LIVE).";
+      } else if ((ui.motionMask(ui.selTrack()) >> m) & 1u) {
+        *l1 = "\x88: ITS NOTES HAVE VALUES, IT FOLLOWS";
+        *l2 = "THEM. HOLD STEP+KEY: A NOTE'S VALUE.";
       } else {
         *l1 = "TAP NUDGES, HOLD SWEEPS, SHIFT: COARSE.";
         *l2 = "BOTH: DEFAULT. STEP HELD: NOTE VALUE.";

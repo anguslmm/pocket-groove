@@ -664,11 +664,65 @@ void fitText(char* out, const char* in, int maxChars) {
   out[n] = 0;
 }
 
-constexpr int kCellW = 112;                    // one macro's cell
-constexpr int kCellX[2] = {4, 124};
+constexpr int kCellW = kMacroCellW;            // one macro's cell
+constexpr const int* kCellX = kMacroCellX;
 constexpr int kLabelY[2] = {75, 104};          // the top row's labels sit above its slider,
 constexpr int kSliderY[2] = {84, 94};          // the bottom row's below: the two sliders meet in the middle
+constexpr int kMarkW = 5;                      // the motion marker (PG_ICON_LOCK, the diamond a note value carries)
+constexpr int kMarkGap = 2;                    // between it and the name (chip)
 }  // namespace
+
+// The name sits centred in the room the end labels leave, a tilt mark right of it.
+// Where the centred name leaves the tilt mark no room, the name moves left by half
+// the mark; the mark is left out only when even that does not fit.
+// With motion the marker goes left of the name (2 blank columns between them):
+// where the centred name leaves it no room, the marker, the name and the tilt mark
+// are centred together between the end labels; then the same with the marker 1 px
+// closer to the name and to the low label; then without the tilt mark (the marker
+// wins: it says why the slider moves by itself); the marker is left out only when
+// even the marker and the name alone do not fit.
+MacroLabels macroLabels(const macro::Macro& mc, int cx0, bool motion, uint8_t tiltMarks) {
+  MacroLabels L;
+  const int w = kCellW;
+  fitText(L.name, mc.name, 6);
+  L.lo[0] = L.hi[0] = 0;
+  L.loEnd = cx0;
+  L.hiStart = cx0 + w;
+  if (mc.lo[0]) { fitText(L.lo, mc.lo, 8); L.loEnd = cx0 + int(std::strlen(L.lo)) * 6; }
+  if (mc.hi[0]) { fitText(L.hi, mc.hi, 8); L.hiStart = cx0 + w - tw(L.hi); }
+  const int ncx0 = (mc.lo[0] || mc.hi[0]) ? (L.loEnd + L.hiStart) / 2 : cx0 + w / 2;
+  L.tiltAx = (tiltMarks & 1) ? 0 : 1;
+  const int nw = int(std::strlen(L.name)) * 6 + 3;   // the chip's width when lit
+  const int h = nw / 2;                                // the chip spans ncx - h .. ncx + h
+  L.nameW = nw;
+  const int tW = tiltGlyphW(L.tiltAx);
+  const int rb = L.hiStart - 2;                        // the last column a mark may use
+  L.markX = L.tiltX = -1;
+  if (motion) {
+    // {blank columns between the marker and the chip, the marker's first column
+    // after the low label's end, with the tilt mark}
+    static constexpr int kTry[4][3] = {{kMarkGap, 1, 1}, {kMarkGap - 1, 0, 1}, {kMarkGap, 1, 0}, {kMarkGap - 1, 0, 0}};
+    for (const auto& k : kTry) {
+      if (k[2] && !tiltMarks) continue;               // (the tries without it come next)
+      const bool tilt = k[2] != 0;
+      const int left = kMarkW + k[0], right = tilt ? 1 + tW : 0, lb = L.loEnd + k[1];
+      const int G = left + nw + right;                 // the group's columns
+      if (G > rb - lb + 1) continue;
+      int ncx = ncx0;
+      if (ncx - h - left < lb || ncx + h + right > rb) ncx = lb + (rb - lb + 1 - G) / 2 + left + h;
+      L.nameX = ncx;
+      L.markX = ncx - h - left;
+      if (tilt) L.tiltX = ncx + h + 2;
+      return L;
+    }
+  }
+  int ncx = ncx0;
+  if (tiltMarks && ncx + h + 2 + tW > L.hiStart - 1) ncx -= (tW + 2 + 1) / 2;
+  L.nameX = ncx;
+  const int tx = ncx + h + 2;
+  L.tiltX = tiltMarks && tx + tW <= L.hiStart - 1 ? tx : -1;
+  return L;
+}
 
 bool Ui::scopeShown() const {
   return view_ == View::Sound && instrumentPage() && !helpVisible();
@@ -891,37 +945,24 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const int v = macroValue(t, m);                  // the base
     const int heard = shownMacro(t, m);              // the motion moves it while playing
     const int shown = locked ? hs.macroValue(m) : heard;
-    // the label row: low end, the macro's name, high end
-    char nm[8], lab[10];
-    fitText(nm, mc.name, 6);
+    // the label row: low end, the macro's name, high end; the motion marker and the tilt mark
+    const MacroLabels L = macroLabels(mc, cx0, (motion >> m) & 1u, tiltMarks(t, m));
     const uint8_t labInk = lit ? uint8_t(TEXT) : uint8_t(DIM);
-    int loEnd = cx0, hiStart = cx0 + w;   // the name sits centred in the room the labels leave
-    if (mc.lo[0]) { fitText(lab, mc.lo, 8); loEnd = g.text(cx0, cy0, lab, labInk); }
-    if (mc.hi[0]) { fitText(lab, mc.hi, 8); hiStart = cx0 + w - tw(lab); g.text(hiStart, cy0, lab, labInk); }
-    int ncx = (mc.lo[0] || mc.hi[0]) ? (loEnd + hiStart) / 2 : cx0 + w / 2;
-    // A tilt mark goes right of the name: where the centred name leaves it no room, the
-    // name and the mark are centred together between the end labels.
-    const uint8_t tiltM = tiltMarks(t, m);
-    const int tiltAx = (tiltM & 1) ? 0 : 1;
-    const int nmW = int(std::strlen(nm)) * 6 + 3;
-    if (tiltM && ncx + nmW / 2 + 2 + tiltGlyphW(tiltAx) > hiStart - 1) ncx -= (tiltGlyphW(tiltAx) + 2 + 1) / 2;
+    if (L.lo[0]) g.text(cx0, cy0, L.lo, labInk);
+    if (L.hi[0]) g.text(L.hiStart, cy0, L.hi, labInk);
     if (lit) {
-      const int nw = int(std::strlen(nm)) * 6 + 3;
-      g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col)));
-      g.textC(ncx, cy0, nm, BG);
+      g.rrect(L.nameX - L.nameW / 2, cy0 - 1, L.nameW, 9, live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col)));
+      g.textC(L.nameX, cy0, L.name, BG);
     } else {
-      g.textC(ncx, cy0, nm, TEXT);
+      g.textC(L.nameX, cy0, L.name, TEXT);
     }
-    // motion: notes of this pattern carry their own values of this macro
-    if ((motion >> m) & 1u) {
-      const int mx = ncx - (int(std::strlen(nm)) * 6 + 3) / 2 - 7;
-      if (mx >= loEnd + 1) g.text(mx, cy0, "~", AMBER);
-    }
+    // motion: notes of this pattern carry their own values of this macro (the
+    // diamond a note with a value carries on its step)
+    if (L.markX >= 0) g.text(L.markX, cy0, PG_ICON_LOCK, AMBER);
     // tilt: which axis moves this macro (lit while G0 tilts it)
-    if (tiltM) {
-      const int mx = ncx + nmW / 2 + 2;
+    if (L.tiltX >= 0) {
       const bool on = tilt_.engaged && tilt_.track == t;
-      if (mx + tiltGlyphW(tiltAx) <= hiStart - 1) tiltGlyph(g, mx, cy0, tiltAx, on ? uint8_t(WHITE) : uint8_t(DIM));
+      tiltGlyph(g, L.tiltX, cy0, L.tiltAx, on ? uint8_t(WHITE) : uint8_t(DIM));
     }
     // the keys as caps at the ends: the left one moves toward the left label
     const bool d1 = isHeld(kLo) && rec_[kLo].act == kActMacro, d2 = isHeld(kHi) && rec_[kHi].act == kActMacro;
@@ -946,7 +987,15 @@ void Ui::drawInstrument(Framebuffer& fb) {
     g.rrect(hx - 2, sy, 5, 9, hc);
   }
   miniStrip(g, *this, 114, t, shownPage_, playStep(t), held ? heldStep_ : -1);
-  if (!held && samplerOn(t)) {   // a sampler: SHIFT+; / . steps the sample slot
+  if (motionFooter()) {   // the focused macro has motion: how to change it (UX.md 10.3 "Motion")
+    x = g.text(4, 127, "STEP", WHITE);
+    x = g.text(x, 127, "+KEY ", DIM);
+    x = g.text(x, 127, PG_ICON_LOCK, AMBER);
+    x = g.text(x + 12, 127, "REC", WHITE);
+    x = g.text(x, 127, "+MOVE", DIM);
+    x = g.text(x + 12, 127, "DEL", WHITE);
+    g.text(x, 127, "+KEY", DIM);
+  } else if (!held && samplerOn(t)) {   // a sampler: SHIFT+; / . steps the sample slot
     x = g.text(4, 127, ";", WHITE);
     x = g.text(x, 127, "/", DIM);
     x = g.text(x, 127, ".", WHITE);

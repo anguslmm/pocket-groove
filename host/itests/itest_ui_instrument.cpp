@@ -397,6 +397,99 @@ static void testMotion() {
   CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), MAC(kTrackBass, 0));   // stopped: the base again
 }
 
+// How the page explains motion: the footer while the focused macro has motion,
+// one toast when a key move of such a macro is not heard (playing, not
+// recording; at most one every few seconds), none when stopped or recording.
+static void testMotionHelp() {
+  newProjectOnBass();
+  CHECK(!R->ui.motionFooter());
+  down("1"); R->run(300);                         // a note with its own OPEN
+  for (int i = 0; i < 10; ++i) tap("x");
+  CHECK(!R->ui.motionFooter());                   // a step held: the held-step footer
+  up("1");
+  R->run(50);
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 1);
+  CHECK(R->ui.motionFooter());                    // OPEN is focused and has motion
+  tap("c");                                       // BITE (no motion) focused: the usual footer
+  CHECK(!R->ui.motionFooter());
+  // stopped: a move is heard, no toast
+  tap("z");
+  CHECK(R->ui.motionFooter());
+  CHECK(!toastHas("FOLLOWS NOTES"));
+  // playing: the move only sets the base: one toast (-/= as the keys)
+  tap("space");
+  R->run(200);
+  const int base = MAC(kTrackBass, 0);
+  tap("=");
+  CHECK_EQ(MAC(kTrackBass, 0), base + 2);         // what the move does is unchanged
+  CHECK(toastHas("OPEN FOLLOWS NOTES: HOLD STEP+KEY"));
+  R->run(2600);                                   // gone ...
+  CHECK(R->ui.toastText()[0] == 0);
+  tap("x");                                       // ... and not again so soon
+  CHECK_EQ(MAC(kTrackBass, 0), base + 4);
+  CHECK(R->ui.toastText()[0] == 0);
+  tap("v");                                       // BITE has no motion: never
+  R->run(6000);
+  tap("v");
+  CHECK(R->ui.toastText()[0] == 0);
+  tap("z");                                       // OPEN's key, a while later: once more
+  CHECK(toastHas("OPEN FOLLOWS NOTES"));
+  R->run(2600);
+  // recording: the move is recorded, no toast
+  R->run(6000);
+  tap("ent");
+  tap("x");
+  CHECK(!toastHas("FOLLOWS NOTES"));
+  tap("ent");
+  R->run(100);
+  tap("space");
+  R->run(6000);
+  // stopped again: no toast
+  tap("x");
+  CHECK(!toastHas("FOLLOWS NOTES"));
+  // the explain text of a key of a macro with motion says so
+  tap("/");
+  tap("x");
+  char title[40];
+  const char *l1, *l2;
+  R->ui.explainText(title, &l1, &l2);
+  CHECK(std::strstr(l1, "ITS NOTES HAVE VALUES") != nullptr);
+  tap("/");
+}
+
+// The label row of every instrument's macros with motion: the marker always has room
+// and touches neither the end labels, the name (its chip) nor the tilt mark; where a
+// tilt mark fits without the marker it still fits with it.
+static void testMotionMarkerLayout() {
+  int cells = 0;
+  for (int t = 0; t < kNumTracks; ++t)
+    for (int i = 0; i < macro::instrumentCount(t); ++i) {
+      const macro::MacroSet* s = macro::instrumentAt(t, i);
+      if (!s) continue;
+      uint8_t tilt[kTrackMacros] = {};
+      for (int a = 0; a < 2; ++a)
+        if (s->tiltAssign(a).macro >= 0) tilt[s->tiltAssign(a).macro & 3] |= uint8_t(1u << a);
+      for (int m = 0; m < s->numMacros; ++m)
+        for (int c = 0; c < 2; ++c) {
+          const MacroLabels plain = macroLabels(s->macros[m], kMacroCellX[c], false, tilt[m]);
+          const MacroLabels L = macroLabels(s->macros[m], kMacroCellX[c], true, tilt[m]);
+          const int chipL = L.nameX - L.nameW / 2, chipR = chipL + L.nameW - 1;
+          ++cells;
+          // at least one blank column between the low label's last glyph column
+          // (loEnd - 2) and the marker, the marker and the chip, the chip and the
+          // tilt mark, the tilt mark (or the chip) and the high label
+          bool ok = L.markX >= L.loEnd && L.markX + 5 + 1 <= chipL && chipR <= L.hiStart - 2;
+          if (L.tiltX >= 0) ok = ok && L.tiltX >= chipR + 2 && L.tiltX + (L.tiltAx ? 5 : 7) <= L.hiStart - 1;
+          if (!ok) std::printf("  layout: %s macro %s (column %d): mark %d chip %d..%d tilt %d, labels end %d / start %d\n",
+                               s->name, s->macros[m].name, c, L.markX, chipL, chipR, L.tiltX, L.loEnd, L.hiStart);
+          CHECK(ok);
+          if (plain.tiltX >= 0 && L.tiltX < 0)   // (no room for both: the marker wins)
+            std::printf("  note: %s %s (column %d): the tilt mark gives way to the motion marker\n", s->name, s->macros[m].name, c);
+        }
+    }
+  CHECK(cells > 100);
+}
+
 static void testSweep() {
   newProjectOnBass();
   tap("`");
@@ -465,9 +558,11 @@ int main() {
     testClassic();
     testLocks();
     testMotion();
+    testMotionHelp();
     testSweep();
     testHelp();
   }
+  testMotionMarkerLayout();
   std::printf("itest_ui_instrument: %d checks, %d failed\n", g_checks, g_fail);
   return g_fail ? 1 : 0;
 }

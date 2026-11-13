@@ -5,6 +5,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <new>
+#include "font.h"
 #include "keys.h"
 #include "ui_tables.h"
 
@@ -23,6 +24,7 @@ constexpr float kSweepPerTick = 48.0f * 0.040f;
 constexpr uint32_t kDetentMs = 150;
 constexpr uint32_t kPopupMs = 1200;
 constexpr uint32_t kToastMs[3] = {1500, 2500, 3000};
+constexpr uint32_t kMotionHintGapMs = 6000;   // motionHint(): at most one toast in this time
 constexpr uint32_t kFlashMs = 80;
 constexpr uint8_t kPendFrames = 10;        // a pending value outlives the engine round trip by this much
 constexpr uint32_t kListMs = 1500;         // the instrument list after a change
@@ -184,6 +186,33 @@ uint8_t Ui::motionMask(int t) const {
   for (int m = 0; m < kTrackMacros; ++m)
     if ((w >> (6 * m)) & 63u) mask = uint8_t(mask | (1u << m));
   return mask;
+}
+
+bool Ui::motionFooter() const {
+  const int t = sel_;
+  if (heldStep_ >= 0 || focus_.global || focus_.track != t || !isMacroIndex(focus_.index)) return false;
+  const macro::MacroSet* s = instrumentOf(t);
+  const int m = focus_.index - kMacroIndex0;
+  return s && m < s->numMacros && ((motionMask(t) >> m) & 1u);
+}
+
+// A move of a macro whose motion is heard (playing, not recorded) only sets its base,
+// which is not heard while the motion plays: say so on the instrument page, at most
+// once every kMotionHintGapMs (UX.md 10.3 "Motion"). Stopped the move is heard; with
+// record on it is recorded into the notes: no toast then.
+void Ui::motionHint(int t, int m) {
+  if (view_ != View::Sound || !instrumentPage() || t != sel_ || heldStep_ >= 0) return;
+  if (!playing_ || recOn_ || macroLive(t, m) || !((motionMask(t) >> m) & 1u)) return;
+  const macro::MacroSet* s = instrumentOf(t);
+  if (!s || m >= s->numMacros) return;
+  if (motionHintMs_ && int32_t(now_ - motionHintMs_) < int32_t(kMotionHintGapMs)) return;
+  motionHintMs_ = now_ | 1u;
+  char buf[40];
+  char* o = buf;
+  for (const char* c = s->macros[m].name; *c && o < buf + 6; ++c) *o++ = (*c >= 'a' && *c <= 'z') ? char(*c - 32) : *c;
+  *o = 0;
+  cat(o, " FOLLOWS NOTES: HOLD STEP+KEY " PG_ICON_LOCK);
+  toast(buf, 1);
 }
 
 int Ui::shownMacro(int t, int m) const {
@@ -410,6 +439,7 @@ void Ui::macroEvent(int m, int dir, int mag, bool shift) {
   }
   setMacro(sel_, m, macroValue(sel_, m) + d);
   showPopup(ValueRef{false, sel_, uint8_t(kMacroIndex0 + m)});
+  motionHint(sel_, m);
 }
 
 // Moving now: its key repeats, or it moved within the last moment (a tap reads as a move too).
@@ -1472,6 +1502,7 @@ void Ui::editFocus(const ValueRef& r, int delta, bool popup) {
   const int nv = clampi(cur + delta, info->min, info->max);
   if (nv != cur) setValue(r, nv);                 // nothing is sent at a limit
   if (popup) showPopup(r);
+  if (!r.global && isMacroIndex(r.index)) motionHint(r.track, r.index - kMacroIndex0);
 }
 
 void Ui::resetValue() {
