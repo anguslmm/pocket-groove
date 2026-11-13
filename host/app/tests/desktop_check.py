@@ -779,12 +779,48 @@ def part_lab():
     check([r[:240 * 3] for r in win[:135]] == dev, "the device screen is untouched by the panel, pixel for pixel")
 
 
+def part_tilt():
+    print("9. tilt by mouse: G0 held + the mouse moves the bass's tilt macros through the Ui, release glides back")
+    cwd = fresh(os.path.join(WORK, "tilt"))
+    body = "\n".join([
+        "wait 300",
+        "tap j", "tap 9", "tap .", "wait 300",        # the bass's first instrument (ACID): OPEN on X, BITE on Y
+        "app mouse 120 70", "wait 100",
+        "down G0", "wait 250",
+        "app tilt 0.5 0.25", "wait 400",
+        "app print-tilt",
+        "shot tilt-held",
+        "up G0", "wait 400",
+        "app print-tilt",
+        "down G0", "wait 250", "app tilt 0.5 0", "wait 300",
+        "tap -", "wait 400",                           # the volume key cancels the tilt
+        "app print-tilt",
+        "up G0", "wait 100",
+        "quit", ""])
+    rc, log = run_app([], cwd, body, "tilt")
+    check(rc == 0, "app exited 0")
+    rows = re.findall(r"\[tilt\] held (\d) engaged (\d) axes (\S+) (\S+) track (\d+) macros (-?\d+) (-?\d+) "
+                      r"heard (-?\d+) (-?\d+) base (-?\d+) (-?\d+)", log)
+    check(len(rows) == 3, "three tilt reports (%d)" % len(rows))
+    if len(rows) != 3:
+        return
+    h, r, c = rows
+    check(h[0] == "1" and h[1] == "1" and h[4] == "6" and h[5] == "0" and h[6] == "1",
+          "held: engaged on the bass, X = OPEN, Y = BITE (%s)" % " ".join(h))
+    check(float(h[2]) > 0.4 and 0.1 < float(h[3]) < 0.3, "held: the mouse is the tilt (axes %s %s)" % (h[2], h[3]))
+    check(int(h[7]) >= int(h[9]) + 60 and int(h[8]) >= int(h[10]) + 20,
+          "held: OPEN and BITE heard above their positions (%s > %s, %s > %s)" % (h[7], h[9], h[8], h[10]))
+    check(r[0] == "0" and r[7] == r[9] and r[8] == r[10] and r[9] == h[9],
+          "released: back at the positions, which never moved (%s)" % " ".join(r))
+    check(c[0] == "0" and c[1] == "0" and c[7] == c[9], "G0 + '-': the tilt is cancelled and glided back (%s)" % " ".join(c))
+
+
 def main():
     global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK, ANALYZE
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="host build directory")
     ap.add_argument("--work", required=True, help="scratch directory (wiped)")
-    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab)")
+    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt)")
     a = ap.parse_args()
     b = os.path.abspath(a.bin)
     APP, UI_SHOT = os.path.join(b, "pocket-groove"), os.path.join(b, "ui_shot")
@@ -796,7 +832,7 @@ def main():
     only = set(x for x in a.only.split(",") if x)
     parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
              ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
-             ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab)]
+             ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab), ("tilt", part_tilt)]
     for name, fn in parts:
         if not only or name in only:
             fn()
