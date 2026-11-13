@@ -51,6 +51,12 @@ screen or sound card) and checks it against the rest of the host build:
      set's macro position is remembered; deleting the active file (an extra
      instrument) leaves the track playing its values; no lab key, click or note reaches the instrument; the window grows
      by the panel and the device screen in it is untouched.
+  9. the microphone's input (hold L on a sampler page): --list-inputs prints
+     SDL's capture names; the start line names the inputs and the one used;
+     --mic-device by part of a name, any case, and one that matches nothing;
+     SDL's dummy capture device (exact zeros) shows MIC SILENT and prints the
+     two causes once per hold; SDL's disk driver reading quiet noise from a
+     file does not.
 
     python3 host/app/tests/desktop_check.py --bin build/host --work build/host/desktop_test
 """
@@ -815,12 +821,102 @@ def part_tilt():
     check(c[0] == "0" and c[1] == "0" and c[7] == c[9], "G0 + '-': the tilt is cancelled and glided back (%s)" % " ".join(c))
 
 
+# PERC (a sampler on demo 0's STUTTER page after four steps), then hold L twice.
+MIC_SCRIPT = """wait 400
+down shift
+tap h
+up shift
+tap 9
+wait 300
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 1500
+down l
+wait 1500
+app print-toast
+shot held
+up l
+wait 300
+down l
+wait 1500
+app print-toast
+up l
+wait 300
+quit
+"""
+MIC_SILENT_LINE = "gives digital silence (every sample 0 for 1 s)"
+
+
+def part_mic():
+    print("9. the microphone's input: the choice, --list-inputs, --mic-device, a dead input")
+    cwd = fresh(os.path.join(WORK, "mic-list"))
+    p = subprocess.run([APP, "--list-inputs"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+    names = p.stdout.decode().splitlines()
+    check(p.returncode == 0 and names == ["System audio capture device"],
+          "--list-inputs: one name per line, then exit (%r)" % names)
+
+    # SDL's dummy capture device delivers exact zeros: the dead-input case
+    cwd = fresh(os.path.join(WORK, "mic-dummy"))
+    rc, log = run_app([], cwd, MIC_SCRIPT, "mic", env=dict(os.environ, PG_TOOL="false"))
+    check(rc == 0, "app exited 0")
+    check('[mic] inputs: "System audio capture device"; using "System audio capture device" '
+          "(the first other input; the system default is not known)" in log, "the start line")
+    check(log.count("[mic] recording into slot") == 2, "two holds recorded from it")
+    heard = [(float(a), int(b)) for a, b in re.findall(r"the input gave ([\d.]+) s, peak (\d+)\)", log)]
+    check(len(heard) == 2 and all(s >= 1.0 and pk == 0 for s, pk in heard), "zeros arrived (%s)" % heard)
+    check(log.count('[toast] "MIC SILENT: SYSTEM AUDIO CAPTURE DEV"') == 2, "MIC SILENT on the screen, each hold")
+    lines = [l for l in log.splitlines() if MIC_SILENT_LINE in l]
+    check(len(lines) == 2, "the terminal line once per hold (%d)" % len(lines))
+    check(len(lines) >= 1 and all(s in lines[0] for s in (
+        '"System audio capture device"', "--mic-device", "System Settings > Sound > Input",
+        "System Settings > Privacy & Security > Microphone", "Terminal", "VS Code", "restart")),
+        "the terminal line names both causes and their remedies")
+
+    # --mic-device: part of a name, any case; one that matches nothing
+    cwd = fresh(os.path.join(WORK, "mic-device"))
+    rc, log = run_app(["--mic-device", "CAPTURE"], cwd, "wait 200\nquit\n", "mic")
+    check(rc == 0 and 'using "System audio capture device" (--mic-device)' in log,
+          "--mic-device CAPTURE: partial, any case")
+    cwd = fresh(os.path.join(WORK, "mic-nodevice"))
+    rc, log = run_app(["--mic-device", "zoom"], cwd, MIC_SCRIPT, "mic", env=dict(os.environ, PG_TOOL="false"))
+    check(rc == 0 and 'none usable: no input matches --mic-device "zoom"' in log, "--mic-device zoom: none usable")
+    check('[toast] "MIC: CANNOT OPEN"' in log and "[mic] cannot open" in log, "... L says it cannot open")
+
+    # SDL's disk driver: a quiet room from a file (never exactly 0): no notice
+    cwd = fresh(os.path.join(WORK, "mic-disk"))
+    rng = struct.Struct("<h")
+    seed, raw = 12345, bytearray()
+    for _ in range(44100 * 20):
+        seed = (seed * 1103515245 + 12345) & 0x7FFFFFFF
+        v = (seed >> 16) % 61 - 30
+        raw += rng.pack(v if v != 0 else 1)
+    inp = os.path.join(cwd, "in.raw")
+    with open(inp, "wb") as f:
+        f.write(raw)
+    env = dict(os.environ, PG_TOOL="false", SDL_AUDIODRIVER="disk", SDL_DISKAUDIOFILEIN=inp,
+               SDL_DISKAUDIOFILE=os.path.join(cwd, "out.raw"))
+    rc, log = run_app([], cwd, MIC_SCRIPT, "mic", env=env, timeout=90)
+    if "NOT RUNNING" in log and "[mic] recording into slot" not in log:
+        print("  skipped: this SDL has no disk audio driver")
+        return
+    check(rc == 0 and log.count("[mic] recording into slot") == 2, "disk driver: two holds recorded")
+    heard = [(float(a), int(b)) for a, b in re.findall(r"the input gave ([\d.]+) s, peak (\d+)\)", log)]
+    check(len(heard) == 2 and all(s >= 1.2 and 0 < pk <= 30 for s, pk in heard),
+          "the file's quiet noise arrived, over a second per hold (%s)" % heard)
+    check(MIC_SILENT_LINE not in log and "MIC SILENT" not in log, "quiet noise: no MIC SILENT")
+
+
 def main():
     global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK, ANALYZE
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="host build directory")
     ap.add_argument("--work", required=True, help="scratch directory (wiped)")
-    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt)")
+    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt,mic)")
     a = ap.parse_args()
     b = os.path.abspath(a.bin)
     APP, UI_SHOT = os.path.join(b, "pocket-groove"), os.path.join(b, "ui_shot")
@@ -832,7 +928,8 @@ def main():
     only = set(x for x in a.only.split(",") if x)
     parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
              ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
-             ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab), ("tilt", part_tilt)]
+             ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab), ("tilt", part_tilt),
+             ("mic", part_mic)]
     for name, fn in parts:
         if not only or name in only:
             fn()

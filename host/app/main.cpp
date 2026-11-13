@@ -91,7 +91,8 @@ struct Options {
   bool listenSimVary = false;        // --listen-sim-vary: callback sizes vary
   std::string listenDevice;          // --listen-device NAME: another input than "Pocket Groove"
   std::string listenDump;            // --listen-dump FILE.wav: the raw capture as SDL delivers it
-  std::string micDevice;             // --mic-device NAME: record from this input, not the default one
+  std::string micDevice;             // --mic-device NAME: record from this input (exact or part of a name)
+  bool listInputs = false;           // --list-inputs: print the capture devices' names and exit
   bool lab = false;                  // --lab [DIR]: the macro lab
   bool dev = false;                  // --dev: developer mode (the parameter pages; --lab implies it)
   std::string labDir = "macros";
@@ -129,7 +130,9 @@ void usage(FILE* f) {
                "  --listen-dump FILE.wav  Listen: also write the raw capture exactly as SDL delivers it\n"
                "                    (the obtained format, channels and rate in the WAV header)\n"
                "  --listen-device NAME  Listen to this input (exact, or part of its name), not Pocket Groove\n"
-               "  --mic-device NAME  hold L on a sampler page: record from this input (default: the system's)\n"
+               "  --mic-device NAME  hold L on a sampler page: record from this input (exact, or part of its\n"
+               "                    name; default: the system's input unless it is Pocket Groove, else a microphone)\n"
+               "  --list-inputs     print the audio inputs' names, one per line, and exit\n"
                "  --listen-sim PPM  test: Listen plays a simulated device whose clock runs PPM fast\n"
                "  --listen-sim-spec FMT:CH:RATE:FRAMES  test: ... which delivers this spec (e.g. f32:1:48000:1024)\n"
                "  --listen-sim-burst N  test: ... N callbacks back to back;  --listen-sim-vary: sizes vary\n"
@@ -175,6 +178,7 @@ bool parseArgs(int argc, char** argv, Options* o) {
     else if (a == "--listen-device") o->listenDevice = next("an input name");
     else if (a == "--listen-dump") o->listenDump = next("a .wav file");
     else if (a == "--mic-device") o->micDevice = next("an input name");
+    else if (a == "--list-inputs") o->listInputs = true;
     else if (a == "--scale") { o->scale = std::atoi(next("a factor")); o->scaleGiven = true; }
     else if (a == "--lab") {
       o->lab = true;
@@ -734,6 +738,11 @@ class App final : public desk::ScriptHost, public desk::LabHost {
       std::printf("[keys] %u key events reached the instrument\n", uiKeyEvents);
       return 0;
     }
+    if (c == "print-toast") {   // the toast on the screen now ("" when none)
+      std::printf("[toast] \"%s\"\n", g_ui.toastText());
+      std::fflush(stdout);
+      return 0;
+    }
     if (c == "print-listen") {
       listen.printStats();
       return 0;
@@ -871,6 +880,9 @@ class App final : public desk::ScriptHost, public desk::LabHost {
 
   // ---- one UI frame -------------------------------------------------------------------
   void uiFrame() {
+    // A dead microphone input while WAITING (mic.h): the toast, once per hold.
+    const std::string silent = mic.takeSilentNotice();
+    if (!silent.empty()) g_ui.notify(silent.c_str(), true);
     const desk::AudioStats as = g_audio.stats();
     pg::ui::UiEnv env;
     env.nowMs = nowMs();
@@ -913,6 +925,19 @@ int main(int argc, char** argv) {
         if (name && *name) std::printf("%-6s = %s\n", desk::bindingName(g_map.bind[sc]), name);
         else std::printf("%-6s = (scancode %d, no name: ISO key)\n", desk::bindingName(g_map.bind[sc]), sc);
       }
+    return 0;
+  }
+  if (opt.listInputs) {   // the names --mic-device and --listen-device take, one per line
+    SDL_SetMainReady();
+    if (SDL_Init(SDL_INIT_AUDIO) != 0) {
+      std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
+      return 1;
+    }
+    const std::vector<std::string> names = desk::SdlMicSource::inputNames();
+    for (const std::string& n : names) std::printf("%s\n", n.c_str());
+    if (names.empty()) std::fprintf(stderr, "no audio inputs (SDL audio driver %s)\n",
+                                    SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "-");
+    SDL_Quit();
     return 0;
   }
   desk::Script script;
@@ -1034,6 +1059,12 @@ int main(int argc, char** argv) {
                   compat ? "sdl2-compat (SDL2 API on SDL3)" : "SDL2 itself", SDL_GetRevision(),
                   SDL_GetCurrentAudioDriver() ? SDL_GetCurrentAudioDriver() : "-");
     app.listen.setSdlInfo(info);
+  }
+  {
+    // The microphone (hold L): which input it would use now (it chooses again at each hold).
+    std::vector<std::string> inputs;
+    const desk::MicChoice mc = app.micSource.choose(&inputs);
+    std::printf("%s\n", desk::micInputsLine(inputs, mc).c_str());
   }
   // Stems: tools/pg of this repository (build/host/pocket-groove -> ../../tools/pg).
   {
