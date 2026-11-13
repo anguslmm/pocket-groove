@@ -508,6 +508,88 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    every instrument; the footer and explain mode show it); a mic gain setting (PGA fixed at 30 dB,
    the level is made right at playback); env:profile has no MIC line. NOT LISTENED TO, NOT RUN ON
    THE DEVICE OR THE MAC (the macOS permission prompt untested).
+   STAGE F3 BUILT (2026-11-13, branch of the resample worktree, NOT YET ON THE DEVICE OR THE MAC):
+   RESAMPLING. The owner: "I bet I could do some cool stuff with resampling the lead". On CHOP /
+   TAPE / STUTTER, HOLD SHIFT+L: what the groove plays goes into the slot, in whole bars (UX.md
+   10.3 "Resampling", MANUAL.md chapter 20 "Resampling", DESKTOP.md "Resampling";
+   docs/ux/resample-*.png). Choices made:
+   - THE SOURCE: the engine's final int16 output (Engine::setOutputTap, engine.h OUTPUT TAP: after
+     the FX, the ducker, the master bus with the DJ filter, its volume and limiter; before the
+     codec's analog volume and USB), (L + R) >> 1. Choosing the source = solo / mute. No ADC, the
+     mic is never started. The master volume (a project global) is in it; it does not matter,
+     the playback gain levels the take.
+   - THE GESTURE: SHIFT+L (L's key-up ends it; SHIFT may go). Two keys: no rectangle on any model;
+     with L held SHIFT + pad / note, one pad, one note, ` close none; two pads or two notes at once
+     with L held close 7 of 56 (dropped by the filter, ghosting-audit row 30'). The footer has no
+     room for a fourth gesture: while SHIFT is held it shows SHIFT's layer (`SFT+ ;/. SLOT  L
+     RESAMPLE`); explain mode's L mentions it. Same confirm, erase policy and picture as the mic.
+   - IN TIME: a bar line = the playing pattern's master step % 16 == 0 (steps 1, 17, 33, 49, and
+     the pattern's start). The engine counts them (one increment per bar line) and flags the
+     quantum where one fired; the take starts at that quantum's first frame (where the engine
+     starts the bar's notes: the grid time to within half a quantum, as every note) and ends on
+     the first bar line after the release, or the last one that fits in 6.22 s (Full). The count-in
+     shows the beats to the bar line (4 3 2 1, from EngineStatus::masterStep and the pattern
+     length). One bar always fits at 60..200 BPM (4 s at 60); the no-fit path (fill from the bar
+     line, toast `: NO WHOLE BAR`) is reachable only with a smaller test slot. Stop during a take:
+     it ends on the last bar line passed. The transport stopped before the bar line: it falls back
+     to the stopped rule.
+   - STOPPED: starts on the first sample >= 16 LSB (-66 dBFS) in either sign; a reverb tail still
+     ringing counts (what you hear); ends on release (to the frame, rounded to even) or full; no
+     trim (no key click in a digital source). All zeros or a release before the start: NO SOUND.
+     The note keys on the sampler page play the silent slot: to play the lead by hand, keep L down,
+     ` to GROOVE, SHIFT+k, play (itest_ui_resample does it).
+   - SAMPLE-EXACT: the Recorder's new DIRECT mode (the same half-band, no DC block, no threshold,
+     no pre-roll, no tail, the first 23 outputs dropped); the audio side keeps a 64-frame history
+     and sends 24 frames before the start and 22 after the end, so sample k is the half-band
+     centred on frame start + 2k and a bar of N frames is N / 2 samples (itest_resample: equal bit
+     for bit to the engine's own output decimated, at 124 / 87 / 150 BPM with swing 8 / 30 / 0, and
+     to a fresh render).
+   - THE RECORDING TRACK: SamplerVoice::setSilentSlot: the slot being recorded starts no chop, a
+     sounding chop of it is choked within a quantum, repeats stop (the recording equals a render
+     with PERC muted); other slots play. Cleared after the commit.
+   - LEVEL: the mic's playback gain (peak to -1 dBFS, at most +24 dB). DESKTOP: samples/NN-resNN.wav,
+     loaded untrimmed (sample_convert.h isWholeFile; tools/pg sample put still trims: a desktop
+     resample whose bar starts silent loses that silence on the way to the device).
+   - DEVICE: the mic's session, writer task and commit reused (plat::mic::resampleInput; one
+     recording of either kind at a time, busy() guards saves and transfers as before). The ring is
+     the session's 2048 frames (46 ms); a writer that falls behind fails the take (RESAMPLE:
+     OVERRUN) instead of keeping one with a hole in its timing. RESAMPLE: 44.1K ONLY at 32 kHz
+     (the recorder halves 44.1 kHz; no resampler built). Any audio backend (no RX needed).
+   FIGURES (clean builds, warning-free in our sources, placement checks OK; before = main 352a3ac):
+   USB: flash 1312079 -> 1316471 (+4392), static RAM 201388 -> 201436 (+48), .iram0.text 127827 ->
+   128963 (+1136: Resampler::quantum 762 B, push 81 B, the rest Engine::process and the sampler's
+   check), _heap_start 0x3FCD4AB0 -> 0x3FCD4EE0 (1072 B less heap); jack: flash 1249823 -> 1254267,
+   static RAM 200868 -> 200916, .iram0.text 120883 -> 122023, _heap_start 0x3FCD2DA8 -> 0x3FCD31D8;
+   profile: flash 1158519 -> 1159443, static RAM 245716 -> 245732, .iram0.text unchanged 67867.
+   Static +48 B (Ui: the resampler pointer, its flag, RecView's four fields; Engine: the bar
+   counter and the tap pointer; plat::mic: the engine / voice / rate and the report's fields).
+   HEAP while resampling (from the code, not measured): the mic's session (~11.7 KB) plus the
+   Resampler (~0.3 KB, also in a mic session now): expect the low point the mic gives, ~14 KB
+   under the free heap. Nothing from the heap when not recording.
+   CPU: not recording, nothing measurable: one atomic load per process() call, one increment per
+   bar line, one compare per quantum while a chop sounds. Recording: the tap, per 16-frame quantum,
+   one mono sum and a ring copy: measured 6-8 ns per quantum on this host (0.4-0.5 ns per frame);
+   ESTIMATE on the device ~150-250 cycles per quantum = 0.2-0.4 % of core 0 (AUD 41-50 % -> about
+   +0.3 points while a take runs, the count-in included). The writer task on core 1: Recorder::feed
+   ~1 % and the flash writes, as for the mic.
+   TESTS (host, 90/90; 87 before): itest_resample (bars at three tempos with swing, sample-exact against the
+   decimated output and a fresh render, the tap changes no output, one bar, let go while counting
+   in, full = whole bars, 60 BPM = one 4 s bar, no whole bar fits, stopped start / release / no
+   sound, Stop mid-take, the silent own slot vs a muted render, another slot plays, CHOP slice n =
+   step n's onset within a quarter quantum and CHOP's playhead at slice n's start on step n, mono,
+   overrun, the tap's host cost); itest_ui_resample (count-in digit, REC, bar ticks, release to the
+   next bar line, whole bars, stopped with the lead played by hand, NO SOUND, own slot silent then
+   playing the take, replace, plain L still the mic, native instrument, NO RESAMPLING, 44.1K ONLY,
+   the SHIFT footer, explain; all three key-matrix models); test_desktop_resample (no input
+   device, the engine on its own thread, the file loaded whole now and at the next launch, stopped,
+   erase, forty takes with the tap in and out while audio runs). ui_shot `resample on`,
+   host/ui_scripts/resample.txt. Listening: build/host/resample_demo writes
+   build/resample/lead_then_chop.wav (ACIDJAM's lead soloed for two bars, then CHOP slice n on
+   step n of the resampled bar) and lead_bar_22k.wav (the slot). NOT LISTENED TO.
+   NOT DONE: resampling at 32 kHz; a choice of source other than solo / mute (no per-track or
+   pre-FX tap); resampling into a slot while CHOP plays that same slot audibly (by design silent);
+   a bar length other than 16 steps (a 12-step pattern's bar is its 12 steps; a 24-step pattern
+   gives a 16-step and an 8-step "bar"); showing SHIFT+L in the `/` key map.
    RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
    device). Measured on the owner's device just before (current main, USB build, a song with
    STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at
@@ -606,6 +688,18 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
       plays next to the built-in phrases, any glitch in the groove or in the Mac's recording while
       it recorded, how long ERASING took. If it does not work, paste the whole report after each
       try: the `[mic]` lines are written to tell which part failed (STATE.md "STAGE F2", risks).
+   12. Resampling (stage F3; the flash of steps 1-9, USB build at 44.1 kHz): (a) a demo playing
+      (USB recording on the Mac too), solo the lead (fn + `,`), PERC on CHOP (shift+h, 9, `.` to
+      CHOP), a slot showing BUILT-IN: hold shift+l, let go of shift, watch 4 3 2 1, REC from the bar
+      line, let go of l in the second bar: it should stop on the next bar line and toast
+      `SLOT n RESnn` with about two bars' length; `r`. (b) un-solo, give CHOP a row of steps with
+      SLICE per note (hold a step, z / x): slice n should start on step n's sound. (c) stopped:
+      shift+l, `, shift+k, play a few lead notes, let go of l; `r`. (d) the slot holds RES: shift+l
+      -> REPLACE -> enter; hold shift+l again while CHOP plays that slot: CHOP should be silent
+      until the take is in. Say: any glitch in the groove or in the Mac's recording while it
+      recorded (the `[mic] last recording` lines: ring drops, underruns, longest block; a take that
+      says OVERRUN), whether the takes loop cleanly bar to bar, how they sound next to the groove,
+      and whether the count-in reads right.
    STANDING TASTE RULE (owner, 2026-11-13: "get the stupid tag lines for each synth out of there"):
    no descriptive captions for instruments on the screen. `about "..."` stays in the .pgm as an
    author's note, not displayed; the instrument page gives those rows to the picture (y 29..72).

@@ -62,6 +62,7 @@
 #include "pg/ui/keys.h"
 #include "pg/ui/ui.h"
 #include "recorder.h"
+#include "common/host_resample.h"
 #include "mic.h"
 #include "mic_sdl.h"
 #include "samples.h"
@@ -240,6 +241,7 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   desk::Samples samples;
   desk::SdlMicSource micSource;   // hold L on a sampler page (mic.h)
   desk::Mic mic;
+  hostrs::HostResample resample;  // SHIFT+L on a sampler page: the engine's own output (no input device)
   bool labMouse = false;     // a drag that started on the lab panel
   bool textInput = false;    // SDL text input on (only while a lab note is typed)
   std::unique_ptr<desk::SimCapture> simCapture;
@@ -1000,6 +1002,17 @@ int main(int argc, char** argv) {
       g_inst.setSamplePool(app.samples.pool());
       app.micSource.setDevice(opt.micDevice);
       app.mic.init(&app.samples, &app.micSource);
+      desk::Samples* smp = &app.samples;
+      app.resample.init(
+          &g_inst.engine(), &g_inst.sampler(), float(opt.sr),
+          [smp](int slot, const int16_t* d, uint32_t n, std::string* err) {
+            return smp->putRecording(slot, d, n, err, "res");
+          },
+          [smp](int slot) {
+            std::string msg;
+            return smp->clearSlot(slot, &msg);
+          });
+      app.resample.log = true;
       int n = 0;
       for (int i = 0; i < pg::sampler::kPoolSlots; ++i) n += app.samples.fileOf(i).empty() ? 0 : 1;
       std::printf("[samples] %s: %d slot(s) with a file\n", sdir.c_str(), n);
@@ -1011,6 +1024,7 @@ int main(int argc, char** argv) {
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
   g_ui.setMic(&app.mic);                 // L on a sampler page records the Mac's microphone
+  g_ui.setResample(&app.resample);       // SHIFT+L resamples what it plays (docs/DESKTOP.md "Resampling")
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter
   g_ui.setDevMode(opt.dev || opt.lab);
   const bool hadSession = fs.exists(pg::io::kSessionPath);

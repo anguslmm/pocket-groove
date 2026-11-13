@@ -9,6 +9,13 @@
 // (REC, the level and the wave growing across the box, the box being the whole slot);
 // letting go of L ends it, so does a full slot. The new sample is the picture at once
 // and a toast names it.
+//
+// SHIFT+L is the same gesture with the engine's output as the source (resampling,
+// UX.md 10.3 "Resampling"; pg/sampler/resampler.h): the same confirm, erase and
+// picture; while the groove plays it counts the beats to the next bar line (a large
+// 4 3 2 1), starts on it and ends on the bar line after L goes up (the picture marks
+// the bar lines); stopped, it waits for the first sound. SHIFT may be let go once L
+// is down: L's key-up ends it.
 #include <cmath>
 #include <cstring>
 
@@ -43,20 +50,36 @@ float meterPos(int v) {
 
 }  // namespace
 
+// Resampling's count-in: the beats (4 steps) until the playing pattern's next bar
+// line (its step 1, 17, 33 or 49, or its end), counting the one playing now: 4 3 2 1.
+int Ui::beatsToBar() const {
+  const int p = st_.pattern < kNumPatterns ? st_.pattern : 0;
+  const int l = proj_->patterns[p].length;
+  const int len = l == 0 ? 16 : (l > kMaxSteps ? kMaxSteps : l);
+  const int pos = st_.masterStep;
+  int next = (pos / 16 + 1) * 16;
+  if (next > len) next = len;
+  const int steps = next > pos ? next - pos : 1;
+  return (steps + 3) / 4;
+}
+
 bool Ui::micPicture() const {
   return micState_ != kMicIdle && scopeShown() && samplerOn(sel_);
 }
 
-bool Ui::micKey(int k) {
+bool Ui::micKey(int k, bool shift) {
   if (view_ != View::Sound || !instrumentPage() || heldStep_ >= 0 || !samplerOn(sel_)) return false;
   if (micState_ != kMicIdle) return true;
-  if (!mic_) {
-    toast("NO MIC", 2);
+  micRs_ = shift;
+  sampler::MicInput* in = micSrc();
+  const char* none = shift ? "NO RESAMPLING" : "NO MIC";
+  if (!in) {
+    toast(none, 2);
     return true;
   }
   const char* why = "";
-  if (!mic_->ready(&why)) {
-    toast(why && *why ? why : "NO MIC", 2);
+  if (!in->ready(&why)) {
+    toast(why && *why ? why : none, 2);
     return true;
   }
   const int slot = sampleSlotOf(sel_);
@@ -68,7 +91,7 @@ bool Ui::micKey(int k) {
     return true;
   }
   rec_[k].act = kActMic;   // its key-up ends the recording
-  if (!mic_->slotErased(slot)) {
+  if (!in->slotErased(slot)) {
     micState_ = kMicErase;
     micEraseShown_ = false;
     micThenStart_ = true;   // still held after the erase: it starts listening
@@ -80,7 +103,7 @@ bool Ui::micKey(int k) {
 }
 
 void Ui::micConfirmed() {
-  if (!mic_) return;
+  if (!micSrc()) return;
   micState_ = kMicErase;
   micEraseShown_ = false;
   micThenStart_ = false;   // L was let go to answer: hold it again once it is erased
@@ -89,23 +112,26 @@ void Ui::micConfirmed() {
 
 void Ui::micStart() {
   micView_ = sampler::RecView{};
-  if (mic_->start(micSlot_)) {
+  sampler::MicInput* in = micSrc();
+  if (in->start(micSlot_)) {
     micState_ = kMicArmed;
-    micView_.state = sampler::RecState::Settling;
+    micView_.state = micRs_ ? sampler::RecState::Waiting : sampler::RecState::Settling;
     micView_.slot = micSlot_;
+    micView_.resample = micRs_;
+    micView_.sync = micRs_ && playing_;
   } else {
     micState_ = kMicIdle;
     sampler::RecView v;
-    mic_->poll(&v);
+    in->poll(&v);
     char buf[40];
-    cat(cat(buf, "MIC: "), v.why && *v.why ? v.why : "FAILED");
+    cat(cat(buf, micRs_ ? "RESAMPLE: " : "MIC: "), v.why && *v.why ? v.why : "FAILED");
     toast(buf, 2);
   }
   ++serial_;
 }
 
 void Ui::micRelease() {
-  if (micState_ == kMicArmed) mic_->release();
+  if (micState_ == kMicArmed) micSrc()->release();
   if (micState_ == kMicErase) micThenStart_ = false;
 }
 
@@ -114,7 +140,7 @@ void Ui::micTick() {
     // ERASING must be on the screen before the erase blocks (one frame), unless the
     // page is not showing at all
     if (!micEraseShown_ && micPicture()) return;
-    const bool ok = mic_->erase(micSlot_);
+    const bool ok = micSrc()->erase(micSlot_);
     micState_ = kMicIdle;
     ++serial_;
     char buf[40];
@@ -130,7 +156,7 @@ void Ui::micTick() {
   }
   if (micState_ != kMicArmed) return;
   sampler::RecView v;
-  mic_->poll(&v);
+  micSrc()->poll(&v);
   micView_ = v;
   char buf[40];
   switch (v.state) {
@@ -140,7 +166,8 @@ void Ui::micTick() {
       sampler::resolve(sampler_ ? sampler_->pool() : nullptr, micSlot_, &r);
       char* o = cat(catInt(cat(buf, "SLOT "), micSlot_ + 1), " ");
       o = cat(cat(o, r.builtin ? "?" : r.name), " ");
-      catSecs(o, r.builtin ? v.samples : r.length);
+      o = catSecs(o, r.builtin ? v.samples : r.length);
+      if (v.resample && v.why && *v.why) cat(cat(o, ": "), v.why);   // NO WHOLE BAR (a bar longer than the slot)
       toast(buf, 0);
       micState_ = kMicIdle;
       ++serial_;
@@ -152,7 +179,7 @@ void Ui::micTick() {
       ++serial_;
       break;
     case sampler::RecState::Failed:
-      cat(cat(buf, "MIC: "), v.why && *v.why ? v.why : "FAILED");
+      cat(cat(buf, micRs_ ? "RESAMPLE: " : "MIC: "), v.why && *v.why ? v.why : "FAILED");
       toast(buf, 2);
       micState_ = kMicIdle;
       ++serial_;
@@ -188,6 +215,7 @@ void Ui::drawMic(Framebuffer& fb) {
   const bool rec = v.state == sampler::RecState::Recording || v.state == sampler::RecState::Full ||
                    v.state == sampler::RecState::Done;
   // the state: a red dot (hollow while waiting) and its word
+  const bool countIn = !rec && v.resample && v.sync;
   if (rec) {
     g.rect(lx + 3, y0 + 3, 5, 5, RED);
     g.text(lx + 11, y0 + 3, "REC", RED);
@@ -195,7 +223,7 @@ void Ui::drawMic(Framebuffer& fb) {
     g.textR(x0 + w - 3, y0 + 3, buf, WHITE);
   } else {
     g.frame(lx + 3, y0 + 3, 5, 5, RED);
-    g.text(lx + 11, y0 + 3, "WAITING", TEXT);
+    if (!countIn) g.text(lx + 11, y0 + 3, "WAITING", TEXT);
   }
   // the recording so far
   const int top = y0 + 12, bot = y0 + h - 10;
@@ -213,6 +241,19 @@ void Ui::drawMic(Framebuffer& fb) {
     g.rect(x0 + c, yt, 1, yb - yt + 1, tc(t));
   }
   if (rec && used < w) g.rect(x0 + used, top, 1, bot - top + 1, WHITE);
+  // resampling in time: the bar lines recorded so far (short WHITE ticks at the top
+  // and bottom); counting in: the beats to the bar line where it starts, large
+  if (v.resample && v.barAt)
+    for (int b = 0; b < v.bars; ++b) {
+      const int c = int(uint64_t(v.barAt[b]) * uint32_t(w) / sampler::kSlotMaxSamples);
+      if (c <= 0 || c >= w) continue;
+      g.rect(x0 + c, top, 1, 3, WHITE);
+      g.rect(x0 + c, bot - 2, 1, 3, WHITE);
+    }
+  if (countIn) {
+    catInt(buf, beatsToBar());
+    g.textC(x0 + w / 2, cy - 10, buf, WHITE, 3);
+  }
   // the level, and where the recording starts
   const int mx = x0 + 4, mw = w - 8, my = y0 + h - 6;
   g.rect(mx, my, mw, 3, RAISED);

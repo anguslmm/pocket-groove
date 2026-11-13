@@ -500,8 +500,8 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       case kKL:
         if (ui.samplerOn(ui.selTrack())) {
           cat(title, "HOLD: RECORD THE MIC");
-          *l1 = "INTO THIS SLOT. IT STARTS AT THE SOUND";
-          *l2 = "AND STOPS WHEN YOU LET GO (6 S MAX).";
+          *l1 = "INTO THIS SLOT. SHIFT+L: RESAMPLE";
+          *l2 = "WHAT YOU HEAR, IN WHOLE BARS.";
           return;
         }
         cat(title, ui.devMode() ? "DEV: PARAMETER PAGES" : "NOT USED HERE");

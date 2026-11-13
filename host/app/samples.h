@@ -42,7 +42,9 @@ class Samples {
   // The microphone (mic.h): a recording, mono int16 at 22,050 Hz, becomes the slot's
   // file "NN-recNN.wav" (the slot's other files removed) and is loaded now;
   // clearSlot() removes the slot's files (it plays its built-in sound again).
-  bool putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg);
+  // A resample (SHIFT+L, kind "res") becomes "NN-resNN.wav", loaded whole (not
+  // trimmed: sample_convert.h isWholeFile), levelled as any file.
+  bool putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg, const char* kind = "rec");
   bool clearSlot(int slot, std::string* msg);
   std::string fileOf(int slot) const;   // "" when the slot has no file
   int reloads() const { return reloads_; }

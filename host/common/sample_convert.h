@@ -21,6 +21,9 @@
 //      (sample j of the last 110 times (110 - 1 - j) / 110).
 //   6. Normalise: gain = min(0.891 / P', 100) with P' the peak of what is left.
 //   7. int16: floor(x * gain * 32767 + 0.5), clamped to -32768..32767.
+// The desktop's own resampled files ("NN-resNN.wav", isWholeFile below) skip step 4:
+// a resample is whole bars from a bar line to a bar line, its silence included (UX.md
+// 10.3 "Resampling"). Desktop only: tools/pg.py has no such rule (a put trims).
 #pragma once
 #include <cmath>
 #include <cstdint>
@@ -170,8 +173,9 @@ inline std::vector<double> resample(const std::vector<double>& in, int rate) {
   return out;
 }
 
-// Steps 3 to 7 on mono audio at `rate`.
-inline bool toSlot(const std::vector<double>& mono, int rate, std::vector<int16_t>* out, std::string* err) {
+// Steps 3 to 7 on mono audio at `rate` (trim false: not step 4).
+inline bool toSlot(const std::vector<double>& mono, int rate, std::vector<int16_t>* out, std::string* err,
+                   bool trim = true) {
   std::vector<double> x = resample(mono, rate);
   double peak = 0.0;
   for (double v : x) peak = std::fabs(v) > peak ? std::fabs(v) : peak;
@@ -184,8 +188,8 @@ inline bool toSlot(const std::vector<double>& mono, int rate, std::vector<int16_
   while (first < long(x.size()) && !(std::fabs(x[size_t(first)]) > thr)) ++first;
   while (last > first && !(std::fabs(x[size_t(last)]) > thr)) --last;
   long a = first - 110, b = last + 1 + 441;
-  if (a < 0) a = 0;
-  if (b > long(x.size())) b = long(x.size());
+  if (a < 0 || !trim) a = 0;
+  if (b > long(x.size()) || !trim) b = long(x.size());
   std::vector<double> y(x.begin() + a, x.begin() + b);
   if (y.size() > pg::sampler::kSlotMaxSamples) {
     y.resize(pg::sampler::kSlotMaxSamples);
@@ -221,6 +225,14 @@ inline bool readFile(const std::string& path, std::vector<uint8_t>* out) {
   return true;
 }
 
+// A resample's file (the desktop's "NN-resNN.wav"): loaded whole, not trimmed.
+inline bool isWholeFile(const std::string& file) {
+  const size_t sl = file.find_last_of('/');
+  const std::string f = sl == std::string::npos ? file : file.substr(sl + 1);
+  return f.size() == 12 && f[2] == '-' && f.compare(3, 3, "res") == 0 && f[6] >= '0' && f[6] <= '9' &&
+         f[7] >= '0' && f[7] <= '9' && f.compare(8, 4, ".wav") == 0;
+}
+
 // A WAV file to a slot's audio.
 inline bool convertFile(const std::string& path, std::vector<int16_t>* out, std::string* err) {
   std::vector<uint8_t> bytes;
@@ -230,7 +242,7 @@ inline bool convertFile(const std::string& path, std::vector<int16_t>* out, std:
   }
   Audio a;
   if (!parseWav(bytes, &a, err)) return false;
-  return toSlot(a.mono, a.rate, out, err);
+  return toSlot(a.mono, a.rate, out, err, !isWholeFile(path));
 }
 
 // "03-ohyeah.wav" -> slot 2 and "ohyeah"; -1 if the name does not start with 01..12 and '-' / '_' / '.'.

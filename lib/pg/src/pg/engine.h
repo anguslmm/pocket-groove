@@ -226,6 +226,26 @@ struct ScopeInfo {
   float    sampleRate;
 };
 
+// OUTPUT TAP (resampling, docs/UX.md 10.3 "Resampling"): an observer of the
+// engine's final output, the int16 block process() writes (after the mix, the FX,
+// the ducker, the master bus with its DJ filter, volume and limiter; before
+// anything the platform does with it: the codec's analog volume, USB). Called on
+// the audio thread after every quantum with that quantum's interleaved stereo
+// frames and flags: kTapPlaying = the transport runs, kTapBar = a BAR LINE fired
+// in this quantum (the playing pattern's master step 1, 17, 33 or 49, i.e. index
+// % 16 == 0; its notes start at this quantum's first frame). Not called for the
+// silent quanta of a suspend. It only observes: the output is the same with a tap
+// installed or not, and with none installed process() pays one load per call.
+// The tap must not block, allocate or lock.
+class OutputTap {
+ public:
+  enum : uint8_t { kTapPlaying = 1, kTapBar = 2 };
+  virtual void quantum(const int16_t* stereo, int frames, uint8_t flags) = 0;
+
+ protected:
+  ~OutputTap() = default;
+};
+
 class Engine {
  public:
   Engine();
@@ -295,6 +315,11 @@ class Engine {
   // could be read (nothing written yet, or the engine overwrote the copy or
   // changed the tap while copying: try again at the next frame).
   int readScope(float* out, int n, ScopeInfo* info) const;
+
+  // Output tap (OUTPUT TAP, above). Any thread but the audio thread. Installing
+  // takes effect at the next process() call. Removing (nullptr) returns once the
+  // audio thread is no longer inside the old tap, so its memory may be freed then.
+  void setOutputTap(OutputTap* tap);
 
   // Stop touching the Project (output silence) so the UI thread can load a
   // new one into the same memory. suspend() returns once the audio thread has

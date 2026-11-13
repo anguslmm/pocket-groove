@@ -253,13 +253,13 @@ bool Samples::clearSlot(int slot, std::string* msg) {
   return true;
 }
 
-bool Samples::putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg) {
+bool Samples::putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg, const char* kind) {
   if (slot < 0 || slot >= pg::sampler::kPoolSlots || !data || samples < pg::sampler::kMinSamples) {
     *msg = "nothing to keep";
     return false;
   }
   char base[32];
-  std::snprintf(base, sizeof base, "%02d-rec%02d.wav", slot + 1, slot + 1);
+  std::snprintf(base, sizeof base, "%02d-%.3s%02d.wav", slot + 1, kind, slot + 1);
   const std::string dest = dir_ + "/" + base, tmp = dest + ".in.wav";
   const std::vector<int16_t> x(data, data + samples);
   if (!wav::write(tmp.c_str(), x, sconv::kRate, 1)) {

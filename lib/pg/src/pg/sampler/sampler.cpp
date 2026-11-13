@@ -217,6 +217,11 @@ void SamplerVoice::noteOn(const NoteEvent& e) {
   note_ = float(int(e.note) - 60);
   velGain_ = drums::velocityGain(e.vel) * (e.accent ? 1.2f : 1.0f);
   gate_ = true;
+  if (int(slot_) == silent_.load(std::memory_order_relaxed)) {   // being resampled: silent
+    rtLeft_ = 0;
+    choke();
+    return;
+  }
   startChop(false);
 }
 
@@ -264,6 +269,10 @@ void SamplerVoice::render(float* outL, float* outR, int frames) {
     }
     updateRegion();
     updateRate();
+    if (int(chopSlot_) == silent_.load(std::memory_order_relaxed)) {   // its slot is being resampled
+      rtLeft_ = 0;
+      choke();
+    }
   }
   const int16_t* data = ref_.data;
   const float gain = velGain_ * repGain_ * tapeGain_ * ref_.gain;   // x 1.0 (exact) but for a mic recording

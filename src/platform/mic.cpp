@@ -14,6 +14,9 @@
 #include <new>
 
 #include "audio_out.h"
+#include "pg/engine.h"
+#include "pg/sampler/resampler.h"
+#include "pg/sampler/sampler.h"
 #include "sample_flash.h"
 
 namespace plat {
@@ -46,10 +49,13 @@ struct FlashSink final : pg::sampler::RecordSink {
   }
 };
 
-// Everything a recording needs, from the heap for its duration.
+// Everything a recording needs, from the heap for its duration. A resample uses rs
+// (and ringBuf as its ring) instead of the microphone's MicRing.
 struct Session {
   pg::sampler::Recorder rec;
   audio::MicRing ring;
+  pg::sampler::Resampler rs;
+  bool resample = false;
   int16_t ringBuf[kRingSamples];
   FlashSink sink;
   TaskHandle_t task = nullptr;
@@ -61,6 +67,9 @@ struct Session {
 // The last recording, for the report (the only static state: ~100 bytes).
 struct Last {
   bool valid;
+  bool resample;            // SHIFT+L: the engine's output
+  uint8_t endReason;        // Resampler::End
+  uint8_t bars;             // bar lines inside it (in time)
   int8_t slot;
   uint8_t state;            // RecState at the end
   const char* commit;       // SampleWriter::resultName or "-"
@@ -77,6 +86,16 @@ uint32_t s_under0 = 0;
 
 void writerTask(void* arg) {
   Session* ss = static_cast<Session*>(arg);
+  if (ss->resample) {   // the Resampler's own ring, pumped into the recorder
+    while (!ss->rs.ended() && !ss->abort.load()) {
+      ss->rs.pump();
+      if (!ss->rs.ended()) vTaskDelay(pdMS_TO_TICKS(4));
+    }
+    ss->stackFree = static_cast<uint32_t>(uxTaskGetStackHighWaterMark(nullptr));
+    ss->done.store(true, std::memory_order_release);
+    vTaskDelete(nullptr);
+    return;
+  }
   int16_t buf[256];
   for (;;) {
     const bool rel = ss->rec.released();
@@ -106,154 +125,238 @@ void freeSession() {
   s_ss = nullptr;
 }
 
-class DeviceMic final : public pg::sampler::MicInput {
- public:
-  bool ready(const char** why) override {
-    if (!samples::info().ok) {
-      *why = "NO SAMPLE POOL";
-      return false;
-    }
-    return audio::micAvailable(why);
-  }
+pg::Engine* s_engine = nullptr;
+pg::sampler::SamplerVoice* s_voice = nullptr;
+uint32_t s_rate = 44100;
 
-  bool slotErased(int slot) override {
-    const uint32_t t0 = nowUs();
-    const bool e = samples::writer().erased(slot);
-    s_last.erasedCheckUs = nowUs() - t0;
-    return e;
+bool poolReady(const char** why) {
+  if (!samples::info().ok) {
+    *why = "NO SAMPLE POOL";
+    return false;
   }
+  return true;
+}
 
-  bool erase(int slot) override {
-    audio::fadeOut();
-    const uint32_t t0 = nowUs();
-    const SampleWriter::Result r = samples::writer().remove(slot);
-    s_last.eraseMs = (nowUs() - t0) / 1000u;
-    audio::fadeIn();
-    return r == SampleWriter::kOk;
+bool checkErased(int slot) {
+  const uint32_t t0 = nowUs();
+  const bool e = samples::writer().erased(slot);
+  s_last.erasedCheckUs = nowUs() - t0;
+  return e;
+}
+
+bool eraseSlot(int slot) {
+  audio::fadeOut();
+  const uint32_t t0 = nowUs();
+  const SampleWriter::Result r = samples::writer().remove(slot);
+  s_last.eraseMs = (nowUs() - t0) / 1000u;
+  audio::fadeIn();
+  return r == SampleWriter::kOk;
+}
+
+// The session's start, both kinds: the slot opened for recording, the session from
+// the heap, the source started, the writer task, the report's figures.
+bool startSession(int slot, bool resample) {
+  s_why = "";
+  if (s_ss) {
+    s_why = "BUSY";
+    return false;
   }
-
-  bool start(int slot) override {
-    s_why = "";
-    if (s_ss) {
-      s_why = "BUSY";
-      return false;
-    }
-    const char* why = "";
-    if (!ready(&why)) {
-      s_why = why;
-      return false;
-    }
-    const uint32_t heap0 = heapFree();
-    if (samples::writer().beginRecording(slot) != SampleWriter::kOk) {
-      s_why = "NOT ERASED";
-      return false;
-    }
-    void* mem = heap_caps_malloc(sizeof(Session), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!mem) {
-      samples::writer().cancel();
-      s_why = "NO MEMORY";
-      return false;
-    }
-    s_ss = new (mem) Session();
+  const uint32_t heap0 = heapFree();
+  if (samples::writer().beginRecording(slot) != SampleWriter::kOk) {
+    s_why = "NOT ERASED";
+    return false;
+  }
+  void* mem = heap_caps_malloc(sizeof(Session), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!mem) {
+    samples::writer().cancel();
+    s_why = "NO MEMORY";
+    return false;
+  }
+  s_ss = new (mem) Session();
+  s_ss->resample = resample;
+  s_ss->t0Us = nowUs();
+  audio::micResetStats();
+  s_under0 = audio::stats().underruns;
+  if (resample) {
+    // in time if the groove plays now; the slot silent; the tap in last (it runs at once)
+    s_ss->rs.start(&s_ss->rec, &s_ss->sink, s_ss->ringBuf, kRingSamples, s_engine->isPlaying());
+    s_voice->setSilentSlot(slot);
+    s_engine->setOutputTap(&s_ss->rs);
+  } else {
     s_ss->ring.buf = s_ss->ringBuf;
     s_ss->ring.mask = kRingSamples - 1;
     s_ss->rec.start(&s_ss->sink);
-    s_ss->t0Us = nowUs();
-    audio::micResetStats();
-    s_under0 = audio::stats().underruns;
     if (!audio::micBegin(&s_ss->ring)) {
       freeSession();
       samples::writer().cancel();
       s_why = "NO INPUT";
       return false;
     }
-    if (xTaskCreatePinnedToCore(writerTask, "pg_mic", kTaskStack, s_ss, kTaskPrio, &s_ss->task, 1) != pdPASS) {
+  }
+  if (xTaskCreatePinnedToCore(writerTask, "pg_mic", kTaskStack, s_ss, kTaskPrio, &s_ss->task, 1) != pdPASS) {
+    if (resample) {
+      s_engine->setOutputTap(nullptr);
+      s_voice->setSilentSlot(-1);
+    } else {
       audio::micEnd();
-      freeSession();
+    }
+    freeSession();
+    samples::writer().cancel();
+    s_why = "NO MEMORY";
+    return false;
+  }
+  const uint32_t eraseMs = s_last.eraseMs, checkUs = s_last.erasedCheckUs;   // from just before
+  s_last = Last{};
+  s_last.eraseMs = eraseMs;
+  s_last.erasedCheckUs = checkUs;
+  s_last.valid = true;
+  s_last.resample = resample;
+  s_last.slot = static_cast<int8_t>(slot);
+  s_last.state = static_cast<uint8_t>(resample ? RecState::Waiting : RecState::Settling);
+  s_last.commit = "-";
+  s_last.heapBefore = heap0;
+  s_last.sessionBytes = static_cast<uint32_t>(sizeof(Session)) + kTaskStack;
+  return true;
+}
+
+// Every UI frame while a session of this kind runs: the view; once the writer task
+// has ended: the source stopped, the commit (the UI thread), the figures, the free.
+bool pollSession(pg::sampler::RecView* v, bool resample) {
+  *v = pg::sampler::RecView{};
+  v->why = s_why;
+  if (!s_ss || s_ss->resample != resample) return false;
+  Session& ss = *s_ss;
+  if (resample) {
+    v->state = ss.rs.state();
+    v->samples = ss.rs.ended() ? ss.rs.length() : ss.rec.recorded();
+    v->colsUsed = ss.rs.started() ? ss.rec.colsUsed() : 0;
+    v->resample = true;
+    v->sync = ss.rs.sync();
+    v->bars = ss.rs.bars();
+    v->barAt = ss.rs.barAt();
+  } else {
+    v->state = ss.rec.state();
+    v->samples = ss.rec.ended() ? ss.rec.length() : ss.rec.recorded();
+    v->threshold = ss.rec.threshold();
+    v->colsUsed = ss.rec.colsUsed();
+  }
+  v->slot = s_last.slot;
+  v->level = ss.rec.level();
+  v->peak = ss.rec.peak();
+  v->cols = ss.rec.cols();
+  if (!ss.done.load(std::memory_order_acquire)) return true;
+  // the writer task has ended: stop the source, commit, free
+  if (resample) s_engine->setOutputTap(nullptr);
+  else audio::micEnd();
+  RecState st = resample ? ss.rs.state() : ss.rec.state();
+  const uint32_t len = resample ? ss.rs.length() : ss.rec.length();
+  const uint32_t t0 = nowUs();
+  if (st == RecState::Done || st == RecState::Full) {
+    char name[12];
+    snprintf(name, sizeof name, resample ? "RES%02d" : "REC%02d", (s_last.slot + 1) % 100);
+    const SampleWriter::Result r = samples::writer().commitRecording(len, name);
+    s_last.commit = SampleWriter::resultName(r);
+    if (r != SampleWriter::kOk) {
       samples::writer().cancel();
-      s_why = "NO MEMORY";
+      st = RecState::Failed;
+      s_why = r == SampleWriter::kVerify ? "VERIFY" : "COMMIT";
+    } else if (resample && ss.rs.endReason() == pg::sampler::Resampler::kNoBarFits) {
+      s_why = "NO WHOLE BAR";
+    }
+  } else {
+    samples::writer().cancel();   // the slot stays empty (and erased, unless a blip was written)
+    if (st == RecState::Failed)
+      s_why = resample && ss.rs.endReason() == pg::sampler::Resampler::kOverrun ? "OVERRUN" : "FLASH WRITE";
+  }
+  if (resample) s_voice->setSilentSlot(-1);   // after the commit: the next note plays the new sample
+  s_last.commitMs = (nowUs() - t0) / 1000u;
+  const audio::MicStats ms = audio::micStats();
+  s_last.state = static_cast<uint8_t>(st);
+  s_last.samples = resample ? len : (ss.rec.ended() ? ss.rec.length() : ss.rec.recorded());
+  s_last.peak = ss.rec.peak();
+  s_last.threshold = ss.rec.threshold();
+  s_last.floorRms = ss.rec.floorRms();
+  if (resample) {
+    s_last.endReason = static_cast<uint8_t>(ss.rs.endReason());
+    s_last.bars = static_cast<uint8_t>(ss.rs.bars());
+  }
+  const pg::sampler::SlotHeader* h = samples::pool().header(s_last.slot);
+  s_last.gain256 = h ? (h->gain ? h->gain : 256u) : 0u;
+  s_last.ringDropped = resample ? ss.rs.dropped() : ss.ring.dropped.load();
+  s_last.rxOverflows = resample ? 0 : ms.rxOverflows;
+  s_last.readErrors = resample ? 0 : ms.readErrors;
+  s_last.writes = ss.sink.writes;
+  s_last.writeErrors = ss.sink.errors;
+  s_last.maxWriteUs = ss.sink.maxUs;
+  s_last.avgWriteUs = ss.sink.writes ? ss.sink.sumUs / ss.sink.writes : 0;
+  s_last.maxPullUs = static_cast<uint32_t>(ms.maxPullUs);
+  s_last.maxBlockUs = static_cast<uint32_t>(ms.maxBlockUs);
+  s_last.maxGapUs = static_cast<uint32_t>(ms.maxGapUs);
+  s_last.underruns = audio::stats().underruns - s_under0;
+  s_last.stackFree = ss.stackFree;
+  s_last.ms = (nowUs() - ss.t0Us) / 1000u;
+  freeSession();
+  s_last.heapMinAfter = heapMinEver();
+  v->state = st;
+  v->why = s_why;
+  return true;
+}
+
+class DeviceMic final : public pg::sampler::MicInput {
+ public:
+  bool ready(const char** why) override {
+    if (!poolReady(why)) return false;
+    return audio::micAvailable(why);
+  }
+  bool slotErased(int slot) override { return checkErased(slot); }
+  bool erase(int slot) override { return eraseSlot(slot); }
+  bool start(int slot) override {
+    const char* why = "";
+    if (!ready(&why)) {
+      s_why = why;
       return false;
     }
-    const uint32_t eraseMs = s_last.eraseMs, checkUs = s_last.erasedCheckUs;   // from just before
-    s_last = Last{};
-    s_last.eraseMs = eraseMs;
-    s_last.erasedCheckUs = checkUs;
-    s_last.valid = true;
-    s_last.slot = static_cast<int8_t>(slot);
-    s_last.state = static_cast<uint8_t>(RecState::Settling);
-    s_last.commit = "-";
-    s_last.heapBefore = heap0;
-    s_last.sessionBytes = static_cast<uint32_t>(sizeof(Session)) + kTaskStack;
-    return true;
+    return startSession(slot, false);
   }
-
   void release() override {
-    if (s_ss) s_ss->rec.release();
+    if (s_ss && !s_ss->resample) s_ss->rec.release();
   }
+  bool poll(pg::sampler::RecView* v) override { return pollSession(v, false); }
+};
 
-  bool poll(pg::sampler::RecView* v) override {
-    *v = pg::sampler::RecView{};
-    v->why = s_why;
-    if (!s_ss) return false;
-    Session& ss = *s_ss;
-    v->state = ss.rec.state();
-    v->slot = s_last.slot;
-    v->samples = ss.rec.ended() ? ss.rec.length() : ss.rec.recorded();
-    v->level = ss.rec.level();
-    v->threshold = ss.rec.threshold();
-    v->peak = ss.rec.peak();
-    v->cols = ss.rec.cols();
-    v->colsUsed = ss.rec.colsUsed();
-    if (!ss.done.load(std::memory_order_acquire)) return true;
-    // the writer task has ended: stop the input, commit, free
-    audio::micEnd();
-    RecState st = ss.rec.state();
-    const uint32_t t0 = nowUs();
-    if (st == RecState::Done || st == RecState::Full) {
-      char name[12];
-      snprintf(name, sizeof name, "REC%02d", (s_last.slot + 1) % 100);
-      const SampleWriter::Result r = samples::writer().commitRecording(ss.rec.length(), name);
-      s_last.commit = SampleWriter::resultName(r);
-      if (r != SampleWriter::kOk) {
-        samples::writer().cancel();
-        st = RecState::Failed;
-        s_why = r == SampleWriter::kVerify ? "VERIFY" : "COMMIT";
-      }
-    } else {
-      samples::writer().cancel();   // the slot stays empty (and erased, unless a blip was written)
-      if (st == RecState::Failed) s_why = "FLASH WRITE";
+// SHIFT+L: the engine's output (mic.h RESAMPLING).
+class DeviceResample final : public pg::sampler::MicInput {
+ public:
+  bool ready(const char** why) override {
+    if (!s_engine || !s_voice) {
+      *why = "NO ENGINE";
+      return false;
     }
-    s_last.commitMs = (nowUs() - t0) / 1000u;
-    const audio::MicStats ms = audio::micStats();
-    s_last.state = static_cast<uint8_t>(st);
-    s_last.samples = ss.rec.ended() ? ss.rec.length() : ss.rec.recorded();
-    s_last.peak = ss.rec.peak();
-    s_last.threshold = ss.rec.threshold();
-    s_last.floorRms = ss.rec.floorRms();
-    const pg::sampler::SlotHeader* h = samples::pool().header(s_last.slot);
-    s_last.gain256 = h ? (h->gain ? h->gain : 256u) : 0u;
-    s_last.ringDropped = ss.ring.dropped.load();
-    s_last.rxOverflows = ms.rxOverflows;
-    s_last.readErrors = ms.readErrors;
-    s_last.writes = ss.sink.writes;
-    s_last.writeErrors = ss.sink.errors;
-    s_last.maxWriteUs = ss.sink.maxUs;
-    s_last.avgWriteUs = ss.sink.writes ? ss.sink.sumUs / ss.sink.writes : 0;
-    s_last.maxPullUs = static_cast<uint32_t>(ms.maxPullUs);
-    s_last.maxBlockUs = static_cast<uint32_t>(ms.maxBlockUs);
-    s_last.maxGapUs = static_cast<uint32_t>(ms.maxGapUs);
-    s_last.underruns = audio::stats().underruns - s_under0;
-    s_last.stackFree = ss.stackFree;
-    s_last.ms = (nowUs() - ss.t0Us) / 1000u;
-    freeSession();
-    s_last.heapMinAfter = heapMinEver();
-    v->state = st;
-    v->why = s_why;
+    if (!poolReady(why)) return false;
+    if (s_rate != 44100) {   // the recorder halves 44.1 kHz into the pool's 22,050 Hz
+      *why = "RESAMPLE: 44.1K ONLY";
+      return false;
+    }
     return true;
   }
+  bool slotErased(int slot) override { return checkErased(slot); }
+  bool erase(int slot) override { return eraseSlot(slot); }
+  bool start(int slot) override {
+    const char* why = "";
+    if (!ready(&why)) {
+      s_why = why;
+      return false;
+    }
+    return startSession(slot, true);
+  }
+  void release() override {
+    if (s_ss && s_ss->resample) s_ss->rs.release();
+  }
+  bool poll(pg::sampler::RecView* v) override { return pollSession(v, true); }
 };
 
 DeviceMic s_mic;
+DeviceResample s_resample;
 
 float dbfs(double v) { return v > 0.0 ? static_cast<float>(20.0 * std::log10(v / 32768.0)) : -999.0f; }
 int tenths(float v) { return static_cast<int>(v * 10.0f + (v < 0.0f ? -0.5f : 0.5f)); }
@@ -261,6 +364,12 @@ int tenths(float v) { return static_cast<int>(v * 10.0f + (v < 0.0f ? -0.5f : 0.
 }  // namespace
 
 pg::sampler::MicInput& input() { return s_mic; }
+pg::sampler::MicInput& resampleInput(pg::Engine* engine, pg::sampler::SamplerVoice* voice, uint32_t sampleRate) {
+  s_engine = engine;
+  s_voice = voice;
+  s_rate = sampleRate;
+  return s_resample;
+}
 bool busy() { return s_ss != nullptr; }
 
 void report(void (*line)(const char* text)) {
@@ -428,6 +537,15 @@ void report(void (*line)(const char* text)) {
            static_cast<unsigned long>(s_last.heapMinAfter), static_cast<unsigned long>(s_last.eraseMs),
            static_cast<unsigned long>(s_last.erasedCheckUs));
   line(b);
+  if (s_last.resample) {
+    static const char* const kEnd[] = {"-", "released", "full", "no whole bar fits", "transport stopped",
+                                       "let go before it started", "OVERRUN (the writer fell behind)"};
+    snprintf(b, sizeof b,
+             "[mic] last recording was a RESAMPLE (SHIFT+L, the engine's output; ring drops above = overrun): "
+             "ended %s, %u bar line(s) inside\n",
+             s_last.endReason < 7 ? kEnd[s_last.endReason] : "?", static_cast<unsigned>(s_last.bars));
+    line(b);
+  }
 }
 
 }  // namespace mic
