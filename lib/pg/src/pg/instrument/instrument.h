@@ -18,6 +18,7 @@
 #include "../bass/bass.h"
 #include "../drums/drums.h"
 #include "../lead/lead.h"
+#include "../sampler/sampler.h"
 
 namespace pg {
 
@@ -40,7 +41,14 @@ class Instrument {
   Project& project() { return project_; }
   const Project& project() const { return project_; }
 
-  Voice* voice(int track);
+  Voice* voice(int track);   // the track's native voice
+  // The PERC track's sampler (VOICE KINDS: a `voice perc sampler` instrument plays
+  // through it) and the pool it reads (nullptr: the built-in sounds only). The
+  // platform sets its pool (flash on the device, RAM on the desktop) after init(),
+  // before audio starts or with the engine suspended; init() keeps it.
+  sampler::SamplerVoice& sampler() { return sampler_; }
+  const sampler::SamplerVoice& sampler() const { return sampler_; }
+  void setSamplePool(const sampler::SamplePool* pool);
   float sampleRate() const { return sampleRate_; }
   bool monoOutput() const { return mono_; }
 
@@ -62,6 +70,8 @@ class Instrument {
   drums::PercVoice  perc_;
   bass::BassVoice   bass_;
   lead::LeadVoice   lead_;
+  sampler::SamplerVoice sampler_;
+  const sampler::SamplePool* pool_ = nullptr;
   Engine            engine_;
   Project           project_;
   float sampleRate_ = 0.0f;

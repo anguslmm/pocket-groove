@@ -344,7 +344,11 @@ struct State {
     return x;
   }
   void vOn(int t, const NoteEvent& e) {
-    if (voice[t]) voice[t]->noteOn(e);
+    if (voice[t]) {
+      // VOICE KINDS: a hosted kind (the sampler) learns the track's pool slot at each note.
+      if (voice[t] != nativeV[t]) voice[t]->setSampleSlot(proj->tracks[t].sampleSlot);
+      voice[t]->noteOn(e);
+    }
     lastNote[t].store(e.note, std::memory_order_relaxed);   // the scope's time window for synths
     if (t == scopeTrack) {   // the scope's trigger: drums draw from here, synths from the attack
       scopeMark.store(scopeWr, std::memory_order_relaxed);
@@ -586,6 +590,7 @@ bool State::sanitizeTrack(Project& p, int t) const {
     if (val != ts.params[i]) { ts.params[i] = val; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
+  if (ts.sampleSlot >= kSampleSlots) { ts.sampleSlot = 0; changed = true; }
   const bool inst = instrumentId(ts) != 0;
   // DECISION: an instrument track's sound parameters are derived values, so the
   // sanitiser derives them (a project saved with an older version of a set comes
@@ -622,7 +627,7 @@ bool State::sanitizeAll(Project& p) const {
       if (!v2) {
         std::memset(ts.instrument, 0, sizeof(ts.instrument));
         std::memset(ts.macro, 0, sizeof(ts.macro));
-        std::memset(ts.reserved, 0, sizeof(ts.reserved));
+        ts.sampleSlot = 0;
       }
       const bool inst = instrumentId(ts) != 0;
       for (int pt = 0; pt < kNumPatterns; ++pt) {
@@ -847,6 +852,12 @@ void State::apply(const Command& c) {
     case CmdType::SetMute:
       if (c.a >= kNumTracks) break;
       proj->tracks[c.a].mute = c.c ? 1 : 0;
+      bump();
+      break;
+    case CmdType::SetSampleSlot:
+      // takes effect at the track's next note (the sampler latches its slot there)
+      if (c.a >= kNumTracks || c.c >= kSampleSlots) break;
+      proj->tracks[c.a].sampleSlot = c.c;
       bump();
       break;
     case CmdType::NoteOn:

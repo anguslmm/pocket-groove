@@ -53,6 +53,8 @@ enum class CmdType : uint8_t {
                     //   instrumentRefreshes() has counted this command (applied or discarded).
   SetMacroOffset,   // a = track, b = macro 0..3 | kOffsetHold: the macro's TILT OFFSET (below) moves to
                     //   a signed target in a ramp. Build it with macroOffsetCommand().
+  SetSampleSlot,    // a = track, c = sample pool slot 0..kSampleSlots-1 (TrackSettings::sampleSlot;
+                    //   a sampler instrument plays it from the track's next note on)
 };
 
 // INSTRUMENTS (docs/MACROLAB.md): a track whose TrackSettings name an

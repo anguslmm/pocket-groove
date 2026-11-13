@@ -119,6 +119,11 @@ if(TARGET macro_audit)
   # The built-in instrument table (lib/pg/src/pg/macro/builtin_data.cpp) must be what
   # host/tools/macro_builtin makes of macros/ now; it also fails on id collisions.
   add_test(NAME check_builtin COMMAND macro_builtin --check WORKING_DIRECTORY ${PG_ROOT})
+  # ... and the sampler's built-in sounds (lib/pg/src/pg/sampler/rom_samples_data.cpp) what
+  # host/tools/gen_rom_samples makes now (within 2 LSB: libm differs between hosts).
+  if(TARGET gen_rom_samples)
+    add_test(NAME check_rom_samples COMMAND gen_rom_samples --check WORKING_DIRECTORY ${PG_ROOT})
+  endif()
   foreach(bad silent clips typo)
     add_test(NAME macro_audit_catches_${bad}
              COMMAND macro_audit --hard host/tests/macro_bad/${bad}.pgm

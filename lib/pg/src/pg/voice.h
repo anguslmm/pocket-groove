@@ -71,6 +71,10 @@ class Voice {
 
   virtual void setTempo(float /*bpm*/) {}
 
+  // The track's sample pool slot (TrackSettings::sampleSlot), sent before every
+  // note-on. Only the sampler reads it (latched at the note-on); others ignore it.
+  virtual void setSampleSlot(uint8_t /*slot*/) {}
+
   virtual void noteOn(const NoteEvent& e) = 0;
   // End of gate for `note` (for chords: the root passed to noteOn). One-shot drums may ignore.
   virtual void noteOff(uint8_t note) = 0;

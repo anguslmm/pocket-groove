@@ -155,7 +155,10 @@ struct TrackSettings {
   uint8_t mute;
   uint8_t instrument[2];            // id, little-endian (two bytes: see THREADING above)
   uint8_t macro[kTrackMacros];      // macro positions 0..255
-  uint8_t reserved[1];
+  // The sample pool slot a sampler instrument on this track plays, 0..kSampleSlots-1
+  // (0 = slot 1; stage F1, pg/sampler/sample_pool.h). Was a reserved zero byte, so
+  // every older file reads slot 1; a version-1 file is zeroed (sanitizeProject).
+  uint8_t sampleSlot;
 };
 inline uint16_t instrumentId(const TrackSettings& ts) { return uint16_t(ts.instrument[0] | (ts.instrument[1] << 8)); }
 inline void setInstrumentId(TrackSettings& ts, uint16_t id) {
