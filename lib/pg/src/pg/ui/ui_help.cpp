@@ -498,6 +498,12 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
         *l2 = "HERE. STEP HELD: THE NOTE'S VALUE.";
         return;
       case kKL:
+        if (ui.samplerOn(ui.selTrack())) {
+          cat(title, "HOLD: RECORD THE MIC");
+          *l1 = "INTO THIS SLOT. IT STARTS AT THE SOUND";
+          *l2 = "AND STOPS WHEN YOU LET GO (6 S MAX).";
+          return;
+        }
         cat(title, ui.devMode() ? "DEV: PARAMETER PAGES" : "NOT USED HERE");
         if (ui.devMode()) *l1 = "DEVELOPER MODE: BARE PARAMETERS.";
         return;

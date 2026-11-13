@@ -62,6 +62,7 @@ bool FlashPool::user(int slot, SampleRef* out) const {
   out->overview = h->overview;
   headerName(*h, out->name);
   out->peak = h->peak;
+  out->gain = gainOf(*h);
   out->builtin = false;
   out->rom = 0;
   return true;
@@ -97,6 +98,7 @@ SampleWriter::Result SampleWriter::begin(int slot, uint32_t samples) {
   pool_->hide(slot);   // chops of it stop; new notes play its built-in sound meanwhile
   if (!drv_->erase(slotOffset(slot), kSectorBytes)) return kFlash;   // the header first: empty from here on
   slot_ = slot;
+  rec_ = false;
   bytes_ = samples * 2u;
   written_ = 0;
   erasedTo_ = 0;
@@ -145,6 +147,7 @@ SampleWriter::Result SampleWriter::commit(uint32_t crc, const char* name) {
 void SampleWriter::cancel() {
   if (slot_ >= 0 && pool_) pool_->rescan(slot_);   // its header is erased: empty
   slot_ = -1;
+  rec_ = false;
 }
 
 SampleWriter::Result SampleWriter::remove(int slot) {
@@ -152,9 +155,57 @@ SampleWriter::Result SampleWriter::remove(int slot) {
   if (!ready()) return kNoPool;
   if (slot < 0 || slot >= kPoolSlots) return kBadSlot;
   pool_->hide(slot);
-  const bool ok = drv_->erase(slotOffset(slot), kSectorBytes);
+  const bool ok = drv_->erase(slotOffset(slot), kSlotBytes);   // all of it: an empty slot is an erased slot
   pool_->rescan(slot);
   return ok ? kOk : kFlash;
+}
+
+bool SampleWriter::erased(int slot) const {
+  if (!pool_ || !pool_->base() || slot < 0 || slot >= kPoolSlots) return false;
+  const uint32_t* w = reinterpret_cast<const uint32_t*>(pool_->base() + slotOffset(slot));
+  for (uint32_t i = 0; i < kSlotBytes / 4u; ++i)
+    if (w[i] != 0xFFFFFFFFu) return false;
+  return true;
+}
+
+SampleWriter::Result SampleWriter::beginRecording(int slot) {
+  cancel();
+  if (!ready()) return kNoPool;
+  if (slot < 0 || slot >= kPoolSlots) return kBadSlot;
+  if (!erased(slot)) return kFlash;   // a recording never erases: the caller erases first (remove)
+  pool_->hide(slot);
+  slot_ = slot;
+  rec_ = true;
+  bytes_ = kSlotAudioBytes;
+  written_ = 0;
+  erasedTo_ = kSlotAudioBytes;   // write() erases nothing
+  return kOk;
+}
+
+SampleWriter::Result SampleWriter::commitRecording(uint32_t samples, const char* name) {
+  if (slot_ < 0 || !rec_) return kNoSession;
+  const int slot = slot_;
+  if (samples < kMinSamples || samples > kSlotMaxSamples || samples * 2u > written_) return kBadSize;
+  const uint32_t bytes = samples * 2u;
+  uint8_t buf[256];
+  uint32_t c = 0;
+  for (uint32_t o = 0; o < bytes;) {   // the audio as the flash holds it
+    const uint32_t n = bytes - o < sizeof buf ? bytes - o : uint32_t(sizeof buf);
+    if (!drv_->read(audioOffset(slot) + o, buf, n)) return kFlash;
+    c = crc32(buf, n, c);
+    o += n;
+  }
+  SlotHeader h;   // ... and as the CPU reads it: the same CRC
+  makeHeader(reinterpret_cast<const int16_t*>(pool_->base() + audioOffset(slot)), samples, name, &h);
+  if (h.dataCrc != c) return kVerify;
+  setPlaybackGain(&h);
+  if (!drv_->write(slotOffset(slot), &h, sizeof h)) return kFlash;
+  SlotHeader back;
+  if (!drv_->read(slotOffset(slot), &back, sizeof back) || std::memcmp(&back, &h, sizeof h) != 0) return kVerify;
+  slot_ = -1;
+  rec_ = false;
+  pool_->rescan(slot);
+  return pool_->header(slot) ? kOk : kVerify;
 }
 
 SampleWriter::Result SampleWriter::read(int slot, uint32_t offset, uint8_t* data, uint32_t bytes) {

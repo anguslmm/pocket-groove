@@ -62,6 +62,8 @@
 #include "pg/ui/keys.h"
 #include "pg/ui/ui.h"
 #include "recorder.h"
+#include "mic.h"
+#include "mic_sdl.h"
 #include "samples.h"
 #include "script.h"
 #include "stems.h"
@@ -89,6 +91,7 @@ struct Options {
   bool listenSimVary = false;        // --listen-sim-vary: callback sizes vary
   std::string listenDevice;          // --listen-device NAME: another input than "Pocket Groove"
   std::string listenDump;            // --listen-dump FILE.wav: the raw capture as SDL delivers it
+  std::string micDevice;             // --mic-device NAME: record from this input, not the default one
   bool lab = false;                  // --lab [DIR]: the macro lab
   bool dev = false;                  // --dev: developer mode (the parameter pages; --lab implies it)
   std::string labDir = "macros";
@@ -126,6 +129,7 @@ void usage(FILE* f) {
                "  --listen-dump FILE.wav  Listen: also write the raw capture exactly as SDL delivers it\n"
                "                    (the obtained format, channels and rate in the WAV header)\n"
                "  --listen-device NAME  Listen to this input (exact, or part of its name), not Pocket Groove\n"
+               "  --mic-device NAME  hold L on a sampler page: record from this input (default: the system's)\n"
                "  --listen-sim PPM  test: Listen plays a simulated device whose clock runs PPM fast\n"
                "  --listen-sim-spec FMT:CH:RATE:FRAMES  test: ... which delivers this spec (e.g. f32:1:48000:1024)\n"
                "  --listen-sim-burst N  test: ... N callbacks back to back;  --listen-sim-vary: sizes vary\n"
@@ -170,6 +174,7 @@ bool parseArgs(int argc, char** argv, Options* o) {
     else if (a == "--listen-sim-vary") o->listenSimVary = true;
     else if (a == "--listen-device") o->listenDevice = next("an input name");
     else if (a == "--listen-dump") o->listenDump = next("a .wav file");
+    else if (a == "--mic-device") o->micDevice = next("an input name");
     else if (a == "--scale") { o->scale = std::atoi(next("a factor")); o->scaleGiven = true; }
     else if (a == "--lab") {
       o->lab = true;
@@ -229,6 +234,8 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   desk::Stems stems;
   desk::Lab lab;
   desk::Samples samples;
+  desk::SdlMicSource micSource;   // hold L on a sampler page (mic.h)
+  desk::Mic mic;
   bool labMouse = false;     // a drag that started on the lab panel
   bool textInput = false;    // SDL text input on (only while a lab note is typed)
   std::unique_ptr<desk::SimCapture> simCapture;
@@ -966,6 +973,8 @@ int main(int argc, char** argv) {
     }
     if (app.samples.init(sdir)) {
       g_inst.setSamplePool(app.samples.pool());
+      app.micSource.setDevice(opt.micDevice);
+      app.mic.init(&app.samples, &app.micSource);
       int n = 0;
       for (int i = 0; i < pg::sampler::kPoolSlots; ++i) n += app.samples.fileOf(i).empty() ? 0 : 1;
       std::printf("[samples] %s: %d slot(s) with a file\n", sdir.c_str(), n);
@@ -976,6 +985,7 @@ int main(int argc, char** argv) {
   }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
+  g_ui.setMic(&app.mic);                 // L on a sampler page records the Mac's microphone
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter
   g_ui.setDevMode(opt.dev || opt.lab);
   const bool hadSession = fs.exists(pg::io::kSessionPath);

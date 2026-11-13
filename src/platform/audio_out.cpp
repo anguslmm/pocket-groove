@@ -23,8 +23,12 @@
 #include "usb_cdc.h"
 #endif
 
+#include <driver/gpio.h>
 #include <driver/i2s_std.h>
 #include <esp_cpu.h>
+#include <soc/gpio_reg.h>
+#include <soc/gpio_sig_map.h>
+#include <soc/io_mux_reg.h>
 #include <esp_memory_utils.h>
 #include <esp_rom_sys.h>
 #include <freertos/FreeRTOS.h>
@@ -51,6 +55,7 @@ constexpr uint32_t kCodecI2cHz  = 100000;
 constexpr int      kPinBclk     = 41;
 constexpr int      kPinWs       = 43;
 constexpr int      kPinDout     = 42;
+constexpr int      kPinDin      = 46;         // the ES8311's ASDOUT (the microphone)
 constexpr int      kTaskPrio    = 20;         // above every app task, below esp_timer (22) and IPC (24)
 constexpr uint32_t kTaskStack   = kTaskStackBytes;   // high-water mark is reported in Stats
 constexpr int      kRotBuffers  = 4;          // M5Speaker backend: playRaw keeps pointers (current + 1 queued)
@@ -65,6 +70,9 @@ struct State {
   char          err[64]  = "";
 
   i2s_chan_handle_t tx   = nullptr;
+  i2s_chan_handle_t rx   = nullptr;          // registered with tx (full duplex), initialised on first use
+  bool          rxInit   = false;
+  bool          adcOn    = false;
   TaskHandle_t  task     = nullptr;
   SemaphoreHandle_t done = nullptr;
   volatile bool stopReq  = false;
@@ -100,11 +108,55 @@ void* volatile s_obsUser = nullptr;
 volatile bool     s_underrunArmed = false;
 
 int16_t s_block[kBlockFrames * 2];                 // DirectI2S: one block, copied by i2s_channel_write
+
+// Microphone (stage F2): the ring the audio task fills while one is attached, and
+// what it counts. The epoch moves every block: micEnd() waits for it to move twice
+// after detaching, so the audio task is no longer inside the RX driver.
+std::atomic<MicRing*> s_micRing{nullptr};
+volatile uint32_t s_micEpoch = 0;
+volatile uint32_t s_rxOverflows = 0;               // ISR (DRAM only)
+volatile uint32_t s_micBlocks = 0, s_micFrames = 0, s_micReadErr = 0;
+volatile uint32_t s_micMaxPullCyc = 0, s_micMaxBlockCyc = 0, s_micMaxGapCyc = 0;
 int16_t* s_rot = nullptr;                          // M5Speaker: kRotBuffers blocks, heap, allocated on demand
 
 bool IRAM_ATTR onSendQueueOverflow(i2s_chan_handle_t, i2s_event_data_t*, void*) {
   if (s_underrunArmed) s_underruns = s_underruns + 1;
   return false;
+}
+bool IRAM_ATTR onRecvQueueOverflow(i2s_chan_handle_t, i2s_event_data_t*, void*) {
+  s_rxOverflows = s_rxOverflows + 1;
+  return false;
+}
+
+// The microphone's part of an audio block (only while a ring is attached): every RX
+// block that is ready, without waiting, its LEFT slot into the ring. 512 bytes of
+// the task's stack (it had 3.9 KB free on the device).
+void micPull(MicRing* m) {
+  const uint32_t t0 = esp_cpu_get_cycle_count();
+  int16_t in[kBlockFrames * 2];
+  for (int it = 0; it < 3; ++it) {
+    size_t got = 0;
+    const esp_err_t e = i2s_channel_read(s.rx, in, sizeof in, &got, 0);
+    if (e != ESP_OK && e != ESP_ERR_TIMEOUT) {
+      s_micReadErr = s_micReadErr + 1;
+      break;
+    }
+    const uint32_t frames = static_cast<uint32_t>(got / (2 * sizeof(int16_t)));
+    if (frames) {
+      const uint32_t head = m->head.load(std::memory_order_relaxed);
+      const uint32_t tail = m->tail.load(std::memory_order_acquire);
+      const uint32_t space = (m->mask + 1u) - (head - tail);
+      const uint32_t n = frames < space ? frames : space;
+      for (uint32_t i = 0; i < n; ++i) m->buf[(head + i) & m->mask] = in[2 * i];
+      m->head.store(head + n, std::memory_order_release);
+      if (n < frames) m->dropped.fetch_add(frames - n, std::memory_order_relaxed);
+      s_micBlocks = s_micBlocks + 1;
+      s_micFrames = s_micFrames + n;
+    }
+    if (got < sizeof in) break;
+  }
+  const uint32_t dt = esp_cpu_get_cycle_count() - t0;
+  if (dt > s_micMaxPullCyc) s_micMaxPullCyc = dt;
 }
 
 void setError(const char* what, int code = 0) {
@@ -140,6 +192,7 @@ bool regRead(uint8_t reg, uint8_t* val) {
 // (16-bit stereo slots) gives the codec its 256 fs clock at any sample rate
 // (44.1 kHz: BCLK 1.4112 MHz -> 11.29 MHz; 32 kHz: 1.024 MHz -> 8.192 MHz).
 uint8_t s_sdpIn = 0x00;   // reg 0x09 value to (re)apply; power-on default
+bool writeAdcRegs();      // the microphone's (below): a DAC re-init keeps the ADC as it was
 
 bool es8311DacInit() {
   static const uint8_t seq[][2] = {
@@ -155,6 +208,7 @@ bool es8311DacInit() {
   bool ok = true;
   for (auto& r : seq) ok = regWrite(r[0], r[1]) && ok;
   ok = regWrite(0x09, s_sdpIn) && ok;
+  if (s.adcOn) ok = writeAdcRegs() && ok;   // 0x01 = 0xB5 above switched the ADC's clocks off
   return ok;
 }
 
@@ -255,6 +309,12 @@ void audioTask(void*) {
       vTaskDelay(2);                       // never spin on a dead driver
     }
     s.blocks = s.blocks + 1;
+    if (MicRing* m = s_micRing.load(std::memory_order_acquire)) {
+      micPull(m);
+      if (dt > s_micMaxBlockCyc) s_micMaxBlockCyc = dt;
+      if (gapCyc > s_micMaxGapCyc) s_micMaxGapCyc = gapCyc;
+    }
+    s_micEpoch = s_micEpoch + 1;
     if (auto obs = s_obs) {
       BlockInfo bi;
       bi.startCyc = t0;
@@ -328,6 +388,20 @@ void stopTask() {
 }
 
 // ---- backends ------------------------------------------------------------------
+// The port's one std config. RX takes TX's exactly (the hw-spike: one config for both
+// channels of the full-duplex pair), plus the data-in pin.
+i2s_std_config_t stdConfig(bool rx) {
+  i2s_std_config_t cfg = {};
+  cfg.clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(s.cfg.sampleRate);       // PLL 160 MHz source, 256 fs internal MCLK
+  cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+  cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;     // no MCLK trace on this board
+  cfg.gpio_cfg.bclk = static_cast<gpio_num_t>(kPinBclk);
+  cfg.gpio_cfg.ws   = static_cast<gpio_num_t>(kPinWs);
+  cfg.gpio_cfg.dout = static_cast<gpio_num_t>(kPinDout);
+  cfg.gpio_cfg.din  = rx ? static_cast<gpio_num_t>(kPinDin) : I2S_GPIO_UNUSED;
+  return cfg;
+}
+
 bool startDirect() {
   // Make sure M5.Speaker is not holding I2S_NUM_1.
   if (M5.Speaker.isRunning()) M5.Speaker.end();
@@ -336,19 +410,28 @@ bool startDirect() {
   chan.dma_desc_num  = s.cfg.dmaBufCount;
   chan.dma_frame_num = kBlockFrames;
   chan.auto_clear    = true;               // underrun -> silence, not a stuck buffer
-  esp_err_t e = i2s_new_channel(&chan, &s.tx, nullptr);
-  if (e != ESP_OK) { s.tx = nullptr; setError("i2s_new_channel", e); return false; }
+  // Full duplex (the microphone, stage F2): RX is registered with TX here, as the
+  // hw-spike did, and initialised only when the microphone is first used. Should the
+  // pair be refused, TX alone as before (no microphone).
+  s.rx = nullptr;
+  s.rxInit = false;
+  s.adcOn = false;
+  esp_err_t e = i2s_new_channel(&chan, &s.tx, &s.rx);
+  if (e != ESP_OK) {
+    s.rx = nullptr;
+    e = i2s_new_channel(&chan, &s.tx, nullptr);
+  }
+  if (e != ESP_OK) { s.tx = s.rx = nullptr; setError("i2s_new_channel", e); return false; }
 
-  i2s_std_config_t cfg = {};
-  cfg.clk_cfg  = I2S_STD_CLK_DEFAULT_CONFIG(s.cfg.sampleRate);       // PLL 160 MHz source, 256 fs internal MCLK
-  cfg.slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
-  cfg.gpio_cfg.mclk = I2S_GPIO_UNUSED;     // no MCLK trace on this board
-  cfg.gpio_cfg.bclk = static_cast<gpio_num_t>(kPinBclk);
-  cfg.gpio_cfg.ws   = static_cast<gpio_num_t>(kPinWs);
-  cfg.gpio_cfg.dout = static_cast<gpio_num_t>(kPinDout);
-  cfg.gpio_cfg.din  = I2S_GPIO_UNUSED;
+  const i2s_std_config_t cfg = stdConfig(false);
   e = i2s_channel_init_std_mode(s.tx, &cfg);
-  if (e != ESP_OK) { setError("i2s_channel_init_std_mode", e); i2s_del_channel(s.tx); s.tx = nullptr; return false; }
+  if (e != ESP_OK) {
+    setError("i2s_channel_init_std_mode", e);
+    if (s.rx) i2s_del_channel(s.rx);
+    i2s_del_channel(s.tx);
+    s.tx = s.rx = nullptr;
+    return false;
+  }
 
   i2s_event_callbacks_t cbs = {};
   cbs.on_send_q_ovf = onSendQueueOverflow;
@@ -359,7 +442,13 @@ bool startDirect() {
   }
 
   e = i2s_channel_enable(s.tx);            // BCLK/WS start here, DMA sends zeros
-  if (e != ESP_OK) { setError("i2s_channel_enable", e); i2s_del_channel(s.tx); s.tx = nullptr; return false; }
+  if (e != ESP_OK) {
+    setError("i2s_channel_enable", e);
+    if (s.rx) i2s_del_channel(s.rx);
+    i2s_del_channel(s.tx);
+    s.tx = s.rx = nullptr;
+    return false;
+  }
 
   // Codec after the clock is up (it is clocked from BCLK). A missing or mute
   // codec is reported but does not stop the I2S stream: timing tests still work.
@@ -372,6 +461,11 @@ bool startDirect() {
 void stopDirect() {
   if (!s.tx) return;
   if (s.codecOk) regWrite(0x32, 0x00);     // muted before the clock stops (end() already ramped down)
+  if (s.rx) {
+    i2s_del_channel(s.rx);                  // (disabled: micEnd() ran before the task stopped)
+    s.rx = nullptr;
+    s.rxInit = false;
+  }
   i2s_channel_disable(s.tx);
   i2s_del_channel(s.tx);
   s.tx = nullptr;
@@ -497,6 +591,7 @@ bool begin(const Config& cfgIn, RenderFn render, void* user) {
 
 void end() {
   if (!s.running) return;
+  micEnd();
   // Fade out while the signal is still playing: cutting the task mid-waveform
   // (or stopping the clock) at full level is an audible click.
   if (s.codecOk) rampVolume(s.cfg.volumeReg, 0x00);
@@ -606,6 +701,155 @@ uint32_t latencyFrames() {
   }
   // rendered block + 1 queued + 1 playing in M5's mixer + its 8 x 128 DMA ring + 1-sample resampler delay
   return static_cast<uint32_t>(kBlockFrames) * (3u + 8u) + 1u;
+}
+
+// ---- microphone (stage F2) ------------------------------------------------------------
+
+namespace {
+// The ADC side of esp_codec_dev's sequence as mic-matrix config 6 ran it on the device
+// (docs/hardware-notes.md 11.7: tone -25 dBFS, SINAD ~31 dB through the air), without
+// what would disturb the playing DAC: no 0x00 reset / CSM cycle, no 0x0D analog power
+// cycle, no 0x02-0x08 clock dividers, no 0x10 / 0x11 references, no 0x09 / 0x12 / 0x13 /
+// 0x32 / 0x37 DAC registers. Written in this order once, after the RX clock runs.
+const uint8_t kAdcRegs[][2] = {
+    {0x01, 0xBF},   // clock manager: the ADC's digital and analog clocks on as well (DAC bits as 0xB5)
+    {0x0A, 0x0C},   // ADC serial port: I2S, 16-bit, not muted
+    {0x44, 0x08},   // ADC data to the port, no DAC loopback (esp_codec_dev's value)
+    {0x16, 0x24},   // ADC scale (esp_codec_dev; changes no level, 11.7 cfg18)
+    {0x17, 0xBF},   // ADC volume 0 dB
+    {0x1B, 0x0A},   // ADC high-pass (esp_codec_dev)
+    {0x1C, 0x6A},   // ADC equaliser bypassed, DC offset removed
+    {0x15, 0x40},   // ADC soft ramp (esp_codec_dev)
+    {0x14, 0x1A},   // MIC1P/N in, PGA +30 dB (cfg06)
+    {0x0E, 0x02},   // PGA and ADC modulator powered up (power-on: off)
+};
+bool writeAdcRegs() {
+  bool ok = true;
+  for (const auto& r : kAdcRegs) ok = regWrite(r[0], r[1]) && ok;
+  return ok;
+}
+}  // namespace
+
+const uint8_t (*micAdcRegs(int* n))[2] {
+  *n = static_cast<int>(sizeof(kAdcRegs) / sizeof(kAdcRegs[0]));
+  return kAdcRegs;
+}
+
+bool micAvailable(const char** why) {
+  const char* w = nullptr;
+  if (!s.running) w = "NO AUDIO";
+  else if (s.cfg.backend != Backend::DirectI2S) w = "MIC: I2S ONLY";
+  else if (s.cfg.sampleRate != 44100) w = "MIC: 44.1K ONLY";
+  else if (!s.rx) w = "NO MIC CHANNEL";
+  else if (!s.codecOk) w = "NO CODEC";
+  if (why) *why = w ? w : "";
+  return w == nullptr;
+}
+
+bool micBegin(MicRing* ring) {
+  const char* why = "";
+  if (!ring || !micAvailable(&why)) {
+    setError(why[0] ? why : "no ring");
+    return false;
+  }
+  if (s_micRing.load()) return true;
+  if (!s.rxInit) {
+    const i2s_std_config_t cfg = stdConfig(true);
+    const esp_err_t e = i2s_channel_init_std_mode(s.rx, &cfg);
+    if (e != ESP_OK) {
+      setError("mic: i2s_channel_init_std_mode", e);
+      return false;
+    }
+    i2s_event_callbacks_t cbs = {};
+    cbs.on_recv_q_ovf = onRecvQueueOverflow;
+    i2s_channel_register_event_callback(s.rx, &cbs, nullptr);   // not fatal: only the counter
+    s.rxInit = true;
+  }
+  // The ADC, once per boot: its power-up (0x0E: PGA and modulator on) shares the
+  // codec's analog reference with the playing DAC, so the output is faded around it
+  // (~40 ms) rather than risk a click. The codec runs from TX's BCLK, already there.
+  if (!s.adcOn) {
+    rampVolume(s.cfg.volumeReg, 0x00);
+    const bool ok = writeAdcRegs();
+    rampVolume(0x00, s.cfg.volumeReg);
+    if (!ok) {
+      setError("mic: ES8311 ADC registers not written");
+      return false;
+    }
+    s.adcOn = true;
+  }
+  // GPIO46: M5.begin() left it an output driven high; IDF 5.5's I2S setup only enables
+  // the input. Output driver off, the I2S input routing kept (hardware-notes 11.6/11.7).
+  gpio_set_direction(static_cast<gpio_num_t>(kPinDin), GPIO_MODE_INPUT);
+  gpio_pullup_dis(static_cast<gpio_num_t>(kPinDin));
+  gpio_pulldown_dis(static_cast<gpio_num_t>(kPinDin));
+  const esp_err_t e = i2s_channel_enable(s.rx);
+  if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {   // INVALID_STATE: already running
+    setError("mic: i2s_channel_enable", e);
+    return false;
+  }
+  ring->head.store(0);
+  ring->tail.store(0);
+  ring->dropped.store(0);
+  s_micRing.store(ring, std::memory_order_release);
+  return true;
+}
+
+void micEnd() {
+  if (!s_micRing.exchange(nullptr)) return;
+  // The audio task may be inside micPull() with the old pointer: wait until it has
+  // finished two more blocks (2 x 2.9 ms; at most 50 ms if it is stalled).
+  const uint32_t e0 = s_micEpoch;
+  for (int i = 0; i < 50 && static_cast<uint32_t>(s_micEpoch - e0) < 2u; ++i) delay(1);
+  if (s.rx && s.rxInit) i2s_channel_disable(s.rx);
+}
+
+bool micActive() { return s_micRing.load() != nullptr; }
+
+MicStats micStats() {
+  MicStats m;
+  const float perUs = 1.0f / static_cast<float>(s.cyclesPerUs ? s.cyclesPerUs : 240);
+  m.rxRegistered = s.rx != nullptr;
+  m.rxInitialised = s.rxInit;
+  m.adcOn = s.adcOn;
+  m.attached = s_micRing.load() != nullptr;
+  m.blocks = s_micBlocks;
+  m.frames = s_micFrames;
+  m.rxOverflows = s_rxOverflows;
+  m.readErrors = s_micReadErr;
+  m.maxPullUs = static_cast<float>(s_micMaxPullCyc) * perUs;
+  m.maxBlockUs = static_cast<float>(s_micMaxBlockCyc) * perUs;
+  m.maxGapUs = static_cast<float>(s_micMaxGapCyc) * perUs;
+  return m;
+}
+
+void micResetStats() {
+  s_micBlocks = 0;
+  s_micFrames = 0;
+  s_rxOverflows = 0;
+  s_micReadErr = 0;
+  s_micMaxPullCyc = 0;
+  s_micMaxBlockCyc = 0;
+  s_micMaxGapCyc = 0;
+}
+
+void fadeOut() {
+  if (s.running && s.codecOk) rampVolume(s.cfg.volumeReg, 0x00);
+}
+void fadeIn() {
+  if (s.running && s.codecOk) rampVolume(0x00, s.cfg.volumeReg);
+}
+
+PinState micPin() {
+  constexpr uint32_t bit = 1u << (kPinDin - 32);
+  PinState p;
+  p.oe = (REG_READ(GPIO_ENABLE1_REG) & bit) ? 1 : 0;
+  p.out = (REG_READ(GPIO_OUT1_REG) & bit) ? 1 : 0;
+  p.level = (REG_READ(GPIO_IN1_REG) & bit) ? 1 : 0;
+  p.outSel = static_cast<uint16_t>(REG_READ(GPIO_FUNC0_OUT_SEL_CFG_REG + 4 * kPinDin) & 0xFFF);
+  p.ie = (REG_READ(IO_MUX_GPIO46_REG) & FUN_IE) ? 1 : 0;
+  p.inSel = static_cast<uint8_t>(REG_READ(GPIO_FUNC0_IN_SEL_CFG_REG + 4 * I2S1I_SD_IN_IDX) & 0xFF);
+  return p;
 }
 
 }  // namespace audio

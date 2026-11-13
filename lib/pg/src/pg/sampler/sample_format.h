@@ -48,9 +48,11 @@ struct SlotHeader {
   uint32_t rate;           // kPoolRate
   char     name[kNameLen]; // upper case A-Z 0-9 - _, NUL padded (not terminated when 8 long)
   uint16_t peak;           // largest |sample|, 0..32768
-  uint16_t reserved;       // 0
+  uint16_t gain;           // playback gain in 1/256 (0 = 1.0, what every put sample has): a
+                           // microphone recording is stored as it came in and levelled here
+                           // (stage F2, setPlaybackGain); headers before F2 read 0 (was reserved)
   uint32_t dataCrc;        // crc32 of the audio bytes (samples * 2)
-  int8_t   overview[kOverviewCols][2];   // per column: min, max (sample >> 8)
+  int8_t   overview[kOverviewCols][2];   // per column: min, max (sample >> 8; times the gain)
   uint32_t headerCrc;      // crc32 of every byte before this field
 };
 static_assert(sizeof(SlotHeader) == 500, "SlotHeader layout");
@@ -66,6 +68,16 @@ void makeOverview(const int16_t* data, uint32_t samples, int8_t (*out)[2]);
 // 8-character form: upper case, A-Z 0-9 - _, the rest dropped).
 void makeHeader(const int16_t* data, uint32_t samples, const char* name, SlotHeader* out);
 void cleanName(const char* in, char out[kNameLen]);
+// A microphone recording (stage F2) is written as it came in (no second pass over
+// the flash): its level is made right at playback. This sets h->gain so the peak
+// plays at kRecordTargetPeak (at most kRecordMaxGain; a peak already there or above
+// keeps 0 = 1.0), scales the overview the same way (the picture shows what plays)
+// and recomputes the header CRC.
+constexpr uint16_t kRecordTargetPeak = 29195;   // -1 dBFS: what the converter levels a put to (0.891)
+constexpr float kRecordMaxGain = 16.0f;         // +24 dB: a quiet room is not lifted into hiss
+void setPlaybackGain(SlotHeader* h);
+// The header's gain as a factor (0 = 1.0).
+inline float gainOf(const SlotHeader& h) { return h.gain ? float(h.gain) * (1.0f / 256.0f) : 1.0f; }
 // magic, version, header CRC, rate and count in range. Does not read the audio.
 bool headerValid(const SlotHeader& h);
 // The header's name as a C string (out: kNameLen + 1).

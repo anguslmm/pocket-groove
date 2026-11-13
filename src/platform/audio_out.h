@@ -13,6 +13,7 @@
 //
 // No Arduino / M5 / ESP-IDF types in this header.
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -114,6 +115,58 @@ int placementLine(char* buf, size_t cap);
 // Worst-case time from the start of a render block to the DAC, in frames
 // (render block + driver queue + DMA), for the current config.
 uint32_t latencyFrames();
+
+// ---- MICROPHONE (stage F2; docs/hardware-notes.md 11.6, 11.7; docs/STATE.md) ----
+// Full duplex on the one I2S port, as the hw-spike recorded: the RX channel is
+// registered together with TX at begin() (its channel object only: a few hundred
+// bytes of heap) and initialised the first time micBegin() runs (its DMA ring, the
+// same 4 x 128 frames as TX, ~2 KB of heap, then stays until end()). The first
+// micBegin() also writes the codec's ADC registers (the set mic-matrix config 6
+// recorded with on the device, MINUS everything that touches the DAC side: no reset
+// pulse, no analog power cycle, no clock or divider rewrite; so the playing output
+// keeps its level) and the ADC stays powered after that. That first time the output
+// is faded out and back in around the writes (~40 ms, once per boot): the ADC's power-up
+// shares the analog reference with the DAC, and a dip is better than a click.
+// Every micBegin() switches GPIO46's output driver off (M5.begin() leaves it
+// driven high, which the RX samples as a constant -1).
+//
+// While a MicRing is attached the audio task, right after each TX write, reads the
+// RX blocks that are ready (non-blocking) and copies their LEFT slot into the ring.
+// That is the microphone's whole cost on the audio thread; the consumer (the writer
+// task, src/platform/mic.*) does everything else. DirectI2S at 44.1 kHz only.
+// UI thread only (I2C, the attach / detach handshake).
+struct MicRing {
+  int16_t* buf = nullptr;                  // mono, 44.1 kHz; size a power of two
+  uint32_t mask = 0;                       // size - 1
+  std::atomic<uint32_t> head{0};           // written by the audio task only
+  std::atomic<uint32_t> tail{0};           // written by the consumer only
+  std::atomic<uint32_t> dropped{0};        // frames that found the ring full (audio task)
+};
+bool micBegin(MicRing* ring);   // false: lastError() says why (the audio keeps running)
+void micEnd();                  // detaches the ring (after the audio task let go) and stops RX
+bool micActive();
+bool micAvailable(const char** why);   // could micBegin() work now (backend, rate, RX registered)
+struct MicStats {
+  bool     rxRegistered, rxInitialised, adcOn, attached;
+  uint32_t blocks;          // RX reads that returned data while attached
+  uint32_t frames;          // frames handed to the ring
+  uint32_t rxOverflows;     // RX DMA buffers overwritten before they were read (input lost)
+  uint32_t readErrors;
+  float    maxPullUs;       // the longest RX read + copy on the audio thread
+  float    maxBlockUs;      // the longest render while attached
+  float    maxGapUs;        // the longest start-to-start gap between two blocks while attached
+};
+MicStats micStats();
+void micResetStats();           // the per-recording maxima (call before a micBegin)
+// The ADC registers micBegin() writes, as (register, value) pairs.
+const uint8_t (*micAdcRegs(int* n))[2];
+// The DAC output faded to silence and back (UI thread: I2C, ~10-20 ms each), around a
+// flash erase that stalls the audio task.
+void fadeOut();
+void fadeIn();
+// GPIO46 (I2S data in) as the registers have it now.
+struct PinState { uint8_t oe, out, level, ie, inSel; uint16_t outSel; };
+PinState micPin();
 
 }  // namespace audio
 }  // namespace plat

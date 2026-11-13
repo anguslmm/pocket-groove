@@ -22,6 +22,7 @@ void resolve(const SamplePool* pool, int slot, SampleRef* out) {
   std::memset(out->name, 0, sizeof(out->name));
   std::strncpy(out->name, r.name, kNameLen);
   out->peak = r.peak;
+  out->gain = 1.0f;
   out->builtin = true;
   out->rom = uint8_t(slot % kRomCount);
 }
@@ -36,6 +37,7 @@ bool MemoryPool::user(int slot, SampleRef* out) const {
   out->overview = s.hdr.overview;
   headerName(s.hdr, out->name);
   out->peak = s.hdr.peak;
+  out->gain = gainOf(s.hdr);
   out->builtin = false;
   out->rom = 0;
   return true;

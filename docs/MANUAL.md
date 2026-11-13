@@ -224,7 +224,7 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | `del` held + a macro key | Clear that macro's motion: its values leave every note of this track in this pattern (`ctrl`+`z` brings them back). |
 | `'` | Which 16 steps the strip shows. |
 
-**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER. Their picture is the sample's waveform, and `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays. Chapter 20.
+**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER. Their picture is the sample's waveform, `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays, and **holding `l` records the microphone into that slot**. Chapter 20.
 
 A track with no instrument shows **CLASSIC**: it plays its classic sound (projects from before instruments), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
@@ -1213,5 +1213,28 @@ tools/pg sample rm 3                       # empty slot 3 (it plays its built-in
 
 `put` converts the file on the Mac exactly as the desktop does (any WAV; on a Mac also AIFF, MP3, M4A and anything else `afconvert` reads) and names it after the file (`--name` to choose). The device shows `SAMPLE 3: 45%` while it writes, then `SAMPLE POOL UPDATED`; a sampler instrument plays the new sound from its next note. It refuses while the sequencer plays (writing the device's flash stops the audio for a moment). If a transfer is cut off, that slot is left empty (built-in sound), never half a sample: put it again.
 
-**What is where.** The samples live in a part of the device's flash that projects never use: saving, loading and pushing projects never touches them, and a project only remembers the slot number. A project made with a sample sounds different on a device that has another sample in that slot. Recording from the microphone is not in this version.
+### Recording with the microphone
+
+![Waiting for the sound](ux/mic-waiting.png)
+
+On CHOP, TAPE or STUTTER, **hold `l`** and make the sound into the device; **let go** when it is done. That is the sample the instrument plays, at once, in the slot the page shows.
+
+- **It starts on the sound, not on the key.** While you hold `l` the page says `WAITING` and shows the level along the bottom, with a white tick where recording will start. The first sound above it starts the recording, with a short moment before it kept (40 ms), so the attack is not cut. The click of the key itself does not start it.
+- **While it records** the page says `REC` and the time, and the sound appears across the picture as it comes in. The picture is the whole slot: when the wave reaches the right edge the slot is full (about 6 seconds) and it stops by itself.
+- **Let go** and it is done: the picture is the new sample, the toast names it (`SLOT 3 REC03 1.6S`), and the next note plays it. The click of the key going up is left out. If no sound came, `NO SOUND` and nothing changes.
+- **Its level is made right for you**: a quiet recording plays as loud as a loud one (up to +24 dB; a slot's recording is kept as it came in, and the level is set when it plays).
+- **A slot that holds a sample asks first** (`REPLACE SLOT 3?`): `enter` erases it, then hold `l` again to record. There is no undo. `shift`+`;` / `.` to another slot first if you want to keep it.
+- **`ERASING`**: a slot that is empty but was not left clean (a `tools/pg sample put` that was cut off) is erased before it can record. That takes a second or two, the sound fades out meanwhile and the groove pauses, then it carries on (and if you are still holding `l` it starts listening).
+
+![Recording: the wave grows across the slot](ux/mic-recording.png)
+
+**With the groove playing.** You can record while the transport runs, and nothing stops: sing along to the groove in headphones, let go, and the next note plays what you sang. **The microphone also hears the built-in speaker**, so without headphones the recording picks up the groove too. Use headphones, or stop the transport, when you want only your voice. (The very first `l` after switching on fades the sound out and back in for a moment while the microphone wakes up.)
+
+![Done: the slot holds the recording](ux/mic-done.png)
+
+On the **desktop app** the same gesture records from the Mac's microphone (DESKTOP.md "Recording a sample"); the recording is the file `samples/NN-recNN.wav` there.
+
+If recording does not work on the device, type `r` in the serial monitor and paste the `[mic]` lines (chapter 16): they say whether the microphone came alive, its level, and what happened to the last recording.
+
+**What is where.** The samples live in a part of the device's flash that projects never use: saving, loading and pushing projects never touches them, and a project only remembers the slot number. A project made with a sample sounds different on a device that has another sample in that slot. While a recording runs, the device does not save projects (`RECORDING: SAVE AFTER`) and `tools/pg` transfers that write wait (`ERR RECORDING`).
 

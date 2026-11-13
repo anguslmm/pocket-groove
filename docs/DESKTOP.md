@@ -128,6 +128,7 @@ Cardputer keys by legend as in the manual (`` ` `` `1` ... `del` `tab` `q` ... `
 | `--pg-port PORT` | the device's serial port for the Stems list (default: found automatically; or `$PG_PORT`) |
 | `--listen-dump FILE.wav` | Listen also writes the device's audio exactly as SDL delivers it (before any conversion; the format, channels and rate SDL gave are in the WAV header). For troubleshooting, below; a re-plug starts `FILE-2.wav` |
 | `--listen-device NAME` | Listen to another input: its exact name or a part of it (the terminal lists the inputs when Listen starts) |
+| `--mic-device NAME` | record samples (hold `L` on a sampler page, below) from this input, its exact SDL name; default: the system's input |
 | `--listen-sim PPM` | for tests: Listen plays a simulated device (a 1 kHz tone) whose clock runs PPM fast; `--listen-sim-spec FMT:CH:RATE:FRAMES` makes it deliver another format than asked for (e.g. `f32:1:48000:1024`), `--listen-sim-burst N` N callbacks back to back, `--listen-sim-vary` varying callback sizes |
 
 ## Projects and the device
@@ -208,6 +209,7 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 - *Clicks or dropouts*: `--buffer 512`. F2 / Cmd+I shows the audio callback's load and counts late callbacks, the buffer the output device actually gave, and the pixel factor of the picture (8x on a Retina screen at the default size), in the strip.
 - *F9 changes the volume or skips a track*: use Cmd+R, or fn + F9 (see the note on function keys above).
 - *Listen is silent*: see the microphone permission above (System Settings > Privacy & Security > Microphone, your terminal app).
+- *Holding `L` stays at `WAITING`*: the same microphone permission (the input is silence until it is allowed); or the input is not the one you expect (`--mic-device`, System Settings > Sound > Input). The level along the bottom of the picture shows whether anything comes in; the threshold tick shows where it starts.
 - *Listen sounds wrong* (distorted, crackling, wrong pitch), or a Cmd+R recording made while listening does: stop the app's sequencer (so only the device is heard), play something steady on the device, and run
 
   ```bash
@@ -234,6 +236,16 @@ samples/03-hey there.wav  slot 3 (01..12, then '-', '_' or '.', then any name)
 - **Drop a file on the window**: it goes into the selected track's slot (the slot SHIFT+`;` / `.` chose on the instrument page). A WAV is copied into `samples/` as `NN-name.wav` (the slot's other files there are removed); on a Mac any other audio file is converted to WAV with `afconvert` first. A toast says `SLOT 3: HEYTHERE`, or what went wrong.
 - The desktop's slots and the device's are separate: `tools/pg sample put 3 samples/03-hey.wav` copies one to the device (MANUAL.md chapter 20). The C++ converter here (`host/common/sample_convert.h`) and the Python one `tools/pg` uses (`tools/pg_sample.py`) are the same algorithm; ctest `test_sample_convert` checks that they give the same samples.
 
+### Recording a sample
+
+The device's gesture works here with the Mac's microphone (MANUAL.md chapter 20, "Recording with the microphone"; UX.md 10.3): on CHOP, TAPE or STUTTER **hold `L`**, make the sound, let go. The page shows `WAITING` with the level, then `REC` with the wave growing across the slot, then the new sample (`SLOT 3 REC03 1.6S`).
+
+- The recording becomes the slot's file **`samples/NN-recNN.wav`** (22,050 Hz mono 16-bit, exactly what the recorder kept; the slot's other files are removed) and loads like any file there: trimmed and levelled to -1 dBFS on load. Copy it to the device with `tools/pg sample put`, or keep it.
+- The input is opened only while `L` is held: SDL's default capture device (the one in System Settings > Sound > Input), asked for mono 16-bit at 44.1 kHz so SDL converts whatever the Mac has; `--mic-device NAME` picks another. The first time, **macOS asks for microphone permission** for your terminal app; until you allow it the page stays at `WAITING` (the input is silence). See Troubleshooting.
+- The same `pg::sampler::Recorder` runs as on the device (half-band to 22,050 Hz, DC block, the room measured for 150 ms, the threshold, 40 ms pre-roll, the last 60 ms dropped), on the main thread from a lock-free ring the capture callback fills (3 s deep). A slot holding a file asks first (`REPLACE SLOT n?`, ENTER removes the file). Nothing needs erasing here, so `ERASING` never shows.
+- The terminal prints one line per recording: the file, its length, the peak, the threshold, the room's level and any samples the ring dropped.
+- The Mac's microphone hears the Mac's speakers: use headphones (or stop the transport) when you want only your voice.
+
 ## How it is built
 
 `host/app/` (target `pocket-groove`, built by the host CMake when SDL2 is found; without SDL2 the rest of `host/` builds as before):
@@ -242,6 +254,7 @@ samples/03-hey there.wav  slot 3 (01..12, then '-', '_' or '.', then any name)
 - `audio.cpp`: SDL's audio callback is the audio thread and the only caller of `Instrument::process` (16-frame quanta, any buffer size), as the device's audio task. With Listen on it adds the device's input (below); then it copies the output into a lock-free ring that the main thread drains for F9 recording; no file I/O, locks or allocation in the callback.
 - `capture_convert.h`: Listen's capture side. SDL's capture device is opened allowing any change, and `CaptureSink` converts from the spec it really obtained: any SDL format (u8 to f32, either byte order) to int16 saturating, mono to both sides, more channels to the first two, callbacks of any length (also a frame split across two). Also the callback statistics and the `--listen-dump` tap (a lock-free byte ring; a thread writes the file).
 - `listen_buffer.h`: Listen's rate match. The capture callback writes the device's frames into a lock-free ring; the output callback reads them with 4-point Hermite interpolation at a step (capture rate / output rate) x (1 + u), where u comes from a PI controller (critically damped, 0.1 rad/s narrowing to 0.02 rad/s once locked, |u| <= 2000 ppm) that holds a time-consistent fill (both sides' bursts smoothed out by their timestamps) at the target. The target is measured from how the callbacks really arrive, not from the sizes SDL reports (which sdl2-compat only echoes). It watches, primes to the target and fades in, counts underruns (then primes again), overflows, resyncs and clipped samples. No lock, allocation or system call on either side.
+- `mic.cpp`, `mic_sdl.cpp`: recording a sample (hold `L`): `desk::Mic`, the platform side of `pg::sampler::MicInput`, runs the device's `Recorder` from a lock-free ring; `SdlMicSource` is SDL's capture device (mono s16 at 44.1 kHz, SDL converts). `test_desktop_mic` drives it with a synthetic source.
 - `listen.cpp`: `CaptureSource` (SDL's capture device named "Pocket Groove"; `SimCapture` for the tests: a tone on the output clock x (1 + ppm), in any obtained spec and burst pattern), the dump writer, the diagnostics, and the main-thread Listen logic (find, open, unplug, hints).
 - `strip.cpp`: the strip, drawn with `pg::ui::Gfx` (the instrument's font and palette, read-only) into a spare framebuffer; `display.cpp` scales it with the screen.
 - `stems.cpp`: the Stems list: a worker thread runs `tools/pg --json` (one JSON object per line on stdout: `ls`, progress, done, error) and the list is drawn into its own framebuffer. `json_lite.h` reads the lines.

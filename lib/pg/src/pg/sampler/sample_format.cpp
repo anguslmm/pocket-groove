@@ -62,6 +62,24 @@ void makeHeader(const int16_t* data, uint32_t samples, const char* name, SlotHea
   h->headerCrc = crc32(h, offsetof(SlotHeader, headerCrc));
 }
 
+void setPlaybackGain(SlotHeader* h) {
+  h->gain = 0;
+  if (h->peak > 0 && h->peak < kRecordTargetPeak) {
+    float g = float(kRecordTargetPeak) / float(h->peak);
+    if (g > kRecordMaxGain) g = kRecordMaxGain;
+    const int q = int(g * 256.0f + 0.5f);
+    if (q > 256) {
+      h->gain = uint16_t(q);
+      for (int c = 0; c < kOverviewCols; ++c)
+        for (int k = 0; k < 2; ++k) {
+          int v = (int(h->overview[c][k]) * q) / 256;
+          h->overview[c][k] = int8_t(v < -128 ? -128 : (v > 127 ? 127 : v));
+        }
+    }
+  }
+  h->headerCrc = crc32(h, offsetof(SlotHeader, headerCrc));
+}
+
 bool headerValid(const SlotHeader& h) {
   return h.magic == kHeaderMagic && h.version == kHeaderVersion && h.rate == kPoolRate &&
          h.samples >= kMinSamples && h.samples <= kSlotMaxSamples &&

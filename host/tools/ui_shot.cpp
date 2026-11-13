@@ -30,6 +30,10 @@
 //                           while G0 is held cancels it (the firmware's volume keys)
 //   sample <slot> <file.wav>  put an audio file into sample pool slot 1..12 (converted as the
 //                           desktop does, host/common/sample_convert.h); `sample <slot> -` empties it
+//   mic on                  a simulated microphone (host/common/sim_mic.h) for L on a sampler
+//                           page; recordings land in the same pool as `sample` (after demo / empty)
+//   mic amp <peak>          the simulated voice's peak (0 = only the room)
+//   mic dirty <slot>        slot 1..12 is empty but not erased (L then shows ERASING first)
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -38,6 +42,7 @@
 #include <sys/stat.h>
 
 #include "common/sample_convert.h"
+#include "common/sim_mic.h"
 #include "common/ui_harness.h"
 #include "pg/io/project_io.h"
 #include "pg/demo/demo.h"
@@ -56,6 +61,8 @@ int main(int argc, char** argv) {
     return 2;
   }
   static uih::Rig rig;
+  static pg::sampler::MemoryPool pool;   // `sample` and `mic`
+  static simmic::SimMic mic;
   bool started = false;
   char line[256];
   int lineNo = 0, errors = 0;
@@ -148,8 +155,24 @@ int main(int argc, char** argv) {
       rig.engineRuns = false;
     } else if (op == "unfreeze") {
       rig.engineRuns = true;
+    } else if (op == "mic") {
+      const std::string sub = a;
+      if (sub == "on") {
+        mic.pool = &pool;
+        mic.clockMs = [] { return rig.now(); };
+        rig.eng.suspend();
+        rig.inst.setSamplePool(&pool);
+        rig.eng.resume();
+        rig.ui.setMic(&mic);
+      } else if (sub == "amp") {
+        mic.amp = std::atof(b);
+      } else if (sub == "dirty" && std::atoi(b) >= 1 && std::atoi(b) <= pg::sampler::kPoolSlots) {
+        mic.erasedFlag[std::atoi(b) - 1] = false;
+      } else {
+        std::fprintf(stderr, "%s:%d: mic on | amp <peak> | dirty <slot>\n", argv[1], lineNo);
+        ++errors;
+      }
     } else if (op == "sample") {
-      static pg::sampler::MemoryPool pool;
       static std::vector<int16_t> bufs[pg::sampler::kPoolSlots];
       const int slot = std::atoi(a) - 1;
       if (slot < 0 || slot >= pg::sampler::kPoolSlots) { ++errors; continue; }

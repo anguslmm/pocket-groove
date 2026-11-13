@@ -196,6 +196,7 @@ void Ui::doLoadRow(int r) {
 void Ui::doSave(int mount, const char* name) {
   dialog_ = Dialog::None;
   if (!fs_) { toast("NO STORAGE", 2); return; }
+  if (micBusy()) { toast("RECORDING: SAVE AFTER", 2); return; }   // the mic streams to flash now
   if (mount == kPmSd && !fs_->mounted(io::kMountSd)) { toast("NO SD CARD", 2); return; }
   // The name field mirrors the file name (13.2). The audio thread never reads it.
   char old[16];
@@ -385,6 +386,7 @@ void Ui::confirmKey(int k) {
     case kConfirmDelete: doDelete(confirmRow_); break;
     case kConfirmNew: doNew(); break;
     case kConfirmOverwriteName: doSave(nameMount_, nameBuf_); break;
+    case kConfirmReplaceSample: micConfirmed(); break;
     default: break;
   }
 }
@@ -489,7 +491,7 @@ void Ui::autosave() {
     if (saveSessionNow()) toast("BATTERY LOW - SAVED", 2);
     return;
   }
-  if (playing_ || dialog_ != Dialog::None) return;
+  if (playing_ || dialog_ != Dialog::None || micBusy()) return;   // a recording streams to flash: no erase now
   if (int32_t(now_ - autosaveRetryMs_) < 0) return;
   const bool afterStop = stopMs_ && int32_t(now_ - (stopMs_ + kAfterStopMs)) >= 0 &&
                          int32_t(lastKeyMs_ - stopMs_) <= 0;
@@ -652,6 +654,16 @@ void Ui::drawDialog(Framebuffer& fb) {
       cat(l1, "THIS CAN'T BE UNDONE");
       yes = "ENTER  DELETE";
       break;
+    case kConfirmReplaceSample: {
+      char* o = cat(title, "REPLACE SLOT ");
+      o += itoa10(confirmRow_ + 1, o);
+      cat(o, "?");
+      sampler::SampleRef r;
+      sampler::resolve(sampler_ ? sampler_->pool() : nullptr, confirmRow_, &r);
+      cat(cat(l1, r.name), " IS ERASED");
+      yes = "ENTER  ERASE";
+      break;
+    }
     default:
       cat(title, "NEW PROJECT?");
       cat(cat(l1, cur), " HAS UNSAVED CHANGES");

@@ -28,6 +28,7 @@ struct SampleRef {
   const int8_t (*overview)[2] = nullptr;   // kOverviewCols min/max pairs
   char name[kNameLen + 1] = {};
   uint16_t peak = 0;
+  float gain = 1.0f;               // playback gain (SlotHeader::gain; 1 for everything but a mic recording)
   bool builtin = false;            // an empty user slot: the ROM sample plays
   uint8_t rom = 0;                 // which ROM sample (builtin only)
 };

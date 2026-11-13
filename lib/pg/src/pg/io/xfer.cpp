@@ -289,6 +289,7 @@ void Xfer::doSamplePut(const char* const* tok, const XferEnv& env, XferOut& out)
   if (slot < 0) { err(out, "BAD_SLOT", tok[2]); return; }
   if (!parseU32(tok[3], &samples, 10) || !parseU32(tok[4], &crc, 16)) { err(out, "PROTO"); return; }
   if (env.playing) { err(out, "PLAYING"); return; }
+  if (env.recording) { err(out, "RECORDING"); return; }
   if (samples < sampler::kMinSamples || samples > sampler::kSlotMaxSamples) { err(out, "BAD_SIZE"); return; }
   const sampler::SampleWriter::Result r = samples_->begin(slot, samples);
   if (r != sampler::SampleWriter::kOk) { err(out, sampler::SampleWriter::resultName(r)); return; }
@@ -352,6 +353,7 @@ void Xfer::doSampleRemove(const char* slotTok, const XferEnv& env, XferOut& out)
   const int slot = slotFromTok(slotTok);
   if (slot < 0) { err(out, "BAD_SLOT", slotTok); return; }
   if (env.playing) { err(out, "PLAYING"); return; }
+  if (env.recording) { err(out, "RECORDING"); return; }
   const sampler::SampleWriter::Result r = samples_->remove(slot);
   if (r != sampler::SampleWriter::kOk) { err(out, sampler::SampleWriter::resultName(r)); return; }
   ++samplesChanged_;
@@ -474,6 +476,7 @@ void Xfer::doPut(const char* const* tok, int n, const XferEnv& env, XferOut& out
     return;
   }
   if (env.playing && !force) { err(out, "PLAYING"); return; }
+  if (env.recording) { err(out, "RECORDING"); return; }
   if (!m) { err(out, "BAD_NAME", tok[2]); return; }
   if (!isValidName(name)) { err(out, "BAD_NAME", name); return; }
   if (size < uint32_t(kHeaderSize) || size > kMaxPutBytes) { err(out, "BAD_SIZE"); return; }
@@ -501,6 +504,7 @@ void Xfer::doPut(const char* const* tok, int n, const XferEnv& env, XferOut& out
 void Xfer::doWrite(uint32_t offset, const char* b64, const XferEnv& env, XferOut& out) {
   if (mode_ != Mode::Put && mode_ != Mode::SamplePut) { err(out, "NO_SESSION"); return; }
   if (env.playing && !force_) { abort(); err(out, "PLAYING"); return; }
+  if (env.recording) { abort(); err(out, "RECORDING"); return; }
   uint8_t data[kChunk];
   const int n = base64Decode(b64, data, sizeof(data));
   if (n <= 0) { abort(); err(out, "BAD_DATA"); return; }

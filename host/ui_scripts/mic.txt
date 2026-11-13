@@ -1,0 +1,65 @@
+# Recording from the microphone on a sampler page (docs/ux/mic-*.png, docs/UX.md 10.3
+# "Recording"), with a simulated microphone (host/common/sim_mic.h: the real Recorder on
+# a synthetic room and a sung vowel):
+#   build/host/ui_shot host/ui_scripts/mic.txt docs/ux
+dev 0
+
+# a new project; kick on the beat, PERC on a few steps
+empty
+mic on
+steppost 0 0 1
+steppost 0 4 1
+steppost 0 8 1
+steppost 0 12 1
+steppost 5 2 1 60 100
+steppost 5 10 1 60 100
+
+# PERC selected silently, SOUND, stepped to CHOP (TAP, TRAIL, SHAKE, CHOP)
+down shift
+tap h
+up shift
+tap 9
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 1800
+
+# the groove plays; hold L: it listens to the room
+tap space
+wait 500
+down l
+wait 450
+shot mic-waiting
+
+# the voice comes in: REC, the time, the wave growing across the slot
+mic amp 9000
+wait 500
+mic amp 4000
+wait 300
+mic amp 12000
+wait 400
+mic amp 6000
+wait 250
+mic amp 0
+wait 200
+shot mic-recording
+
+# let go: the slot holds the recording, the next note plays it
+up l
+wait 120
+shot mic-done
+
+# the slot holds a sample now: L asks first
+tap space
+wait 2600
+tap l
+wait 100
+shot mic-replace
+down enter
+up enter
+shot mic-erasing
+wait 100
