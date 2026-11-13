@@ -784,7 +784,7 @@ def part_tilt():
     cwd = fresh(os.path.join(WORK, "tilt"))
     body = "\n".join([
         "wait 300",
-        "tap j", "tap 9", "tap .", "wait 300",        # the bass's first instrument (ACID): OPEN on X, BITE on Y
+        "tap j", "tap 9", "wait 300",                 # the demo's bass is ACID: OPEN on X, BITE on Y
         "app mouse 120 70", "wait 100",
         "down G0", "wait 250",
         "app tilt 0.5 0.25", "wait 400",
