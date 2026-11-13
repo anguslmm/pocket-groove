@@ -392,6 +392,110 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    nothing lost) are F2's. A UI to arm / record / trim, and a decision whether recording is
    allowed while the transport plays (the spike recorded while streaming fine; writing stalls
    the CPU, the audio DMA ring must cover it).
+   STAGE F2 BUILT (2026-11-13, branch of the mic worktree, NOT YET ON THE DEVICE): SAMPLING WITH
+   THE BUILT-IN MICROPHONE. On CHOP / TAPE / STUTTER, HOLD L, make the sound, let go: that is the
+   slot's sample (UX.md 10.3 "Recording", MANUAL.md chapter 20, DESKTOP.md "Recording a sample";
+   docs/ux/mic-*.png). Choices made:
+   - THE KEY: L. On a sampler page it was free (chord mode is the lead's, in GROOVE; the page flip
+     is developer mode's and a sampler page gives it up); a single held key closes no ghosting
+     rectangle; not enter / macro keys / SHIFT+; . / G0. Not with a step held. Footer
+     `;/. INST  SFT+;/. SLOT  L MIC` (INSTRUMENT -> INST so it ends before /HELP; the sampler
+     shots retaken).
+   - START ON THE SOUND: for 150 ms nothing starts (the key's own click); from 50 ms on the room is
+     measured, threshold = the quietest 10 ms window's RMS + 20 dB, clamped to -40.8..-19.9 dBFS
+     (a loud room, e.g. the groove on the speaker, raises it to the cap); the first sample over it
+     starts the recording with a 40 ms pre-roll in front. The last 60 ms before the release are
+     dropped (the key-up click). Full at 6.22 s: it stops by itself.
+   - LEVEL: at playback. A recording is written as it comes in (no second pass, which would need a
+     re-erase); the commit computes the peak and stores a gain in the header (SlotHeader::gain, the
+     old `reserved`, 1/256 units, 0 = 1.0: every put sample and every old header) that brings the
+     peak to -1 dBFS (what a put is levelled to), at most +24 dB; the overview is stored scaled the
+     same way. SamplerVoice multiplies its per-block gain by it (x 1.0f, exact, for everything else:
+     itest_golden unchanged). On the desktop the WAV holds the raw recording and the converter
+     levels it on load, as for any file.
+   - ERASE POLICY: an empty slot is an erased slot. `tools/pg sample rm` (SampleWriter::remove) now
+     erases all 68 sectors; REPLACE SLOT n? (the confirm dialog's style) erases all of it with the
+     output faded; a recording never erases (SampleWriter::beginRecording refuses a slot that is
+     not 0xFF everywhere through the mapping; writes only). At L down the slot is checked through
+     the mapping (a 272 KB compare, estimate 5-15 ms); a dirty empty slot (a cut-off put, an older
+     firmware's rm, a blip that was recorded and cancelled) shows ERASING for a frame, then is
+     erased with the output faded, then (L still held) it listens. A put leaves its tail sectors as
+     they were (only rm and the recorder's replace erase everything; a dirty slot is caught at L).
+   - SIGNAL PATH (device): full duplex as the hw-spike (RX registered with TX at audio begin;
+     initialised at the first use while TX runs: UNVERIFIED on the device), GPIO46 output off at
+     every start, the ADC half of mic-matrix config 6 (0x01=BF 0x0A=0C 0x44=08 0x16=24 0x17=BF
+     0x1B=0A 0x1C=6A 0x15=40 0x14=1A (PGA 30 dB) 0x0E=02), once per boot with the output faded
+     around it (~40 ms dip at the first L: the ADC's power-up shares the analog reference with the
+     playing DAC), no reset pulse, nothing on the DAC side; the ADC then stays on. The audio task,
+     after each TX write, reads the RX blocks that are ready (non-blocking) and copies their left
+     slot into a 2048-sample ring (46 ms): its whole share. A writer task (core 1, prio 8, 3 KB)
+     drains the ring into pg::sampler::Recorder (recorder.h: 47-tap half-band, flat to 9 kHz within
+     0.003 dB, -6 dB at 11,025 Hz, >= 65 dB down from 13.05 kHz (measured on the host); DC block at
+     17 Hz) which writes 512 bytes per flash write through SampleWriter; the UI thread commits
+     (CRC via the driver vs the mapping, the header with the gain) and frees everything. 44.1 kHz
+     only (`MIC: 44.1K ONLY` at 32 kHz; DirectI2S only). No input monitoring. While recording: no
+     autosave, no project save (`RECORDING: SAVE AFTER`), no settings save, transfers that write
+     flash answer ERR RECORDING.
+   - THE SPEAKER: not muted; the manual says to use headphones or stop the transport.
+   - DESKTOP: the same gesture and the same Recorder on SDL's default capture device (mono s16 at
+     44.1 kHz, SDL converts; open only while L is held; `--mic-device`), into
+     samples/NN-recNN.wav, loaded like any file there.
+   - DIAGNOSTICS: the report's [mic] lines (serial `r`): available or why, RX registered /
+     initialised / attached, ADC on, GPIO46 (oe out level ie out_sel, the I2S data-in routing); the
+     codec registers read back with the ADC set's expected values (DIFFERS if not); the input now
+     (the RX runs 1.3 s, the first 0.3 s discarded): RMS (DC removed) and peak in dBFS, DC, min /
+     max, the sample count (44100 expected), STUCK AT -1 / CONSTANT flags, RX overflows, ring drops,
+     underruns, the longest RX pull; the last recording: slot, state, commit result and time,
+     samples, peak, gain, threshold, the room's RMS, ring drops, RX overflows and read errors, flash
+     writes (errors, avg, longest), the audio task's longest block, longest gap and underruns while
+     it ran, the longest RX pull, the writer's stack free, its heap, heap free before / min-ever
+     after, the last erase's time and the erased check's. Cost: ~100 bytes static; 1.3 s of the UI
+     loop and a 4 KB ring per `r` (only when not recording; the first `r` also powers the ADC, with
+     the fade).
+   TESTS (host, 87/87; new: test_sampler_recorder (the decimator's response, DC, pre-roll, settle,
+   the states, the flash recording path and playback level within 0.5 dB of a put), itest_ui_mic
+   (the gesture: record, no sound, replace with confirm, dirty slot, full, while playing,
+   elsewhere / no mic / not ready, help; all three key-matrix models; host/common/sim_mic.h is the
+   real Recorder on a synthetic room and voice), test_desktop_mic (a synthetic source: record,
+   replace, nothing, open failure, ring overrun); test_io_xfer ERR RECORDING). ui_shot `mic on |
+   amp | dirty`, host/ui_scripts/mic.txt.
+   FIGURES (clean builds, warning-free in our sources, placement checks OK; before = main 6bd7537):
+   USB: flash 1294979 -> 1312079 (+17.1 KB: the recorder, the UI, plat::mic, the report), static RAM 201172 -> 201388, .iram0.text 127791 -> 127827, _heap_start
+   0x3FCD49D8 -> 0x3FCD4AB0; jack: flash 1232759 -> 1249823, static RAM 200652 -> 200868, .iram0.text 120847
+   -> 120883, _heap_start 0x3FCD2CD0 -> 0x3FCD2DA8. Static +216 B (the UI's mic state and view, audio_out's
+   counters, the last recording's figures); IRAM +36 B (the sampler's per-block gain). HEAP (from
+   the code, not measured): ~0.3-0.5 KB from boot (the RX channel object, its queue and locks), ~2.1
+   KB more from the first use on (the RX DMA ring, kept until audio stops), and per recording
+   ~11.7 KB, freed after (Recorder 4112 B, ring 4096 B, the rest of the session ~60 B, the writer's
+   3072 B stack and its TCB). Expect the minimum-ever free heap to drop by ~14 KB while recording
+   (37 KB free measured -> ~23 KB at the low point).
+   CPU (ESTIMATES): the audio task while recording, one non-blocking 512-byte RX read and a
+   128-sample copy per 2.9 ms block, ~10-20 us = 0.3-0.7 % of core 0 (the report measures the
+   longest pull); when not recording one pointer load and one counter per block. The writer task:
+   Recorder::feed costs 5.2 ns per input sample on the host, ~50 cycles on the ESP32-S3 by
+   estimate = ~1 % of core 1; flash writes 86 per second x ~0.35 ms (the spike's figure) = ~3 % of
+   both cores stalled, each stall 0.35 ms against the 11.6 ms DMA ring. THE STALL WHEN A SLOT MUST
+   BE ERASED (estimate): 68 sectors in one call (3-4 64 KB blocks + 4-16 sectors), datasheet-
+   typical ~1-1.5 s for flash that holds data, the spike measured 48 ms for 512 KB (probably over
+   erased flash); both cores stall throughout, the output is faded, the groove pauses, USB audio
+   gets a gap; the report's `last erase` line measures it.
+   RISKS FOR THE FIRST DEVICE RUN and what the [mic] lines show: (1) RX init while TX runs breaks
+   or disturbs the output: `rx` not `initialised` / `micBegin failed: ...`, or the sound changes
+   at the first L (say so); (2) the GPIO46 fix not taking: `oe=1`, `input now ... STUCK AT -1`;
+   (3) the ADC not coming up (slow first power-up, the 2 s recovery seen after resets): `input now`
+   rms near -90 dBFS or CONSTANT, a recording that stays WAITING; a second `r` a few seconds later
+   tells slow from dead; (4) the ADC registers not as written: `ADC set DIFFERS`; (5) the level:
+   `peak` and `gain` of the last recording (gain x16 = very quiet input), `room rms`, `threshold`
+   (a threshold at 3300 = a loud room, it starts late); (6) the flash writes disturbing the audio
+   or USB: `underruns`, `longest gap` near 11.6 ms, `ring drops`, `rx overflows`, and the [usb]
+   underrun counters; (7) the key's own click starting it: a recording that starts at once with
+   no sound (peak at the start of the wave); (8) a heap low point: `min-ever after`, the
+   `[ram] heap min-ever fell` line.
+   NOT DONE: recording at 32 kHz (would need a 441/640 resampler); input monitoring (not wanted);
+   trimming / undo of a recording; showing L in the `/` key map (the INSTRUMENT table is shared by
+   every instrument; the footer and explain mode show it); a mic gain setting (PGA fixed at 30 dB,
+   the level is made right at playback); env:profile has no MIC line. NOT LISTENED TO, NOT RUN ON
+   THE DEVICE OR THE MAC (the macOS permission prompt untested).
    RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
    device). Measured on the owner's device just before (current main, USB build, a song with
    STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at
@@ -477,7 +581,19 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    10. Then (optional, separate flashes): an SD card in, reboot, `r` (the `[ram] sd mount` line
       and the free heap with a card); env:profile-ram, wait ~10 min, paste the PG-PROFILE block
       (MOTION and SAMPLER lines); env:cardputer-adv once, `r`, then back to the USB build.
-   LATER STAGES (not built): (F2) microphone recording into the sample pool.
+   11. Microphone (stage F2; the flash of steps 1-9; headphones in, so the mic does not hear the speaker): (a) nothing
+      playing, type `r` and paste it: the `[mic]` lines say whether the microphone comes alive
+      (`input now`: in a quiet room rms somewhere around -50..-70 dBFS, not STUCK AT -1, not
+      CONSTANT; talk next to the device during a second `r` and the peak should rise to -30..-10).
+      (b) PERC on CHOP, a slot showing BUILT-IN, stopped: hold `l`, say "hey", let go: WAITING,
+      then REC with the wave growing, then the new waveform and `SLOT n RECnn`; play it (a step on,
+      space); `r`. (c) the groove playing (USB recording on the Mac too), hold `l` and sing along
+      for ~3 s, let go; `r`. (d) the slot now holds REC: `l` -> REPLACE SLOT n? -> enter, time the
+      ERASING; hold `l` again; `r`. Say: did the very first `l` dip or click the sound, did any
+      later one, did it start on the sound (not on the key, not late), how loud the recording
+      plays next to the built-in phrases, any glitch in the groove or in the Mac's recording while
+      it recorded, how long ERASING took. If it does not work, paste the whole report after each
+      try: the `[mic]` lines are written to tell which part failed (STATE.md "STAGE F2", risks).
    STANDING TASTE RULE (owner, 2026-11-13: "get the stupid tag lines for each synth out of there"):
    no descriptive captions for instruments on the screen. `about "..."` stays in the .pgm as an
    author's note, not displayed; the instrument page gives those rows to the picture (y 29..72).
