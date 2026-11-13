@@ -27,6 +27,21 @@ int rnd(float x) {
 }
 inline bool before(uint32_t now, uint32_t t) { return int32_t(now - t) < 0; }
 
+// The tilt mark (UX.md 10.3 "Tilt") at (x, y), a glyph's 7 rows: a double arrow,
+// left-right for axis X (roll; 7 px wide), up-down for axis Y (away / toward; 5 wide).
+int tiltGlyphW(int axis) { return axis == 0 ? 7 : 5; }
+void tiltGlyph(Gfx& g, int x, int y, int axis, uint8_t c) {
+  if (axis == 0) {
+    g.rect(x, y + 3, 7, 1, c);
+    g.rect(x + 1, y + 2, 1, 3, c);
+    g.rect(x + 5, y + 2, 1, 3, c);
+  } else {
+    g.rect(x + 2, y, 1, 7, c);
+    g.rect(x + 1, y + 1, 3, 1, c);
+    g.rect(x + 1, y + 5, 3, 1, c);
+  }
+}
+
 char* cat(char* o, const char* s) {
   while (*s) *o++ = *s++;
   *o = 0;
@@ -194,6 +209,8 @@ uint32_t Ui::statusSignature() const {
   h = fnv(h, uint32_t(rnd((1.0f - st_.duckGain) * 9.0f)));
   h = fnv(h, uint32_t(env_.batteryPct) | uint32_t(env_.batteryPct < 10 ? (now_ / 500) % 4 == 0 : 0) << 8 |
                  uint32_t(focusLocked_) << 9);
+  if (tilt_.engaged)   // the tilt indicator's dot
+    h = fnv(h, 1u | uint32_t(rnd(tilt_.in[0] * 3.0f) + 8) << 1 | uint32_t(rnd(tilt_.in[1] * 3.0f) + 8) << 6);
   return h;
 }
 
@@ -241,6 +258,17 @@ void Ui::drawStatus(Framebuffer& fb) {
     char* o = cat(t, curName_[0] ? curName_ : "NEW");
     if (dirty_) cat(o, "*");
     g.text(92, 2, t, TEXT);
+  } else if (tilt_.engaged && !(view_ == View::Sound && instrumentPage() && sel_ == tilt_.track)) {
+    // Tilt engaged on another view (the instrument page shows it on its sliders): the
+    // track, TILT, and the pose as a dot in a small well (X right, Y away = up).
+    const int t = tilt_.track & 7;
+    const int w = int(std::strlen(kTrackNames[t])) * 6 + 3;
+    g.rrect(92, 1, w, 9, tc(t));
+    g.text(94, 2, kTrackNames[t], BG);
+    const int tx = g.text(92 + w + 3, 2, "TILT", WHITE);
+    tiltGlyph(g, tx + 2, 2, 0, tc(t, kMid));
+    g.rrect(156, 1, 9, 9, RAISED);
+    g.rect(159 + rnd(tilt_.in[0] * 3.0f), 4 - rnd(tilt_.in[1] * 3.0f), 3, 3, WHITE);
   } else {
     const ParamInfo* info = infoFor(focus_);
     const char* tag = focus_.global ? "FX" : kTrackNames[focus_.track & 7];
@@ -812,7 +840,13 @@ void Ui::drawInstrument(Framebuffer& fb) {
     int loEnd = cx0, hiStart = cx0 + w;   // the name sits centred in the room the labels leave
     if (mc.lo[0]) { fitText(lab, mc.lo, 8); loEnd = g.text(cx0, cy0, lab, labInk); }
     if (mc.hi[0]) { fitText(lab, mc.hi, 8); hiStart = cx0 + w - tw(lab); g.text(hiStart, cy0, lab, labInk); }
-    const int ncx = (mc.lo[0] || mc.hi[0]) ? (loEnd + hiStart) / 2 : cx0 + w / 2;
+    int ncx = (mc.lo[0] || mc.hi[0]) ? (loEnd + hiStart) / 2 : cx0 + w / 2;
+    // A tilt mark goes right of the name: where the centred name leaves it no room, the
+    // name and the mark are centred together between the end labels.
+    const uint8_t tiltM = tiltMarks(t, m);
+    const int tiltAx = (tiltM & 1) ? 0 : 1;
+    const int nmW = int(std::strlen(nm)) * 6 + 3;
+    if (tiltM && ncx + nmW / 2 + 2 + tiltGlyphW(tiltAx) > hiStart - 1) ncx -= (tiltGlyphW(tiltAx) + 2 + 1) / 2;
     if (lit) {
       const int nw = int(std::strlen(nm)) * 6 + 3;
       g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col)));
@@ -824,6 +858,12 @@ void Ui::drawInstrument(Framebuffer& fb) {
     if ((motion >> m) & 1u) {
       const int mx = ncx - (int(std::strlen(nm)) * 6 + 3) / 2 - 7;
       if (mx >= loEnd + 1) g.text(mx, cy0, "~", AMBER);
+    }
+    // tilt: which axis moves this macro (lit while G0 tilts it)
+    if (tiltM) {
+      const int mx = ncx + nmW / 2 + 2;
+      const bool on = tilt_.engaged && tilt_.track == t;
+      if (mx + tiltGlyphW(tiltAx) <= hiStart - 1) tiltGlyph(g, mx, cy0, tiltAx, on ? uint8_t(WHITE) : uint8_t(DIM));
     }
     // the keys as caps at the ends: the left one moves toward the left label
     const bool d1 = isHeld(kLo) && rec_[kLo].act == kActMacro, d2 = isHeld(kHi) && rec_[kHi].act == kActMacro;
@@ -1370,6 +1410,11 @@ uint32_t Ui::bodySignature() const {
     uint32_t mv = 0;
     for (int m = 0; m < kTrackMacros; ++m) mv |= uint32_t(macroMoving(m)) << m;
     h = fnv(h, mv | uint32_t(held_ >> kKNote0 & 0xFF) << 8);   // moving macros, lit key letters
+    // tilt: the handles move with the engine's heard positions, the marks light
+    uint32_t tp = uint32_t(tilt_.engaged && tilt_.track == sel_);
+    for (int m = 0; m < kTrackMacros; ++m)
+      if (tiltShows(sel_, m)) tp = tp * 257u + st_.macroPos[sel_][m] + 2u;
+    h = fnv(h, tp);
   }
   return h;
 }

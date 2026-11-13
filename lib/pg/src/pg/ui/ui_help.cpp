@@ -163,7 +163,7 @@ const char* const kLegends[][5] = {
      CD "SPACE TYPES _ HERE",
      CA "NAMES: UP TO 8 CHARACTERS"},
     {CA "1-..4+" CD " MACRO DOWN/UP. HOLD: SWEEP",
-     CW "BOTH KEYS" CD " OF A PAIR: ITS DEFAULT",
+     CW "BOTH KEYS" CD "=DEFAULT  " CW "G0" CD "+TILT: 2 MACROS",
      CT UP_ICON_TXT CD " " CT "NI" CD " INSTRUMENT. CTRL+Z GOES BACK",
      CW "HOLD STEP" CD " + MACRO KEY = NOTE'S VALUE",
      CW "DEL" CD "+KEY CLEARS MOTION " CA "-+" CD " LAST"},
@@ -576,7 +576,7 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       {kKDot, "OCTAVE DOWN", "NOTE KEYS PLAY AN OCTAVE LOWER.", "STEP HELD: -1 SEMITONE, CTRL -12."},
       {kKSlash, "HELP", "HOLD: KEY MAP. TAP: EXPLAIN MODE.", "/ OR ` LEAVES EXPLAIN MODE."},
       {kKSpace, "PLAY / STOP", "SHIFT: RESTART / CONTINUE.", ""},
-      {kKG0, "G0: VOLUME / DIAGNOSTICS", "HOLD G0 + -/=: HEADPHONE VOLUME.", "DOUBLE-TAP G0: DIAGNOSTICS STRIP."},
+      {kKG0, "G0: TILT / VOLUME / DIAG", "HOLD + TILT: THE TRACK'S MACROS MOVE.", "HOLD + -/=: VOLUME. 2 TAPS: DIAG."},
   };
   for (const T& t : kTexts)
     if (t.k == k) {

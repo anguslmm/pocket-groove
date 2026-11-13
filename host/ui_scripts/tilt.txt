@@ -1,0 +1,72 @@
+# Tilt (docs/ux/tilt-*.png, docs/UX.md 10.3 "Tilt"): hold G0 and tilt. Here the
+# rig plays the firmware's part: `down G0` starts the gesture (it engages after
+# 150 ms), `tilt X Y` is how far the device is tilted (-1..1 per axis, after the
+# control's response), `up G0` glides back.
+#   build/host/ui_shot host/ui_scripts/tilt.txt docs/ux
+dev 0
+
+# a new project, a bass line with a kick
+empty
+down ctl
+tap n
+up ctl
+wait 1600
+steppost 0 0 1
+steppost 0 4 1
+steppost 0 8 1
+steppost 0 12 1
+steppost 6 0 1 36 100
+steppost 6 3 1 36 100
+steppost 6 4 1 48 100
+steppost 6 8 1 36 100
+steppost 6 10 1 39 100
+steppost 6 12 1 43 100
+steppost 6 14 1 36 100
+
+# the bass's ACID page: the marks say which macros tilt moves (OPEN left/right,
+# BITE away/toward), dim while G0 is up
+down shift
+tap j
+up shift
+tap 9
+wait 300
+tap spc
+wait 600
+shot tilt-marks
+
+# G0 held, tilted right and a little away: OPEN and BITE move with it, the marks light;
+# the white ticks are the bases (unchanged)
+down G0
+tilt 0.55 0.3
+wait 500
+shot tilt-held
+
+# left and further away
+tilt -0.7 0.8
+wait 400
+shot tilt-held-left
+up G0
+wait 400
+
+# from GROOVE: the status bar shows the gesture (the track, TILT, the pose as a dot)
+tap `
+wait 100
+down G0
+tilt 0.5 -0.5
+wait 400
+shot tilt-groove
+up G0
+wait 300
+tap spc
+wait 200
+
+# a CLASSIC track: nothing moves, one toast
+demo
+dev 0
+wait 200
+down G0
+tilt 0.8 0.0
+wait 400
+shot tilt-classic
+up G0
+wait 200
