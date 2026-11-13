@@ -14,6 +14,7 @@
 # parameter sounds like"). Judge the sound, not the stepping.
 voice bass
 name ACID
+about "The 303 squelch. Open it, then bite."
 base wave=0 sub=34 envmod=70 decay=44 accent=96 fmix=0 lfoshape=sine slide=60 ktrk=40
 
 macro OPEN 0.4

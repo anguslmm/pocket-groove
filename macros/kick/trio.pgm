@@ -13,6 +13,7 @@
 # Try: 909 on X, GABBA on Y, four on the floor; drag a slow circle.
 voice kick
 name TRIO
+about "808, 909 and gabber, blended."
 base tune=44 decay=96 punch=52 sweep=74 click=18 cton=24 tone=70 hold=44 drive=16 harm=30 lvl=100   # the 808
 
 patch 909   tune=62 decay=46 punch=88 sweep=44 click=92 cton=62 tone=108 hold=20

@@ -94,6 +94,30 @@ struct EngineStatus {
   uint8_t  instrumentRefreshes; // increments (wraps) per RefreshInstruments consumed (applied or discarded)
 };
 
+// SCOPE TAP (the instrument page's picture, docs/UX.md 10.3): one track's voice
+// output (its left channel, before level, pan, mute and the mix), averaged over
+// `decimation` samples (one ring sample per `decimation` frames: a box filter, so
+// a bright wave decimated for a long window keeps a steady shape), written by
+// the audio thread into a ring of kScopeRing floats. Single writer (audio thread), single reader (UI thread), no locks: the
+// write position is published once per quantum, and readScope() checks after
+// copying that the engine did not overwrite what it copied. Off by default; with
+// no track tapped the audio thread does nothing for it but one load per quantum
+// and a compare per sounding track. The tap only observes: the audio is
+// bit-identical with it on or off.
+constexpr int kScopeRing = 256;      // samples in the ring
+constexpr int kScopeReadMax = 192;   // the most readScope() copies (the rest is the margin against overwrites)
+struct ScopeInfo {
+  uint32_t end;       // samples written in total (the ring's end): advances only while the voice sounds
+  uint32_t since;     // the first sample written with the current track and decimation
+  uint32_t mark;      // `end` at the tapped track's last note-on (notes start at quantum edges)
+  uint32_t hits;      // note-ons of the tapped track since it was chosen (wraps)
+  uint8_t  note;      // the tapped track's last note-on (also before it was tapped; lead: the chord's
+                      // root; 0 = none yet)
+  uint8_t  track;     // the track the audio thread is tapping, 0xFF = none (yet)
+  uint8_t  decimation;
+  float    sampleRate;
+};
+
 class Engine {
  public:
   Engine();
@@ -138,6 +162,15 @@ class Engine {
   EngineStatus status();             // snapshot; resets peak hold
   bool isPlaying() const;            // transport running? No side effects (status() resets the peak hold)
   uint8_t instrumentRefreshes() const;   // as in status(), without its side effects
+
+  // Scope tap (above). track -1 = off; decimation 1..255 (clamped). Takes effect
+  // at the next quantum; samples written before it are not reported by readScope.
+  void setScope(int track, int decimation);
+  // Copies the newest min(n, kScopeReadMax, end - since) samples, oldest first,
+  // into out and fills *info. Returns the count, or 0 when nothing consistent
+  // could be read (nothing written yet, or the engine overwrote the copy or
+  // changed the tap while copying: try again at the next frame).
+  int readScope(float* out, int n, ScopeInfo* info) const;
 
   // Stop touching the Project (output silence) so the UI thread can load a
   // new one into the same memory. suspend() returns once the audio thread has

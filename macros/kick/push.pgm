@@ -11,6 +11,7 @@
 # Try: PUSH on X, HOLD on Y, four on the floor; ride PUSH into a break.
 voice kick
 name PUSH
+about "Push it harder, hold it longer."
 base tune=54 decay=50 punch=72 sweep=56 click=56 drive=24 tone=96 hold=24 harm=36 cton=50 lvl=100
 
 macro PUSH

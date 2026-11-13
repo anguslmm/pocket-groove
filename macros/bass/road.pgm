@@ -15,6 +15,7 @@
 # from left to right, then jump back.
 voice bass
 name ROAD
+about "One road from deep to screaming."
 base drive=28 fmdepth=72 tenv=70 decay=48 accent=90 adcy=96 lfoshape=tri ltmb=0 lfodepth=0
 
 macro ROAD

@@ -10,6 +10,7 @@
 # snap to CALM.
 voice bass
 name SURGE
+about "More and more, or deep and calm."
 base attack=6 wave=88 cutoff=46 reso=62 envmod=56 decay=40 sub=58 lfoshape=sqr lfodepth=10 fmix=0 slide=40 adcy=90
 
 macro MORE

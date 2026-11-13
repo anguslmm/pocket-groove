@@ -1,79 +1,130 @@
 # SOUND view as the instrument page (docs/ux/instrument*.png, docs/UX.md 10.3).
-# Real-UI screenshots: build/host/ui_shot host/ui_scripts/instrument.txt docs/ux
+# Real-UI screenshots with real audio in the picture (the engine renders while the
+# script waits): build/host/ui_shot host/ui_scripts/instrument.txt docs/ux
 dev 0
 
-# a new project: every track starts with its first instrument (bass ACID: no end labels)
+# a new project (every track starts with its first instrument) and a groove posted
+# straight into the pattern: kick on the beat, closed hat on the 8ths, a bass line
 empty
 down ctl
 tap n
 up ctl
 wait 1600
+steppost 0 0 1
+steppost 0 4 1
+steppost 0 8 1
+steppost 0 12 1
+steppost 3 0 1
+steppost 3 2 1
+steppost 3 4 1
+steppost 3 6 1
+steppost 3 8 1
+steppost 3 10 1
+steppost 3 12 1
+steppost 3 14 1
+steppost 6 0 1 36 100
+steppost 6 2 1 36 100
+steppost 6 3 1 48 100
+steppost 6 4 1 36 100
+steppost 6 6 1 39 100
+steppost 6 8 1 36 100
+steppost 6 10 1 43 100
+steppost 6 11 1 36 100
+steppost 6 12 1 36 100
+steppost 6 14 1 46 100
+
+# the bass's ACID (no end labels; WOBL shows where its LFO rate jumps) with OPEN
+# swept up while it plays: the resonant squelch in the picture
 down shift
 tap j
 up shift
 tap 9
-tap x
-tap x
-tap v
 tap spc
-until 6 6
+wait 1500
+down x
+wait 600
+up x
+wait 300
+until 6 4
+wait 12
 shot instrument
 
-# bass POLES: end labels on every macro (the list overlay right after the step)
-empty
-down ctl
-tap n
-up ctl
-wait 1600
-down shift
-tap j
-up shift
-tap 9
+# POLES: end labels on every macro, sounding (the list overlay right after the step)
 tap .
+wait 30
 shot instrument-list
 wait 1700
-tap z
-tap n
-tap n
-tap spc
-until 6 6
+until 6 4
+wait 12
 shot instrument-labels
 
-# a step held + a macro key: a macro lock on that step
-empty
-down ctl
-tap n
-up ctl
-wait 1600
-down shift
-tap j
-up shift
-tap 9
-down 4
+# two macros moving at once (x and n held: TONE and LENGTH up)
+down x
+down n
+wait 300
+until 6 4
+wait 12
+shot instrument-moving
+up x
+up n
+wait 400
+
+# a step held + a macro key: a macro lock on that step (TONE darker on step 3)
+down 3
 wait 300
 down shift
-tap x
-tap x
-tap x
+tap z
+tap z
 up shift
+until 6 4
+wait 12
 shot instrument-lock
-up 4
+up 3
+wait 300
 
-# the kick's BOOM (four macros with end labels)
-empty
-down ctl
-tap n
-up ctl
-wait 1600
-tap 9
-tap spc
-until 0 6
+# the kick's BOOM: the hit and its decay
+down shift
+tap a
+up shift
+wait 300
+until 0 1
+wait 40
 shot instrument-kick
 
-# a CLASSIC track (the mockup demo): the page invites a choice
+# the closed hat's TICK: about 20 dB quieter, still a clear shape
+down shift
+tap f
+up shift
+wait 300
+until 3 1
+wait 20
+shot instrument-hat
+
+# stopped: the picture settles to a calm line
+tap spc
+wait 1500
+shot instrument-silence
+
+# the lead's HANDS: a chord held from GROOVE (AUTO chords), then SOUND
+down shift
+tap k
+up shift
+tap `
+down z
+wait 300
+tap 9
+wait 400
+shot instrument-lead
+up z
+
+# a CLASSIC track (the mockup demo): the page keeps the picture and invites a choice
 demo
 down shift
 tap j
 up shift
 tap 9
+tap spc
+wait 1500
+until 6 2
+wait 15
 shot instrument-classic

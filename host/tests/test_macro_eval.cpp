@@ -636,7 +636,7 @@ void testLabels() {
   expectError("voice bass\nmacro A \"open\n", 2, "without its closing quote");
   expectError("voice bass\nmacro A \"a\"b\n", 2, "a space after a closing quote");
   expectError("voice bass\nmacro A x\"y\" z\n", 2, "inside a word");
-  expectError("voice bass\nname \"X\"\n", 2, "only a 'macro' line takes strings");
+  expectError("voice bass\nname \"X\"\n", 2, "only a 'macro' or 'about' line takes strings");
   expectError("voice bass\nmacro \"A\"\n", 2, "macro NAME");
   // the about line: the file's first comment line, without "NAME -- " when it repeats the name
   s = must("# ACID -- family: INTERACTION.\nvoice bass\nname acid\n");
@@ -651,6 +651,22 @@ void testLabels() {
   CHECK(std::strlen(s.about) == size_t(kAboutLen));
   s = must("# caf\xC3\xA9\nvoice bass\n");   // comments may hold anything; the about line keeps ASCII
   CHECK(!std::strcmp(s.about, "caf??"));
+  // the player's line: `about "..."`, optional, one string of 1..38 characters, given once;
+  // separate from the header comment (which stays the lab's and the index's)
+  s = must("# POLES -- family: OPPOSITES.\nvoice bass\nname POLES\nabout \"A round bass. Push it, #1!\"\n");
+  CHECK(!std::strcmp(s.tagline, "A round bass. Push it, #1!") && !std::strcmp(s.about, "family: OPPOSITES."));
+  s = must("voice bass\n");
+  CHECK(s.tagline[0] == 0);
+  s = must(("voice bass\nabout \"" + std::string(size_t(kTaglineLen), 'x') + "\"\n").c_str());
+  CHECK(std::strlen(s.tagline) == size_t(kTaglineLen));
+  expectError(("voice bass\nabout \"" + std::string(size_t(kTaglineLen) + 1, 'x') + "\"\n").c_str(), 2,
+              "the about line is longer than 38 characters");
+  expectError("voice bass\nabout \"one\"\nabout \"two\"\n", 3, "'about' given twice");
+  expectError("voice bass\nabout one line\n", 2, "write 'about");
+  expectError("voice bass\nabout \"a\" \"b\"\n", 2, "write 'about");
+  expectError("voice bass\nabout \"\"\n", 2, "an empty string");
+  expectError("voice bass\nabout \"caf\xC3\xA9\"\n", 2, "ASCII");
+  expectError("about \"first\"\nvoice bass\n", 1, "the first line must be 'voice");
 }
 
 int countWarn(const char* text, Warnings* w) {
@@ -773,6 +789,9 @@ void testRoundTripV2() {
   MacroSet s = must("# about\nvoice bass\n");
   char buf[256];
   CHECK(format(s, gT, buf, sizeof(buf)) > 0 && !std::strncmp(buf, "# about\nvoice bass\n", 19));
+  roundTrip("# X -- the header\nvoice bass\nname X\nabout \"Push it. Then pull it.\"\nmacro A\n cut 0:1 1:100\n");
+  s = must("voice bass\nname X\nabout \"Hi there\"\n");
+  CHECK(format(s, gT, buf, sizeof(buf)) > 0 && std::strstr(buf, "name X\nabout \"Hi there\"\n") != nullptr);
 }
 
 // Evaluation cost: a large set, timed.

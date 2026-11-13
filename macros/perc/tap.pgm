@@ -11,6 +11,7 @@
 # Try: HIT on X, PRESS on Y on a 16th pattern with accents.
 voice perc
 name TAP
+about "A hand drum: tap, slap, let it ring."
 base modl=tom tune=78 decay=48 tone=50 bend=24 harm=64 noise=30 drive=24
 
 macro HIT 0.35

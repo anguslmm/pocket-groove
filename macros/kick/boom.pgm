@@ -13,6 +13,7 @@
 # Try: SIZE on X, SKIN on Y, four on the floor; then WD-MTL for character.
 voice kick
 name BOOM
+about "Choose the drum: size, skin, wood."
 base lvl=100 drive=26 tone=100 harm=34 cton=56
 
 macro SIZE 0.45 "SMALL" "BIG"

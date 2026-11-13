@@ -10,6 +10,7 @@
 # Try: PITCH on X, BITE on Y on the backbeat; sweep diagonally.
 voice snare
 name BITE
+about "Low and growling, or high and wiry."
 base snappy=70 decay=48 tone=66 drive=20 bend=50 ring=56 dtun=50
 
 macro PITCH 0.5

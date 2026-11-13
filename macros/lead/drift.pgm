@@ -14,6 +14,7 @@
 # with chords.
 voice lead
 name DRIFT
+about "Long notes that bloom and wander."
 base wave=tri shape=30 osc2=sine intv=36 mix=48 flt=lp cutoff=78 reso=22 env=30 fdcy=60 sus=40 ktrk=64 drive=0 lfoshape=0 lcut=0 glide=60
 
 macro BLOOM 0.4

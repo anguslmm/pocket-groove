@@ -17,7 +17,9 @@
 //   5. every set has a name, set names are unique per track, and every file
 //      starts with its comment header, whose first line names the family
 //      ("# NAME -- family: ...", see macros/INDEX.md); that line is the set's
-//      about line (the parser keeps "family: ..." in MacroSet::about);
+//      header line for the lab (the parser keeps "family: ..." in MacroSet::about),
+//      and every set has a player's line (`about "..."`, MacroSet::tagline, at
+//      most 38 characters) that the built-in table carries;
 //   6. no set loads with a warning, a loaded set fits in 2 KB, and the time one
 //      evaluation takes on this host is printed per set.
 // That every set also SOUNDS sane (no silent, clipping or NaN point) is the
@@ -230,8 +232,17 @@ int main() {
     const std::string head = std::string("# ") + s.name + " -- ";
     it::check(strncasecmp(first.c_str(), head.c_str(), head.size()) == 0,
               "%s: the first line is the header '# NAME -- family: ...' (got '%s')", path.c_str(), first.c_str());
-    it::check(std::strncmp(s.about, "family: ", 8) == 0, "%s: the about line names the family (got '%s')",
+    it::check(std::strncmp(s.about, "family: ", 8) == 0, "%s: the header line names the family (got '%s')",
               path.c_str(), s.about);
+    // the player's line (`about "..."`): every set has one, it fits the instrument page,
+    // it does not repeat the author's header, and the built-in table carries it
+    it::check(s.tagline[0] != 0 && std::strlen(s.tagline) <= size_t(kTaglineLen),
+              "%s: has an 'about' line of 1..%d characters (got '%s')", path.c_str(), kTaglineLen, s.tagline);
+    it::check(strncasecmp(s.tagline, "family", 6) != 0, "%s: the about line speaks to a player (got '%s')",
+              path.c_str(), s.tagline);
+    if (const MacroSet* b = findBuiltin(s.id))
+      it::check(std::strcmp(b->tagline, s.tagline) == 0, "%s: the built-in table's about line is '%s'", path.c_str(),
+                b->tagline);
     // cheap enough to evaluate at a few hundred Hz on the device's UI core
     {
       float p[kMaxMacros] = {0.1f, 0.4f, 0.6f, 0.9f};

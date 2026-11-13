@@ -15,6 +15,7 @@
 # Try: PLUCK on X, BELL on Y; play chords and sweep slowly around the pad.
 voice lead
 name KEYS
+about "Organ, pluck and bell in one."
 base release=30 osc2=puls intv=24 det=24 flt=lp ktrk=64 attack=0 fatk=0 drive=0 vib=0 lcut=0 lshp=0 fdcy=44
 base wave=orgn mix=0 sus=110 decay=100 cutoff=100 env=8 reso=10 lvl=100 shape=92   # the organ
 

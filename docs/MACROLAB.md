@@ -21,7 +21,7 @@ Run it from the repository root. With `--lab` the window is wider (the panel is 
 ```
   MACRO LAB                  BASS     <- the selected track (SHIFT+pad selects silently)
   [<]         ACID  1/5         [>]   <- the track's instrument; < > step: none (CLASSIC), then the list
-  FAMILY: INTERACTION.                <- its about line (the file's first comment), else its file
+  FAMILY: INTERACTION.                <- its header line (the file's first comment), else its file
   RELOADED ACID.PGM                   <- what just happened, an error (red), a warning (amber),
                                          the keyboard macro's description, or the keys
   OPEN  [SHUT=|--------OPEN]  0.40    <- one slider per macro, its end labels inside; drag it.
@@ -85,9 +85,10 @@ time, GOOD/BAD, track, set name, file `@` the version (FNV-1a of the file's text
 One file per set, plain text. Keep them under `macros/<track>/` (the lab does not care where; the `voice` line decides the track). A set is an instrument: a character (the base, and named patches to morph toward) plus up to four controls. This is model v2 (2026-11-13); every v1 file loads unchanged and evaluates to the same values, bit for bit (`itest_macro_pin` pins the 24 round-1 files as they were, kept in `host/tests/macro_v1/`).
 
 ```
-# ACID -- family: INTERACTION.     <- the first line, a comment: the set's about line
+# ACID -- family: INTERACTION.     <- the first line, a comment: the set's header (the lab shows it)
 voice bass                         # first statement: kick snare clap chh ohh perc bass lead
 name ACID                          # optional, up to 12 characters (else the file name)
+about "The 303 squelch. Open it, then bite."   # optional: the player's line (up to 38 characters)
 base wave=0 sub=40 lfoshape=sine   # optional, any number of lines: fixed values under the macros
 
 macro OPEN 0.4 "SHUT" "OPEN" "the 303 filter"   # up to 4 macros; name up to 6 characters; start
@@ -132,7 +133,8 @@ macro BELL "ORGAN" "BELL"
 
 | line | |
 |---|---|
-| `# TEXT` | the first non-blank line, if it is a comment, is the set's **about** line (up to 72 characters, the rest is cut). When it starts with the set's name and ` -- ` (the round-1 header `# ACID -- family: ...`), that part is dropped: the about line is then `family: ...`. There is no separate `about` statement: the header is the one source |
+| `# TEXT` | the first non-blank line, if it is a comment, is the set's **header** line (`MacroSet::about`, up to 72 characters, the rest is cut): the author's, shown by the lab and listed in the index. When it starts with the set's name and ` -- ` (the round-1 header `# ACID -- family: ...`), that part is dropped: the header line is then `family: ...` |
+| `about "TEXT"` | optional, once: the **player's line** (`MacroSet::tagline`), one short sentence of 1 to 38 characters that fits the instrument page under the name (shown in capitals). Say what the instrument is and what to do with it, in a player's words ("The 303 squelch. Open it, then bite."), not the family or the idea being tested. Longer is an error, not cut |
 | `voice TRACK` | required, first statement. `kick snare clap chh ohh perc bass lead` (also `snar`, `closedhat`, `openhat`) |
 | `name NAME` | optional, one word, up to 12 characters, shown in capitals |
 | `base p=v p=v ...` | optional, repeatable; no spaces around `=` |
@@ -168,9 +170,9 @@ Limits live in `lib/pg/src/pg/macro/macro.h`:
 | patches | 4 | 11 bytes each |
 | patch values | 96 (pool) | 3 bytes each |
 | morph lines / trim lines | 8 / 8 | 6 / 5 bytes each |
-| strings | name 12, about 72, per macro: name 6, labels 8 + 8, description 40 | |
+| strings | name 12, header 72, about 38, per macro: name 6, labels 8 + 8, description 40 | |
 
-One loaded set is **1856 bytes** (`sizeof(pg::macro::MacroSet)`, including its 16-bit instrument id; v1 was 2420 with 4 x 8 targets of 8 float points). The 24 built-in sets live in flash (about 44 KB); the device holds no copy of them in RAM. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
+One loaded set is **1896 bytes** (`sizeof(pg::macro::MacroSet)`, including its 16-bit instrument id; v1 was 2420 with 4 x 8 targets of 8 float points). The 24 built-in sets live in flash (about 45 KB); the device holds no copy of them in RAM. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
 
 Evaluation of one set: per target a search for the segment (one position decode per point passed: an integer compare and one float division), two value decodes (integer divide and one float division each), one division and a few multiply-adds for the curve; per patch value of an active morph two multiply-adds; per trim a curve, and one 2^x from a 6-term polynomial for all trims (no `powf`, no libm); then a clamp and round per owned parameter. On this host it takes about 130 to 340 ns per set (KEYS and TRIO, all morph, are the cheapest, POLES with 22 targets and 64 points the dearest; `itest_macro_files` prints each), about 0.8 us for a set near the limits (60 targets, 188 points, two 22-value morphs, 4 trims; `test_macro_eval`). For POLES that is roughly 150 float divisions (point decoding and the curve segments), 200 other float operations and the integer work around them. On the ESP32-S3 (240 MHz, single-precision FPU) expect very roughly ten to thirty times the host time, around 3 to 10 us per set: eight sets at 300 Hz would be about 1 to 3 % of one core (an estimate from the host figures, not measured on the device).
 
@@ -197,7 +199,7 @@ each rounded and clamped to 0..127 (`macro::combineMixer`). With the player's va
 
 **Macro locks.** A step may lock one macro of its track's instrument (`Step::lockParam` 33..36 = macro 1..4, `lockValue` the position). While such a step is in scope (the usual rule: until the next step of the track that fires, across the pattern wrap) the engine plays the instrument with that macro at the lock's value. On a track with an instrument, a lock of a sound parameter (1..24) is ignored (the instrument owns them; it stays in the step and comes back if the track goes CLASSIC); mixer locks work and combine by the rule. On a CLASSIC track a macro lock does nothing. Pasting or copying a track onto another track drops its macro locks (they only mean something for the instrument they were made on).
 
-**Built-in instruments.** The `.pgm` files under `macros/` are the source. `host/tools/macro_builtin` compiles them into `lib/pg/src/pg/macro/builtin_data.cpp`, a checked-in C++ source of const, constant-initialised `MacroSet` tables (24 sets, 1856 bytes each, about 44 KB of flash). The firmware build runs no host tool; the engine and the UI use the tables in place, with no parser and no RAM copy on the device. The order and the selection come from `macros/builtin.txt` (one line per voice; the **first** file of a line is what a new project starts with: kick BOOM, snare CRACK, clap HYPE, CHH TICK, OHH BLAST, perc TAP, bass ACID, lead HANDS). Every `.pgm` under `macros/` must be listed; a listed file must parse without warnings and have a `name`. After changing any listed file or the list, regenerate and commit:
+**Built-in instruments.** The `.pgm` files under `macros/` are the source. `host/tools/macro_builtin` compiles them into `lib/pg/src/pg/macro/builtin_data.cpp`, a checked-in C++ source of const, constant-initialised `MacroSet` tables (24 sets, 1896 bytes each, about 45 KB of flash). The firmware build runs no host tool; the engine and the UI use the tables in place, with no parser and no RAM copy on the device. The order and the selection come from `macros/builtin.txt` (one line per voice; the **first** file of a line is what a new project starts with: kick BOOM, snare CRACK, clap HYPE, CHH TICK, OHH BLAST, perc TAP, bass ACID, lead HANDS). Every `.pgm` under `macros/` must be listed; a listed file must parse without warnings and have a `name`. After changing any listed file or the list, regenerate and commit:
 
 ```bash
 cmake --build build/host --target macro_builtin && build/host/macro_builtin
@@ -209,7 +211,7 @@ The ctest `check_builtin` (`macro_builtin --check`) fails while the checked-in t
 
 ## The sets in macros/
 
-[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works (`itest_macro_files` checks the first line, which is also the set's about line, that set names are unique per track, and that no set loads with a warning).
+[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works, and has an `about "..."` line after its name: what the player reads on the instrument page (`itest_macro_files` checks the first line, which is also the set's header line, that every set has a player's line of at most 38 characters that the built-in table carries, that set names are unique per track, and that no set loads with a warning).
 
 ## Auditing a set (macro_audit)
 

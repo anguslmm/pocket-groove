@@ -14,6 +14,7 @@
 #include "../project.h"
 #include "format.h"
 #include "ghost.h"
+#include "scope.h"
 
 namespace pg {
 namespace ui {
@@ -41,6 +42,9 @@ constexpr int kListPerMount = 24;
 // instrument's macros (ValueRef::index, trackFocus, and lockParam = index + 1).
 constexpr int kMacroIndex0 = kParamsPerTrack;
 inline bool isMacroIndex(int i) { return i >= kMacroIndex0 && i < kMacroIndex0 + kTrackMacros; }
+// The instrument page's picture (UX.md 10.3): the scope's box, inclusive rows.
+constexpr int kScopeX0 = 4, kScopeY0 = 37, kScopeY1 = 72;
+static_assert(Scope::kCols == kScreenW - 2 * kScopeX0, "one trace value per column of the box");
 
 class Ui {
  public:
@@ -70,9 +74,12 @@ class Ui {
   // and redraws what changed. Returns true if fb changed.
   bool update(const UiEnv& env, Framebuffer& fb);
   // Rows changed by the last update() that returned true (inclusive): the whole
-  // screen after a full redraw, 0..10 when only the status bar changed. Lets the
-  // firmware push a partial frame to the LCD.
-  void dirtyRows(int* y0, int* y1) const { *y0 = 0; *y1 = dirtyStatusOnly_ ? 10 : kScreenH - 1; }
+  // screen after a full redraw, 0..10 when only the status bar changed, the
+  // scope's band (with the status bar above it, if that changed too) when only
+  // the instrument page's picture moved. Lets the firmware push a partial frame.
+  void dirtyRows(int* y0, int* y1) const { *y0 = dirtyY0_; *y1 = dirtyY1_; }
+  const Scope& scope() const { return scope_; }    // the instrument page's picture (tests)
+  bool macroMoving(int m) const;                   // macro m of the selected track is being moved now
 
   // ---- read-only state, for tests and the harness -------------------------
   View view() const { return view_; }
@@ -322,6 +329,10 @@ class Ui {
   void drawSound(Framebuffer& fb);
   void drawInstrument(Framebuffer& fb);
   void drawInstrumentList(Framebuffer& fb);
+  void drawScope(Framebuffer& fb);
+  bool scopeShown() const;
+  bool scopeCovered() const;
+  void refreshJumps();
   void drawMix(Framebuffer& fb);
   void drawFx(Framebuffer& fb);
   void drawFxDuck(Framebuffer& fb);
@@ -412,6 +423,16 @@ class Ui {
   Memo memo_[kMemos] = {};
   uint8_t memoNext_ = 0;
   uint32_t listUntil_ = 0;
+  uint32_t macMoveMs_[kTrackMacros] = {};   // last move of each macro of the selected track (0 = none)
+  Scope scope_;
+  // where each macro of the shown instrument makes an enum jump (ticks), 0..255
+  static constexpr int kMaxTicks = 6;
+  uint8_t tickPos_[kTrackMacros][kMaxTicks] = {};
+  uint8_t tickN_[kTrackMacros] = {};
+  uint16_t tickId_ = 0;                     // instrument the ticks belong to
+  uint8_t tickTrack_ = 0xFF;
+  uint8_t tickKey_[kTrackMacros][kTrackMacros] = {};   // the positions they were computed at
+  uint8_t tickValid_ = 0;                   // bit per macro
   mutable ParamInfo macInfo_[4] = {};   // macroInfo() results (a ring: a frame needs at most a few at once)
   mutable uint8_t macInfoNext_ = 0;
 
@@ -508,6 +529,7 @@ class Ui {
   bool focusLocked_ = false;
   uint32_t lockKey_ = 0;
   bool dirtyStatusOnly_ = false;
+  uint8_t dirtyY0_ = 0, dirtyY1_ = kScreenH - 1;
   uint32_t fullDraws_ = 0, statusDraws_ = 0;
 };
 

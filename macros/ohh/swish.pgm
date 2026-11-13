@@ -12,6 +12,7 @@
 # Try: OPEN on X, ECHO on Y with off-beat open hats.
 voice ohh
 name SWISH
+about "Open the pedal, let echoes ride."
 base tone=72 mtl=84 tune=64 sprd=64
 
 macro OPEN 0.4

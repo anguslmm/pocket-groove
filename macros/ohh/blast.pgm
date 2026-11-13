@@ -8,6 +8,7 @@
 # Try: MORE on X, CALM on Y with off-beat open hats; ride MORE over 8 bars.
 voice ohh
 name BLAST
+about "Brighter and harder, or a far wash."
 base tune=60 dcy=48 tone=66 mtl=70 colr=50 snap=24 sprd=60
 
 macro MORE

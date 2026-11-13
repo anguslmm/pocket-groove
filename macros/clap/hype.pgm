@@ -8,6 +8,7 @@
 # Try: MORE on X, CALM on Y, claps on 2 and 4; ride MORE into a drop.
 voice clap
 name HYPE
+about "More hands, or a calm far crowd."
 base tone=56 res=50 decay=54 tail=66 bursts=3 spread=64 air=46 drive=28
 
 macro MORE

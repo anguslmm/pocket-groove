@@ -91,7 +91,7 @@ std::string emit(const pm::MacroSet& s, const std::string& file) {
     << int(s.numPoints) << ", " << int(s.numPatches) << ", " << int(s.numPatchValues) << ", " << int(s.numMorphs)
     << ", " << int(s.numTrims) << ",\n";
   std::snprintf(hex, sizeof(hex), "0x%04x", unsigned(s.id));
-  o << "     " << hex << ", " << cstr(s.name) << ",\n     " << cstr(s.about) << ",\n";
+  o << "     " << hex << ", " << cstr(s.name) << ",\n     " << cstr(s.about) << ",\n     " << cstr(s.tagline) << ",\n";
   std::snprintf(hex, sizeof(hex), "0x%08xu", unsigned(s.baseMask));
   o << "     " << hex << ", " << u8list(s.base, kParamsPerTrack) << ",\n";
   o << "     {";
