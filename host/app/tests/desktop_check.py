@@ -47,9 +47,9 @@ screen or sound card) and checks it against the rest of the host build:
      rewrite of the file while the app runs is reloaded and live; a broken
      rewrite is reported with file, line and reason and changes nothing; Cmd+G
      with a typed note and the BAD button with Esc write the two lab-notes.txt
-     lines; Cmd+Left steps to "none" and gives every parameter back; the set's
-     macro position is remembered; deleting the active file gives the values
-     back; no lab key, click or note reaches the instrument; the window grows
+     lines; Cmd+Left from ACID steps to "none" (CLASSIC: the values stay); the
+     set's macro position is remembered; deleting the active file (an extra
+     instrument) leaves the track playing its values; no lab key, click or note reaches the instrument; the window grows
      by the panel and the device screen in it is untouched.
 
     python3 host/app/tests/desktop_check.py --bin build/host --work build/host/desktop_test
@@ -673,6 +673,7 @@ sdl tap Escape
 wait 100
 app lab-select bass acid
 app lab-wait-synced
+app lab-print bass
 sdl down Left GUI
 sdl tap Left
 sdl up Left GUI
@@ -696,7 +697,7 @@ def engine_values(line):
 
 
 def part_lab():
-    print("8. the macro lab: macros follow the mouse into the engine, hot reload, errors, marks, none")
+    print("8. the macro lab: the track's macros follow the mouse into the engine, hot reload, errors, marks, none")
     cwd = fresh(os.path.join(WORK, "lab"))
     shutil.copytree(os.path.join(ROOT, "macros"), os.path.join(cwd, "macros"))
     test_set = os.path.join(cwd, "macros", "bass", "test.pgm")
@@ -721,7 +722,7 @@ def part_lab():
             elif len(engine) == 3:   # then a broken one: the last good version must stay
                 with open(test_set, "w") as f:
                     f.write(LAB_TEST_SET.replace("reso   0:20 1:120", "reso   0:20 1:300"))
-            elif len(engine) == 7:   # then it goes away: the track falls back to bare parameters
+            elif len(engine) == 8:   # then it goes away: an extra instrument, so the track keeps its values
                 os.remove(test_set)
         elif line.startswith("[lab-state]"):
             state.append(line)
@@ -731,16 +732,18 @@ def part_lab():
     rc = p.wait()
     log = "\n".join(log)
     check(rc == 0, "app exited 0 (every lab script command succeeded)")
-    check(len(engine) == 8, "eight engine snapshots (got %d)" % len(engine))
-    if len(engine) < 8:
+    check(len(engine) == 9, "nine engine snapshots (got %d)" % len(engine))
+    if len(engine) < 9:
         return
-    e0, e1, e2, e3, e4, e5, e6, e7 = engine
+    e0, e1, e2, e3, e4, acid, e5, e6, e7 = engine
     check(e0["CUT"] == "10" and e0["RES"] == "20", "set chosen: CUT/RES at the macro's start (10/20): %s/%s"
           % (e0["CUT"], e0["RES"]))
-    check(e1["CUT"] == "60" and e1["RES"] == "70", "slider dragged to 0.5 by mouse: the engine has 60/70 (%s/%s)"
+    # (the slider's pixel for 0.5 is 0.505; positions are bytes, 0..255: 60 or 61)
+    check(e1["CUT"] in ("60", "61") and e1["RES"] in ("70", "71"),
+          "slider dragged to 0.5 by mouse: the engine has 60/70 (%s/%s)"
           % (e1["CUT"], e1["RES"]))
     check("[lab] reloaded macros/bass/test.pgm" in log, "the rewritten file was reloaded while playing")
-    check(e2["CUT"] == "40" and e2["RES"] == "70", "the new curve is live at the same position: CUT 40 (%s)"
+    check(e2["CUT"] == "40" and e2["RES"] == e1["RES"], "the new curve is live at the same position: CUT 40 (%s)"
           % e2["CUT"])
     check(re.search(r"\[lab\] macros/bass/test\.pgm:5: 300 is out of range \(0\.\.127\) \(keeping the last good", log)
           is not None, "the broken version is reported with file, line and reason")
@@ -755,14 +758,17 @@ def part_lab():
               "the GOOD line: time, track, set, file@version, positions, values, the note: %s" % notes[0])
         check(re.match(r".* BAD  bass TEST .* A=1\.00 \| CUT=50 RES=120$", notes[1]) is not None,
               "the BAD line (button, Esc: no note): %s" % notes[1])
-    # Cmd+Left from ACID (the first bass set in path order) goes to none: every parameter as before
+    # ACID is the bass's first instrument: Cmd+Left from it goes to none (CLASSIC), which keeps
+    # the values the track has (instruments, docs/MACROLAB.md)
+    check(acid["CUT"] != e4["CUT"] or acid["RES"] != e4["RES"], "choosing ACID changed the bass (%s/%s)"
+          % (acid["CUT"], acid["RES"]))
     check("[lab] bass: none" in log, "Cmd+Left stepped from ACID to none")
-    check(all(e5[k] == e0[k] for k in e0 if k not in ("CUT", "RES")),
-          "none: ACID's parameters back to the values from before it")
-    check(e5["CUT"] != "10" or e5["RES"] != "20", "TEST's own values were given back when ACID was chosen")
+    mixer = ("LVL", "PAN", "DLY", "REV", "DUCK")   # the mixer rows: the player's, with the instrument's level gone
+    check(all(e5[k] == acid[k] for k in acid if k not in mixer),
+          "none = CLASSIC: the bass keeps playing the sound ACID gave it")
     check(e6["CUT"] == "50" and e6["RES"] == "120", "choosing TEST again restores its macro position (A=1.00)")
     check("[lab] removed macros/bass/test.pgm" in log, "the deleted file was noticed")
-    check(e7 == e5, "deleted while active: every parameter back to the values from before (CUT %s RES %s)"
+    check(e7 == e6, "deleted while active (an extra instrument): the track keeps its values (CUT %s RES %s)"
           % (e7["CUT"], e7["RES"]))
     m = re.search(r"\[keys\] (\d+) key events reached the instrument", log)
     check(m is not None and int(m.group(1)) == 4, "only the script's 4 instrument key events reached the Ui; "

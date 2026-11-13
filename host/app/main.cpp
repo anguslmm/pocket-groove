@@ -45,6 +45,7 @@
 #include "keymap.h"
 #include "lab.h"
 #include "listen.h"
+#include "pg/engine/engine_hooks.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/project_io.h"
 #include "pg/macro/macro.h"
@@ -78,6 +79,7 @@ struct Options {
   std::string listenDevice;          // --listen-device NAME: another input than "Pocket Groove"
   std::string listenDump;            // --listen-dump FILE.wav: the raw capture as SDL delivers it
   bool lab = false;                  // --lab [DIR]: the macro lab
+  bool dev = false;                  // --dev: developer mode (the parameter pages; --lab implies it)
   std::string labDir = "macros";
   std::string labNotes = "lab-notes.txt";
   int scale = 4;
@@ -115,7 +117,8 @@ void usage(FILE* f) {
                "  --listen-sim-spec FMT:CH:RATE:FRAMES  test: ... which delivers this spec (e.g. f32:1:48000:1024)\n"
                "  --listen-sim-burst N  test: ... N callbacks back to back;  --listen-sim-vary: sizes vary\n"
                "  --lab [DIR]       the macro lab (docs/MACROLAB.md): macro sets from DIR (default ./macros),\n"
-               "                    hot-reloaded; marks go to ./lab-notes.txt (--lab-notes FILE)\n"
+               "                    hot-reloaded; marks go to ./lab-notes.txt (--lab-notes FILE). Implies --dev\n"
+               "  --dev             developer mode: SOUND can also show the bare parameter pages (l flips)\n"
                "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats,\n"
                "Cmd+L = listen to the connected device, Cmd+B = stems. Command never reaches the instrument.\n"
                "With --lab: Cmd+G / Cmd+D mark good / bad, Cmd+Left / Right the set, Cmd+1..4 a macro,\n"
@@ -159,6 +162,7 @@ bool parseArgs(int argc, char** argv, Options* o) {
       if (i + 1 < argc && argv[i + 1][0] != '-') o->labDir = argv[++i];
     }
     else if (a == "--lab-notes") o->labNotes = next("a file");
+    else if (a == "--dev") o->dev = true;
     else if (a == "--buffer") o->buffer = std::atoi(next("a frame count"));
     else if (a == "--sr") o->sr = std::atoi(next("44100 or 32000"));
     else if (a == "--mono") o->mono = true;
@@ -286,15 +290,31 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   }
 
   // ---- the macro lab ----------------------------------------------------------------
-  // LabHost: the lab reads and sets parameters exactly as the UI's own value keys do.
+  // LabHost: the lab moves the track's own instrument and macros through the UI's value
+  // path (Ui::setInstrument / Ui::setMacro), and is the library's overlay.
   int selectedTrack() override { return g_ui.selTrack(); }
   int paramValue(int track, int index) override { return g_ui.paramValue(track, index); }
-  void setParam(int track, int index, int value) override { g_ui.setTrackParam(track, index, value); }
+  int projectValue(int track, int index) override {
+    const pg::TrackSettings& ts = g_inst.project().tracks[track & 7];
+    return index >= pg::kParamsPerTrack ? ts.macro[(index - pg::kParamsPerTrack) & 3] : ts.params[index & 31];
+  }
+  uint16_t instrument(int track) override { return g_ui.instrumentIdOf(track); }
+  uint16_t projectInstrument(int track) override { return pg::instrumentId(g_inst.project().tracks[track & 7]); }
+  void setMacro(int track, int m, int value) override { g_ui.setMacro(track, m, value); }
+  void setInstrument(int track, uint16_t id, const uint8_t* pos) override { g_ui.setInstrument(track, id, pos); }
+  void refreshInstruments() override {
+    pg::Command c{};
+    c.type = pg::CmdType::RefreshInstruments;
+    c.a = 0xFF;
+    while (!g_inst.engine().post(c)) SDL_Delay(1);   // the lab's memory waits on this one: never drop it
+  }
+  uint8_t instrumentRefreshes() override { return g_inst.engine().instrumentRefreshes(); }
   uint32_t lockedMask(int track) override {
     const pg::TrackPattern& tp = g_inst.project().patterns[g_ui.editPattern() & 15].tracks[track & 7];
     uint32_t m = 0;
     for (int i = 0; i < tp.length && i < pg::kMaxSteps; ++i)
-      if (tp.steps[i].lockParam >= 1 && tp.steps[i].lockParam <= pg::kParamsPerTrack) m |= 1u << (tp.steps[i].lockParam - 1);
+      if ((tp.steps[i].flags & pg::kStepOn) && pg::isMacroLock(tp.steps[i].lockParam))
+        m |= 1u << (tp.steps[i].lockParam - pg::kLockMacro0);
     return m;
   }
   // While a note is typed after a mark the keyboard is the lab's (text input on).
@@ -677,9 +697,11 @@ class App final : public desk::ScriptHost, public desk::LabHost {
       if (t < 0) return -1;
       std::printf("[lab-state] %s\n", lab.describe(t).c_str());
       std::string eng;
+      uint8_t eff[pg::kParamsPerTrack];
+      pg::engine_detail::effectiveParams(t, eff);   // what the voice gets (the mixer rule applied)
       for (int p = 0; p < pg::kParamsPerTrack; ++p)
         if (const pg::ParamInfo* in = g_inst.engine().trackParamInfo(t, p))
-          eng += std::string(" ") + in->name + "=" + std::to_string(int(g_inst.project().tracks[t].params[p]));
+          eng += std::string(" ") + in->name + "=" + std::to_string(int(eff[p]));
       std::printf("[lab-engine] %s%s\n", pg::macro::trackName(t), eng.c_str());
       std::fflush(stdout);
       return 0;
@@ -808,6 +830,7 @@ int main(int argc, char** argv) {
   g_inst.init(float(opt.sr), opt.mono);
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter
+  g_ui.setDevMode(opt.dev || opt.lab);
   const bool hadSession = fs.exists(pg::io::kSessionPath);
   g_ui.boot(app.nowMs());
   std::printf("[boot] SDL %d.%d.%d (%s, %s), projects in %s%s%s, %s session, project \"%s\"\n", v.major, v.minor,
