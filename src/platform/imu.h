@@ -25,8 +25,8 @@
 namespace plat {
 namespace imu {
 
-constexpr uint32_t kOdrHz = 100;          // sensor output rate (BMI270 ODR code 0x08)
-constexpr uint32_t kPollHz = 50;          // reads per second while held: the newest sample each time
+constexpr uint32_t kOdrHz = 200;          // sensor output rate (BMI270 ODR code 0x09, as the spike ran it)
+constexpr uint32_t kPollHz = 100;         // reads per second while held: the newest sample each time
 constexpr float kAccLsbPerG = 8192.0f;    // +-4 g
 constexpr float kGyrLsbPerDps = 32.768f;  // +-1000 dps
 constexpr uint32_t kTaskStack = 3072;     // bytes, from the heap

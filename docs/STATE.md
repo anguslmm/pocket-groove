@@ -250,10 +250,10 @@ Order of work (owner, updated 2026-11-12):
    other views: `[TRACK] TILT` + a pose dot in the status bar; CLASSIC: one toast per hold;
    explain mode explains G0. Device: src/platform/imu.* (BMI270 at 0x69/0x68: ODR 100 Hz, +-4 g,
    +-1000 dps; one 12-byte burst per reading; a task on core 1, prio 9, that sleeps unless G0
-   is held and then reads at 50 Hz), src/app/tilt_input.* (pg::tilt::Tracker on the IMU task:
+   is held and then reads at 100 Hz, sensor ODR 200 Hz), src/app/tilt_input.* (pg::tilt::Tracker on the IMU task:
    one gravity estimate per response in use, one sqrtf per normalisation, a polynomial atan2,
    coefficients computed at the press; atomics to the UI loop, which wakes every 5 ms while G0
-   is held and posts each reading at once with a 30 ms glide). Desktop: G0 (F1 / Esc) held +
+   is held and posts each reading at once with a 15 ms glide). Desktop: G0 (F1 / Esc) held +
    the mouse = tilt through the same Ui path (0.5 deg per screen pixel); ui_shot `tilt X Y`.
    Host tests (76, all pass): test_tilt_math (angles at any holding angle within 0.01 deg, the
    four responses, a gyro bias stays within bias x tau, a jolt rejected by the fused ones),
@@ -271,14 +271,15 @@ Order of work (owner, updated 2026-11-12):
    grew: .iram0.text 126891 -> 127163 / 119951 -> 120219), plus the IMU task's 3072 B stack and
    its control block from the heap at boot (about 3.4 KB).
    CPU (estimates, not measured): idle (G0 up) nothing (the task is blocked; one compare per
-   UI loop pass). While tilting, core 1: the bus 50 x ~0.6 ms busy-waited = ~3 % (the spike
+   UI loop pass). While tilting, core 1: the bus 100 x ~0.6 ms busy-waited = ~6 % (the spike
    measured 728 us for 18 bytes; 12 now), the tracker ~1.5-6 k cycles per reading from flash
-   = ~0.03-0.13 %, the UI loop's 5 ms wakeups ~0.1 %: about 3.2 %, under the 4 % target. Core 0
+   = ~0.06-0.25 %, the UI loop's 5 ms wakeups ~0.1 %: about 6.4 %, over the 4 % target on
+   purpose and only while G0 is held (the lead's choice after the merge: feel over core 1 time). Core 0
    (audio): the tilted track is on stage B's fractional path while the hand moves (~1.3 % per
    track by stage B's estimate), nothing once it holds still (7-bit path where it stands).
-   Latency (estimate): reading age ~10 ms + smoothing 6-27 ms + loop wakeup <= 5 ms + the 30 ms
-   glide + the audio buffer 17 ms = about 65-90 ms (the spike: 31-36 ms at 200 Hz without the
-   UI hop; 100 Hz reads would cut ~10 ms for twice the bus time).
+   Latency (estimate): reading age ~5 ms + smoothing 6-27 ms + loop wakeup <= 5 ms + the 15 ms
+   glide + the audio buffer 17 ms = about 45-70 ms (the spike: 31-36 ms at 200 Hz without the
+   UI hop; the stage as first built read at 50 Hz with a 30 ms glide, 65-90 ms).
    HARDWARE CHECK (not done; only the device can confirm): the chip's orientation (roll right
    must move X up, tipping the far edge away Y up: else flip kSignX / kSignY or kSwapXY in
    src/app/tilt_input.cpp; the spike's `rest:` line answers it), the [imu] report line (reads,

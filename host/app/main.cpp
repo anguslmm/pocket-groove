@@ -21,7 +21,7 @@
 // is rolling right, up is tilting away, kTiltDegPerPx degrees per canvas pixel,
 // through the same per-axis responses (pg::tilt::Axis) and the same Ui path
 // (Ui::tiltPress / tiltInput / tiltRelease / tiltCancel) as the device, at the
-// device's 50 Hz. The lab's XY pad is separate and unchanged.
+// device's 100 Hz. The lab's XY pad is separate and unchanged.
 //
 // The desktop's own additions (docs/DESKTOP.md), none of which touches the
 // instrument: the strip under the screen (strip.h: modifier lights, controls,
@@ -241,7 +241,7 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   uint64_t swallow = 0;      // keys whose up must not reach the Ui (G0 + - / =)
   // tilt by mouse (see the header)
   static constexpr float kTiltDegPerPx = 0.5f;   // 70 canvas px (280 window points at 4x) = the smooth range
-  static constexpr uint32_t kTiltEveryMs = 20;   // the device's IMU rate
+  static constexpr uint32_t kTiltEveryMs = 10;   // the device's IMU rate
   static constexpr float kTiltRangePx = 70.0f;   // script `tilt X Y`: X = 1 is this far from the press point
   pg::tilt::Axis tiltAxis[2];
   int mouseX = 0, mouseY = 0;                    // the last mouse position, window points (from motion events)

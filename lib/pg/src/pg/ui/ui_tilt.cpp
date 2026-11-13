@@ -16,7 +16,7 @@
 //    255: from the middle, either end is reached at 79 % of the range (about 28
 //    degrees with "smooth"), from an end about two thirds of the way across.
 //  - Each new input glides to its value in kTiltRampMs (the inputs come every
-//    ~20 ms, so the macro never stops between them), release and cancel glide
+//    ~10 ms, so the macro never stops between them), release and cancel glide
 //    back in kTiltReturnMs.
 //  - Recording: the hold flag goes with the offsets once the tilt has left the
 //    dead zone in this hold (a hold kept still, or G0 held for the volume keys,

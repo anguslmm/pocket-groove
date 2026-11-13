@@ -1,10 +1,10 @@
 // BMI270 reader for the tilt control. See imu.h.
 //
 // Register values: the hardware spike's, device-tested (src/hwspike/imu.cpp has
-// the sources for each), at the 100 Hz ODR the Rust BSP's tests pin:
-//   ACC_CONF  0x40 = 0xA8   odr 100 Hz (0x08) | bwp normal (0x20) | filter_perf (0x80)
+// the sources for each), at 200 Hz ODR (code 0x09; the spike ran 100/200/400):
+//   ACC_CONF  0x40 = 0xA9   odr 200 Hz (0x09) | bwp normal (0x20) | filter_perf (0x80)
 //   ACC_RANGE 0x41 = 0x01   +-4 g
-//   GYR_CONF  0x42 = 0xE8   odr 100 Hz | bwp normal | noise_perf (0x40) | filter_perf
+//   GYR_CONF  0x42 = 0xE9   odr 200 Hz | bwp normal | noise_perf (0x40) | filter_perf
 //   GYR_RANGE 0x43 = 0x09   +-1000 dps (bit 3: OIS range as the Rust BSP sets it)
 //   PWR_CONF  0x7C = 0x00   advanced power save off
 //   PWR_CTRL  0x7D = 0x0E   temperature + accelerometer + gyroscope on
@@ -87,9 +87,9 @@ bool begin(Listener fn, void* user) {
   bool ok = true;
   ok = wr(0x7C, 0x00) && ok;   // PWR_CONF
   ok = wr(0x41, 0x01) && ok;   // ACC_RANGE +-4 g
-  ok = wr(0x40, 0xA8) && ok;   // ACC_CONF 100 Hz, performance
+  ok = wr(0x40, 0xA9) && ok;   // ACC_CONF 200 Hz, performance
   ok = wr(0x43, 0x09) && ok;   // GYR_RANGE +-1000 dps
-  ok = wr(0x42, 0xE8) && ok;   // GYR_CONF 100 Hz, performance
+  ok = wr(0x42, 0xE9) && ok;   // GYR_CONF 200 Hz, performance
   ok = wr(0x7D, 0x0E) && ok;   // PWR_CTRL temp + acc + gyr
   uint8_t e = 0;
   M5.In_I2C.readRegister(s_addr, 0x02, &e, 1, kI2cHz);

@@ -201,7 +201,7 @@ class Ui {
   int tiltTrack() const { return tilt_.engaged ? tilt_.track : -1; }
   float tiltAxis(int a) const { return tilt_.in[a & 1]; }            // the last input
   static constexpr uint32_t kTiltEngageMs = 150;   // shorter: a tap (G0 double-tap), never audible
-  static constexpr uint32_t kTiltRampMs = 30;      // each new input glides there (inputs every ~20 ms)
+  static constexpr uint32_t kTiltRampMs = 15;      // each new input glides there (inputs every ~10 ms)
   static constexpr uint32_t kTiltReturnMs = 150;   // release / cancel: the glide back
   static constexpr uint32_t kTiltKeepMs = 100;     // an unchanged input is re-sent this often (recording)
   static constexpr int kTiltScale = 160;           // position units (of 255) at an axis's full range
