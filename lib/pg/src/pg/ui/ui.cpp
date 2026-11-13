@@ -297,6 +297,14 @@ void Ui::setMacro(int t, int m, int v) {
 
 void Ui::setInstrument(int t, uint16_t id, const uint8_t* positions) {
   if (t < 0 || t >= kNumTracks) return;
+  // CLASSIC <-> instrument changes what a step's last three bytes mean (project.h),
+  // so a pattern snapshot taken before the change would restore them in the wrong
+  // format: it is dropped. (The UI's own instrument changes already hold an
+  // instrument snapshot here; this is for callers such as the macro lab.)
+  if (undoValid_ && undoKind_ == 0 && (id != 0) != (instrumentIdOf(t) != 0)) {
+    undoValid_ = false;
+    undoQueued_ = false;
+  }
   uint8_t pos[kTrackMacros] = {0, 0, 0, 0};
   const macro::MacroSet* s = macro::findInstrument(id);
   for (int m = 0; m < kTrackMacros; ++m)
