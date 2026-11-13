@@ -120,7 +120,8 @@ Cardputer keys by legend as in the manual (`` ` `` `1` ... `del` `tab` `q` ... `
 | `--keymap FILE` | key map overrides (above); `--print-keymap` prints the map |
 | `--rec-dir PATH` | where F9 recordings go (default `./bounces/live`) |
 | `--record` | start recording at launch |
-| `--lab [DIR]` | the macro lab, a development workbench for designing macros: a panel right of the screen, macro sets from `DIR` (default `./macros`) hot-reloaded, marks to `./lab-notes.txt` (`--lab-notes FILE`); opens at scale 3. See [MACROLAB.md](MACROLAB.md) |
+| `--lab [DIR]` | the macro lab, the workbench where instruments are tuned: a panel right of the screen, `.pgm` files from `DIR` (default `./macros`) hot-reloaded and replacing the built-in instruments of the same voice and name, marks to `./lab-notes.txt` (`--lab-notes FILE`); opens at scale 3; implies `--dev`. See [MACROLAB.md](MACROLAB.md) |
+| `--dev` | developer mode: the SOUND view can also show the bare parameter pages (CLASSIC tracks show them; `l` flips between them and the instrument page). Never on the device |
 | `--script FILE`, `--out DIR` | play a key script (as `host/tools/ui_shot` scripts, see `host/app/script.h`) and write its `shot`s to DIR |
 | `--pg-tool PATH` | the `tools/pg` the Stems list runs (default: the one in this repository; or `$PG_TOOL`) |
 | `--pg-port PORT` | the device's serial port for the Stems list (default: found automatically; or `$PG_PORT`) |
@@ -189,7 +190,7 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 
 ## The macro lab
 
-`tools/pg-desktop --lab` adds a development workbench beside the screen for trying macro mappings: `.pgm` files under `macros/` are reloaded while the app plays, the selected track's set gets a slider per macro and an XY pad, and Cmd+G / Cmd+D write "good" / "bad" lines with every position and value to `lab-notes.txt`. Off unless asked for; nothing of it is stored in projects. Everything about it, the file format and the loop: [MACROLAB.md](MACROLAB.md).
+`tools/pg-desktop --lab` adds a development workbench beside the screen for tuning the instruments: `.pgm` files under `macros/` are reloaded while the app plays and replace the built-in instruments of the same voice and name, the selected track's instrument gets a slider per macro and an XY pad (they move the track's own macros, the ones the SOUND page shows), and Cmd+G / Cmd+D write "good" / "bad" lines with every position and value to `lab-notes.txt`. Off unless asked for. Everything about it, the file format and the loop: [MACROLAB.md](MACROLAB.md).
 
 ## Differences from the device
 
@@ -232,6 +233,6 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 - `dirfs.h`: `pg::FileSystem` over the projects directory.
 - `display.cpp`: integer nearest-neighbour scaling, HiDPI aware; uploads only the rows the UI changed.
 - `script.cpp`: `--script`, which pushes SDL keyboard events so a script takes the same path as real keys.
-- `lab.cpp`: the macro lab (`--lab`): polls the folder, parses with `pg::macro`, applies the active sets through `Ui::setTrackParam`, draws its panel, writes the marks.
+- `lab.cpp`: the macro lab (`--lab`): polls the folder, parses with `pg::macro`, is the instrument library's overlay (`pg::macro::LibraryOverlay`), moves the track's instrument and macros through `Ui::setInstrument` / `Ui::setMacro`, draws its panel, writes the marks.
 
 Tests: `test_desktop_keymap` (map and key logic), `test_desktop_files` (desktop files == device files, session round trip, ghost filter switch), `test_desktop_listen` (the capture conversion for every format, channel count and callback cut; the rate match against two simulated clocks, an hour at +500 and -500 ppm with callback jitter, variable blocks, 32 kHz, the Mac's burst patterns behind sdl2-compat, f32 mono 48 kHz, s32 32 kHz in odd sizes, 6-channel 96 kHz, a pattern that grows while playing, unplug and an output stall: no underrun, overflow or glitch, latency bounded, and a fit of the output: the device's frequency, its level, THD+N below -60 dB) and `test_desktop_app` (`host/app/tests/desktop_check.py`: the app headless under SDL's dummy drivers; its screenshots must be pixel-identical to `ui_shot` for the same keys, also with the strip's controls and the Stems list used in between; the modifier lights; the F9 recording bit-identical to the offline engine; the session saved at quit and resumed; a saved file through the device's transfer protocol; Listen against a simulated device, recording and unplug included, the recording fitted by `listen_analyze` (frequency, level, THD+N) for several obtained specs and burst patterns, the `--listen-dump` file checked against what was delivered, and SDL's real capture path driven by SDL's disk driver reading a sine from a file; the Stems list end to end against `xfer_sim` and its error messages; the macro lab: macros moved by mouse reach the engine, a file rewritten while running is reloaded, a broken one reported and ignored, the marks written, `none` and a deleted file give the values back).

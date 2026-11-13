@@ -21,6 +21,9 @@
 //   copy      CopyTrack drops macro locks on another track.
 //   files     a project with instruments round-trips through pg::io and the
 //             engine binds it again after suspend / load / resume.
+//   stems     the offline bounce (host/common/bounce.h) plays the instrument:
+//             the bass stem follows a macro, and equals the stem of a CLASSIC
+//             project holding the derived values.
 #include <algorithm>
 #include <cstring>
 #include <fstream>
@@ -29,6 +32,7 @@
 #include <string>
 #include <vector>
 
+#include "common/bounce.h"
 #include "common/memfs.h"
 #include "itests/itest_util.h"
 #include "pg/io/project_io.h"
@@ -562,6 +566,59 @@ void testFiles() {
   }
 }
 
+// ---- stems ---------------------------------------------------------------------------------
+uint64_t bassStem(const Project& p) {
+  bounce::Options o;
+  o.pattern = 0;
+  o.loops = 1;
+  o.tailSec = 0.5f;
+  o.sampleRate = 44100.0f;
+  bounce::Plan plan;
+  std::string err;
+  if (!bounce::makePlan(p, o, plan, &err)) return 0;
+  bounce::Pass pass;
+  bounce::PassResult res;
+  uint64_t h = 1469598103934665603ull;
+  bounce::renderPass(
+      g_inst, p, o, plan, pass, 0,
+      [&](const bounce::Block& b) {
+        for (int i = 0; i < b.n; ++i) {
+          uint32_t u;
+          std::memcpy(&u, &b.track[kTrackBass][0][i], 4);
+          h = (h ^ u) * 1099511628211ull;
+        }
+      },
+      res, &err);
+  return h;
+}
+
+void testStems() {
+  setup();
+  static Project p;
+  p = g_inst.project();
+  bassPhrase(p);
+  const pm::MacroSet* acid = byName(kTrackBass, "ACID");
+  if (!acid) return;
+  setInstrumentId(p.tracks[kTrackBass], acid->id);
+  const uint8_t lo[4] = {20, 0, 0, 0}, hi[4] = {230, 0, 0, 0};
+  std::memcpy(p.tracks[kTrackBass].macro, lo, 4);
+  const uint64_t a = bassStem(p);
+  std::memcpy(p.tracks[kTrackBass].macro, hi, 4);
+  const uint64_t b = bassStem(p);
+  it::check(a != b, "the bass stem follows the macro");
+  // CLASSIC with the derived values stored: the same stem
+  static Project c;
+  c = p;
+  setInstrumentId(c.tracks[kTrackBass], 0);
+  uint8_t d[kParamsPerTrack];
+  derived(*acid, hi, d);
+  std::memcpy(c.tracks[kTrackBass].params, d, kSoundParams);
+  const uint8_t lvl = c.tracks[kTrackBass].params[kMixLevel];
+  pm::combineMixer(c.tracks[kTrackBass].params, d, g_def[kTrackBass], c.tracks[kTrackBass].params);
+  it::check(bassStem(c) == b, "instrument stem = CLASSIC stem with its values (level %d -> %d)", lvl,
+            c.tracks[kTrackBass].params[kMixLevel]);
+}
+
 }  // namespace
 
 int main() {
@@ -575,5 +632,6 @@ int main() {
   testOverlay();
   testCopy();
   testFiles();
+  testStems();
   return it::finish("itest_instrument");
 }

@@ -82,7 +82,8 @@ Order of work (owner, updated 2026-11-12):
    (end labels, readable macro names; CRACK's PITCH now really moves the body: the new warning
    found that a later plain set had undone it), VOYAGE (its last wave jump now covered). The
    other sets sound exactly as before (TICK, BOOM, WOOD, ALLOY got end labels). Not built, not
-   designed out: loading sets on the device, device UI, project format changes, smoothing.
+   designed out: loading sets on the device, device UI, project format changes, smoothing
+   (the device UI and the project format are stage A, below; sets come from flash, not files).
    Found on the way: the engine's delay and reverb returns produce subnormal floats on default
    settings (one-pole states decaying in silence); harmless on the host so far, not checked on
    the ESP32-S3.
@@ -96,6 +97,36 @@ Order of work (owner, updated 2026-11-12):
    likely audible as stepping on slow, narrow sweeps (not listened to: WAVs in build/zipper/).
    So the redesign needs finer internal values or a longer slew for swept parameters, and cheap
    per-quantum updates in the drums.
+   STAGE A DONE (2026-11-13, branch of the instruments worktree): INSTRUMENTS ARE REAL. A macro
+   set is an instrument; every track slot holds one; its four macros replace the pages of bare
+   sound parameters on the device and the desktop. Built: the 24 sets in macros/ are compiled by
+   host/tools/macro_builtin into a checked-in const table (lib/pg/src/pg/macro/builtin_data.cpp,
+   flash, used in place; order and first-instrument choice in macros/builtin.txt; ctest
+   check_builtin fails when stale; regenerate: `cmake --build build/host --target macro_builtin
+   && build/host/macro_builtin`); projects name an instrument by a 16-bit id (FNV-1a of
+   voice:NAME, folded) plus four macro positions 0..255, in TrackSettings' reserved bytes
+   (Project unchanged in size, kProjectVersion 2; a version-1 project and the demos are CLASSIC
+   and sound bit-identical); the engine derives the sound parameters on the audio thread on a
+   change (and at a step for macro locks, lockParam 33..36), the mixer rows stay the player's
+   (instrument level = gain trim, sends add; pan and duck the player's); an unknown id plays the
+   values it was saved with; the SOUND view is the instrument page (macro key pairs z/x c/v b/n
+   m/, so two macros move at once, ; . 9 step through the list with an overlay, CTRL+Z undoes a
+   run of changes, CLASSIC page invites a choice; new projects start with the first instrument
+   of every track; SHIFT+[ ] moves the bass's macro 1); the parameter pages remain behind
+   developer mode (desktop --dev, implied by --lab); the lab is the library's overlay (a .pgm
+   replaces the built-in of its voice and name while the app runs, others are extra instruments)
+   and its sliders move the track's own macros. Details: docs/MACROLAB.md "Instruments",
+   docs/UX.md 10.3. Host-verified only (itest_instrument, itest_ui_instrument, itest_golden,
+   test_desktop_lab, test_desktop_app part 8); not run on the device or the owner's Mac yet.
+   LATER STAGES (not built, not designed out): (B) finer-than-7-bit, smoothed parameter motion
+   for what macros sweep (MACROLAB.md "What a moving parameter sounds like"), cheap per-quantum
+   updates in the drums; (C) "motion": per-note values of all four macros with glide (see
+   Motion below; the step's single macro lock is the seed of it); (D) tilt as a macro control;
+   (E) a polished, reactive picture on the instrument page (enum jump ticks, end labels as
+   pictures); (F) a sampler instrument; (G) converting the demos from CLASSIC to instruments.
+   STANDING RULE (owner, 2026-11-13): development does not wait for macro assessment. The owner
+   will request macro changes continually and there will be no single final assessment; a
+   retuned .pgm is regenerated into the table and committed like any other change.
 4. LATER: a design sprint on the flow between desktop and device, giving each its own UX.
 ON HOLD, do not build: MIDI controller input. The owner is not convinced they want it (it
 distracts from the intended flow) and it needs more design than a quick proposal.

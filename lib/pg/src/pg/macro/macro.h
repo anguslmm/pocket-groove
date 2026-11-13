@@ -227,6 +227,10 @@ inline uint8_t startByte(const Macro& m) { return uint8_t((int(m.start1000) * kP
 // the player at the defaults the result is exactly what the instrument
 // evaluated to. out may be player. Only indices 24..28 are written.
 void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out);
+// The same with inst and def holding only the five mixer rows (level, pan, delay,
+// reverb, duck: kMixRows entries), as the engine keeps them.
+constexpr int kMixRows = 5;
+void combineMixerRows(const uint8_t* player, const uint8_t* instRows, const uint8_t* defRows, uint8_t* out);
 
 // The instrument library: the built-in sets (generated from macros/ into
 // builtin_data.cpp by host/tools/macro_builtin, in the order macros/builtin.txt

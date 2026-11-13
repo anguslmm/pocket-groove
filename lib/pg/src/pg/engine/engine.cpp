@@ -77,11 +77,11 @@ struct TrackRt {
   uint16_t boundId;                   // the Project id it was bound from
   uint8_t bindValid;                  // 0: (re)bind at the next quantum
   uint8_t evPos[kTrackMacros];        // the positions the derived values came from
-  uint8_t iMix[kParamsPerTrack];      // the instrument's evaluated mixer rows (24..28 used)
+  uint8_t iMix[macro::kMixRows];      // the instrument's evaluated mixer rows (level .. duck)
   uint8_t lkSound[kSoundParams];      // with a macro lock in scope: the sound params with that macro at the lock
-  uint8_t lkMix[kParamsPerTrack];     // ... and its mixer rows (24..28 used)
+  uint8_t lkMix[macro::kMixRows];     // ... and its mixer rows
   uint8_t lkValid;                    // lkSound / lkMix hold the current macro lock's evaluation
-  uint8_t dMix[kParamsPerTrack];      // mixer defaults (24..28), the reference of the mixer rule
+  uint8_t dMix[macro::kMixRows];      // mixer defaults, the reference of the mixer rule
   // ---- params ----
   uint8_t eff[kParamsPerTrack];       // effective params this quantum (p-lock applied)
   uint8_t mute;                       // cached Project mute
@@ -361,8 +361,8 @@ void State::cacheVoiceRanges(int t) {
     r.pMax[i] = info ? info->max : 255;
     if (info) r.pHas |= 1u << i;
   }
-  for (int i = kSoundParams; i < kParamsPerTrack; ++i) {
-    const ParamInfo* info = mixParamInfo(t, i);
+  for (int i = 0; i < macro::kMixRows; ++i) {
+    const ParamInfo* info = mixParamInfo(t, kMixLevel + i);
     r.dMix[i] = info ? info->def : 0;
     r.iMix[i] = r.lkMix[i] = r.dMix[i];
   }
@@ -971,7 +971,7 @@ void State::buildEff(int t) {
     const bool macroLock = isMacroLock(r.lockParam) && r.lkValid;
     if (macroLock) std::memcpy(r.eff, r.lkSound, kSoundParams);
     if (r.lockParam > kSoundParams && r.lockParam <= kParamsPerTrack) r.eff[r.lockParam - 1] = r.lockValue;
-    macro::combineMixer(r.eff, macroLock ? r.lkMix : r.iMix, r.dMix, r.eff);
+    macro::combineMixerRows(r.eff, macroLock ? r.lkMix : r.iMix, r.dMix, r.eff);
   }
   r.mute = ts.mute;
 }
@@ -1028,7 +1028,7 @@ void State::refreshInstrument(int t, bool rebind) {
     if (!((r.pHas >> i) & 1u)) continue;           // unused voice slots stay 0 (sanitised)
     if (ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
   }
-  for (int i = kMixLevel; i <= kMixDuck; ++i) r.iMix[i] = out[i];
+  for (int i = 0; i < macro::kMixRows; ++i) r.iMix[i] = out[kMixLevel + i];
   if (changed) bump();
   if (isMacroLock(r.lockParam)) evalLock(t);
 }
@@ -1043,7 +1043,7 @@ void State::evalLock(int t) {
   uint8_t out[kParamsPerTrack];
   evalInstrument(t, m, r.lockValue, out);
   for (int i = 0; i < kSoundParams; ++i) r.lkSound[i] = ((r.pHas >> i) & 1u) ? out[i] : 0;
-  for (int i = kMixLevel; i <= kMixDuck; ++i) r.lkMix[i] = out[i];
+  for (int i = 0; i < macro::kMixRows; ++i) r.lkMix[i] = out[kMixLevel + i];
   r.lkValid = 1;
 }
 

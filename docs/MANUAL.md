@@ -61,7 +61,9 @@ Pressing a pad plays the track and *selects* it. The selected track is the curso
 
 **Notes.** The bottom row `z` `x` `c` `v` `b` `n` `m` `,` plays eight notes of the project scale on the selected synth track (default A minor in the demos, C minor in a new project), so you can't play a wrong note. On a drum track the same keys play the drum at eight velocities.
 
-**One focused value.** `-` and `=` always change one value, the *focus*, shown in the status-bar chip (for example `BASS CUT 44`). You choose it in SOUND, MIX or FX; it stays on `-`/`=` when you go back home. Tap = one step, hold = sweep (it speeds up), `shift` = 8 steps at a time, `-` and `=` together = back to the default.
+**Instruments.** Every track plays an *instrument*: a character with up to four *macros*, the controls that shape it (OPEN, BITE, DARK-BRIGHT ...). SOUND (`9`) is where you choose the track's instrument and move its macros (4.4). A new project starts with an instrument on every track; the demos and projects from before instruments play their *classic* sound until you pick one.
+
+**One focused value.** `-` and `=` always change one value, the *focus*, shown in the status-bar chip (for example `BASS OPEN 42%`). You choose it in SOUND, MIX or FX; it stays on `-`/`=` when you go back home. Tap = one step, hold = sweep (it speeds up), `shift` = 8 steps at a time, `-` and `=` together = back to the default.
 
 **Views.** GROOVE is home. Five more views each have one key that never changes: `9` SOUND, `0` MIX, `o` FX, `p` SONG, `\` PROJECT. `` ` `` always goes home. Pressing a view key while already in that view moves to its next page, row or tab.
 
@@ -83,7 +85,7 @@ Pressing a pad plays the track and *selects* it. The selected track is the curso
 
 **Edits go to the playing pattern.** When stopped, that's the pattern last played or selected with `opt`+step. To edit another pattern, select it with `opt`+step (while stopped it switches at once).
 
-**Sound settings belong to the project,** not the pattern: changing the bass sound changes it in all 16 patterns. To change a sound for one step only, use a parameter lock (chapter 10).
+**Sound settings belong to the project,** not the pattern: changing the bass's instrument or a macro changes it in all 16 patterns. To change a macro for one step only, use a lock (chapter 10).
 
 ---
 
@@ -199,23 +201,24 @@ Everything else works as in GROOVE (pads select and play, `;` `.` octave, `l` ch
 
 **Live record** is record mode while playing (`enter` while playing, solid red dot). Pads record onto their own track, notes onto the selected track, each quantised to the nearest step. On BASS and LEAD a note pressed while the previous is still held records a slide, the time you hold a note becomes its gate, and `shift`+note records an accent. Step keys still toggle steps.
 
-### 4.4 SOUND (`9`)
+### 4.4 SOUND (`9`): the instrument
 
-![SOUND key map](manual/keys-sound.png)
-![SOUND view of the bass, page 1](manual/m-sound-bass.png)
+![The bass's instrument POLES](ux/instrument-labels.png)
+
+The page shows the selected track's instrument: its name, a line about it, and its macros as four large controls. Each control sits above its own pair of keys on the bottom row, down on the left, up on the right: `z` `x` macro 1, `c` `v` macro 2, `b` `n` macro 3, `m` `,` macro 4. Words at the ends of a control (DARK / BRIGHT) say what each end does.
 
 | Key | Action |
 |---|---|
-| notes | Focus parameter column 1-8 of the current page (the key letter is printed under each column). |
-| `9` again, `.` | Next page (up to 3 pages of 8). |
-| `;` | Previous page. |
-| `-` `=` | Change the focused parameter. |
-| pads | Select another track and show its sound (and hear it). Each track remembers its own focused parameter. |
-| steps | Tap toggles a step (the strip at the bottom shows them). Hold + `-`/`=` = parameter lock (chapter 10). While holding, a note key moves the focus first; `del` removes the lock. |
+| `z` `x` `c` `v` `b` `n` `m` `,` | Move a macro down / up. Tap = a small step, hold = sweep (it speeds up), `shift` = big steps. Both keys of a pair = the instrument's default. Two macros can move at once: hold a key of each. The macro you moved is the focus, so `-`/`=` keep moving it from any view. |
+| `.`, `9` again | Next instrument for this track: you hear it at once, a list shows where you are. |
+| `;` | Previous instrument. |
+| `ctrl`+`z` | Right after changing instruments: back to what the track had (a run of `.` `.` `.` is one step back), again: forward. |
+| `-` `=` | The focused macro. |
+| pads | Select another track and show its instrument (and hear it). |
+| steps | Tap toggles a step (the strip at the bottom shows them). Hold + a macro key (or `-`/`=`) = lock that macro on that step (chapter 10); `del` removes the lock. |
 | `'` | Which 16 steps the strip shows. |
-| `l` | Nothing. |
 
-Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE.
+A track with no instrument shows **CLASSIC**: it plays its classic sound (the demos, older projects), and `.` or `9` picks its first instrument, `;` its last. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
 ### 4.5 MIX (`0`)
 
@@ -503,7 +506,7 @@ The bass drops about 16 dB at each kick and swells back over half a beat. To pus
 
 ## 9. Sound design recipes
 
-Values are as shown on screen; a raw value in brackets where the screen shows something else (`-`/`=` move the raw value). Anything not listed stays at its default (chapter 19). To start from the defaults, press `-` and `=` together on each parameter, or begin a new project with `ctrl`+`n`. Page numbers are SOUND pages (`9` again or `.` for the next).
+These recipes set the bare sound parameters. Since instruments, the device shows instruments and their macros instead (4.4); the parameters themselves can still be set in the desktop app's developer mode (`--dev`), on a CLASSIC track, and the demos are built from them. Values are as shown on screen; a raw value in brackets where the screen shows something else (`-`/`=` move the raw value). Anything not listed stays at its default (chapter 19). Page numbers are the developer mode's SOUND pages.
 
 ### Bass
 
@@ -587,27 +590,29 @@ MIN or 5TH chords. Open CUT from 24 to about 100 over several bars (live, or wit
 
 ## 10. Parameter locks
 
-A parameter lock (p-lock) gives one step its own value for one parameter: a brighter bass note, a longer clap, a delay throw on one stab. **One lock per step.** The lock holds from that step until the next step of the same track that plays.
+A lock gives one step its own value for one macro of the track's instrument (or one MIX value): a brighter bass note, a longer clap, a delay throw on one stab. **One lock per step.** The lock holds from that step until the next step of the same track that plays.
 
 **Lock from SOUND, MIX or FX**
 
-1. Go to the view and focus the parameter (SOUND: note key for the column; MIX: row key; FX DUCK tab: a pad for its DUCK amount).
+1. Go to the view (SOUND: the instrument page; MIX: choose the row; FX DUCK tab: a pad for its DUCK amount).
 2. Hold the step key. The header turns amber (`◆LOCK`).
-3. Press `-`/`=`. The lock starts from the current value. The bar turns amber and a white tick marks the unlocked value.
-4. While still holding, a note key moves the focus to another parameter; locking that one replaces the old lock (toast `LOCK RES REPLACES CUT`).
+3. SOUND: press the macro's key (or `-`/`=` for the focused one). The lock starts from the macro's current position; both keys of the pair lock its default. The control turns amber and a white tick marks the unlocked position. MIX: `-`/`=`.
+4. While still holding, moving another macro replaces the lock (toast `LOCK BITE REPLACES OPEN`).
 5. Release the step.
 
-![Locking the bass cutoff on step 1](manual/m-sound-lock.png)
+![Locking the bass's OPEN on step 4](ux/instrument-lock.png)
+
+On a CLASSIC track the locks are of bare parameters, as before instruments (developer mode); on a track with an instrument such a lock is kept but ignored, and the step edit's LOCK field shows it as `OFF`.
 
 You can also start in GROOVE: hold the step, then press `9` (or `0`) without letting go.
 
-**From STEP EDIT**: hold the step, press `k` (LOCK), `-`/`=`. With no lock yet, this locks the track's focused SOUND parameter (the one you last chose in SOUND).
+**From STEP EDIT**: hold the step, press `k` (LOCK), `-`/`=`. With no lock yet, this locks the track's focused macro (the one you last moved in SOUND).
 
 **Remove a lock**: hold the step and press `del`, or `-` and `=` together.
 
 **Seeing locks**: ◆ on the step pad; an amber top edge on the step strip in SOUND and MIX; while the step is held, the locked value in amber.
 
-Globals (everything in FX except the DUCK amounts) can't be locked. A bass step with a CUT lock ignores the bass cutoff sweep (`shift`+`[` `]`) on that step.
+Globals (everything in FX except the DUCK amounts) can't be locked. A bass step that locks macro 1 ignores the bass sweep (`shift`+`[` `]`) on that step.
 
 ---
 
@@ -629,7 +634,7 @@ Globals (everything in FX except the DUCK amounts) can't be locked. A bass step 
 
 ![DJ filter: high-pass at 30](manual/m-djfilter.png)
 
-**Bass cutoff sweep.** `shift`+`[`/`]` sweeps the bass cutoff the same way, from any view; `shift`+both returns it to where you started. Steps with a CUT lock ignore it (in the factory demos most bass steps have one: see chapter 9).
+**Bass sweep.** `shift`+`[`/`]` sweeps the bass's macro 1 the same way (OPEN on ACID, the instrument a new project starts with), from any view; `shift`+both returns it to where you started. On a CLASSIC bass (the factory demos) it sweeps the cutoff, as before instruments; steps with a CUT lock ignore it (in the demos most bass steps have one: see chapter 9). A step that locks macro 1 ignores it the same way.
 
 **Erase.** Hold `del` in GROOVE while playing: the selected track's steps are cleared as the playhead passes. `ERASE` shows in the footer. `ctrl`+`z` brings them back.
 
@@ -921,7 +926,7 @@ A second firmware, `cardputer-adv-usb`, makes the Cardputer a USB audio interfac
 
 ## 19. Parameter reference
 
-Generated from the code by `host/tools/param_reference.cpp` (regenerate after a default changes: `build/docs/param_reference --splice docs/MANUAL.md`, run from the repository root). The descriptions come from `docs/manual/param_notes.txt`.
+Generated from the code by `host/tools/param_reference.cpp` (regenerate after a default changes: `build/docs/param_reference --splice docs/MANUAL.md`, run from the repository root). The descriptions come from `docs/manual/param_notes.txt`. These are the bare sound parameters an instrument's macros move (and what a CLASSIC track plays); the device no longer shows them, the desktop app's developer mode (`--dev`, `--lab`) does, on the SOUND pages named below.
 
 **PERC models.** The PERC knobs mean different things per model:
 

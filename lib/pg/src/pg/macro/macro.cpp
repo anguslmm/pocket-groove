@@ -227,17 +227,22 @@ uint8_t posToByte(float p) {
   return uint8_t(int(x));
 }
 
-void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out) {
+void combineMixerRows(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out) {
   auto clamp127 = [](int v) { return uint8_t(v < 0 ? 0 : (v > 127 ? 127 : v)); };
-  const int d = def[kMixLevel];
-  const int lvl = d > 0 ? (int(player[kMixLevel]) * int(inst[kMixLevel]) + d / 2) / d : player[kMixLevel];
-  const uint8_t dly = clamp127(int(player[kMixDelaySend]) + int(inst[kMixDelaySend]) - int(def[kMixDelaySend]));
-  const uint8_t rev = clamp127(int(player[kMixReverbSend]) + int(inst[kMixReverbSend]) - int(def[kMixReverbSend]));
+  constexpr int L = kMixLevel - kMixLevel, D = kMixDelaySend - kMixLevel, R = kMixReverbSend - kMixLevel;
+  const int d = def[L];
+  const int lvl = d > 0 ? (int(player[kMixLevel]) * int(inst[L]) + d / 2) / d : player[kMixLevel];
+  const uint8_t dly = clamp127(int(player[kMixDelaySend]) + int(inst[D]) - int(def[D]));
+  const uint8_t rev = clamp127(int(player[kMixReverbSend]) + int(inst[R]) - int(def[R]));
   out[kMixLevel] = clamp127(lvl);
   out[kMixPan] = player[kMixPan];
   out[kMixDelaySend] = dly;
   out[kMixReverbSend] = rev;
   out[kMixDuck] = player[kMixDuck];
+}
+
+void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out) {
+  combineMixerRows(player, inst + kMixLevel, def + kMixLevel, out);
 }
 
 }  // namespace macro
