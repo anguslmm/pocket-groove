@@ -162,6 +162,12 @@ int Lab::errors() const {
   return n;
 }
 
+int Lab::warnings() const {
+  int n = 0;
+  for (const File& f : files_) n += f.good ? f.warnCount : 0;
+  return n;
+}
+
 void Lab::scanDir(const std::string& dir, int depth) {
   if (depth > 6) return;
   DIR* d = opendir(dir.c_str());
@@ -230,9 +236,10 @@ void Lab::load(File& f, bool first) {
   const uint32_t h = fnv(text);
   if (h == f.hash && (f.good || !f.err.empty())) return;   // same content as last time
   f.hash = h;
-  static pm::MacroSet fresh;   // 2.4 KB; the main thread only
+  static pm::MacroSet fresh;   // 1.9 KB; the main thread only
   pm::ParseError e;
-  if (!pm::parse(text.data(), text.size(), pt_, &fresh, &e)) {
+  pm::Warnings w;
+  if (!pm::parse(text.data(), text.size(), pt_, &fresh, &e, &w)) {
     char b[160];
     std::snprintf(b, sizeof(b), "%d: %s", e.line, e.msg);
     f.err = b;
@@ -249,7 +256,17 @@ void Lab::load(File& f, bool first) {
   f.goodHash = h;
   f.good = true;
   f.err.clear();
-  f.label = f.set.name[0] ? std::string(f.set.name) : upperStr(baseName(f.path).substr(0, baseName(f.path).size() - 4));
+  f.warns.clear();
+  f.warnCount = w.count;
+  for (int k = 0; k < w.count && k < pm::kMaxWarnings; ++k) {
+    char b[160];
+    std::snprintf(b, sizeof(b), "%d: %s", w.w[k].line, w.w[k].msg);
+    f.warns.push_back(b);
+    std::printf("[lab] %s:%s (warning)\n", f.path.c_str(), b);
+  }
+  if (w.count > pm::kMaxWarnings)
+    std::printf("[lab] %s: %d more warning(s)\n", f.path.c_str(), w.count - pm::kMaxWarnings);
+  f.label =f.set.name[0] ? std::string(f.set.name) : upperStr(baseName(f.path).substr(0, baseName(f.path).size() - 4));
   for (int t = 0; t < pg::kNumTracks; ++t)
     if (tr_[t].path == f.path) reconcile(t, old, had);
   if (!first) {
@@ -297,7 +314,7 @@ void Lab::activate(int track, int idx) {
   for (int p = 0; p < pg::kParamsPerTrack; ++p) t.under[p] = uint8_t(host_->paramValue(track, p));
   const auto it = saved_.find(path);
   for (int m = 0; m < set.numMacros; ++m) {
-    t.pos[m] = set.macros[m].start;
+    t.pos[m] = set.macros[m].start();
     if (it != saved_.end())
       for (int k = 0; k < it->second.n; ++k)
         if (it->second.names[k] == set.macros[m].name) t.pos[m] = it->second.pos[k];
@@ -334,7 +351,7 @@ void Lab::reconcile(int track, const pm::MacroSet& old, bool hadOld) {
   const pm::MacroSet& set = f->set;
   float pos[pm::kMaxMacros];
   for (int m = 0; m < set.numMacros; ++m) {
-    pos[m] = set.macros[m].start;
+    pos[m] = set.macros[m].start();
     if (hadOld) {
       const int k = old.findMacro(set.macros[m].name);
       if (k >= 0) pos[m] = t.pos[k];
@@ -661,10 +678,14 @@ void Lab::draw(uint8_t* px) {
   if (active) std::snprintf(setText, sizeof(setText), "%s  %d/%d", f->label.c_str(), cur, int(sets.size()));
   else std::snprintf(setText, sizeof(setText), "NONE  0/%d", int(sets.size()));
   g.textC(W / 2, kSetY + 2, setText, active ? WHITE : DIM);
-  g.text(4, kPathY, fitEnd(active ? f->path : sets.empty() ? "no set for this track" : "bare parameters", 29).c_str(),
-         DIM);
+  // under the name: the set's about line ("family: ..."), else its file
+  if (active && f->set.about[0]) g.text(4, kPathY, fitStart(upperStr(f->set.about), 29).c_str(), TEXT);
+  else
+    g.text(4, kPathY, fitEnd(active ? f->path : sets.empty() ? "no set for this track" : "bare parameters", 29).c_str(),
+           DIM);
 
-  // status: typing > an error in this set > any error > a passing notice > the keys
+  // status: typing > an error in this set > any error > a passing notice > a warning of this
+  // set > p-locks > the keyboard macro's description > the keys
   std::string s1, s2;
   uint8_t sc = DIM;
   const File* errFile = nullptr;
@@ -683,16 +704,28 @@ void Lab::draw(uint8_t* px) {
   } else if (!status_.empty()) {
     s1 = fitStart(status_, 29);
     sc = statusColour_;
+  } else if (active && !f->warns.empty()) {
+    // amber, "line: reason" of the active set (the terminal has every warning in full)
+    std::string m = f->warns[0];
+    if (f->warnCount > 1) m = "(" + std::to_string(f->warnCount) + ") " + m;
+    s1 = fitStart(m, 29);
+    s2 = m.size() > 29 ? fitStart(m.substr(29), 29) : std::string();
+    sc = AMBER;
   } else if (active && (host_->lockedMask(track) & t.owned)) {
     s1 = "CYAN: P-LOCKED ON STEPS OF";
     s2 = "THIS PATTERN (LOCKS WIN)";
     sc = CYAN;
+  } else if (active && t.focus < nm && f->set.macros[t.focus].desc[0]) {
+    const std::string m = std::string(f->set.macros[t.focus].name) + ": " + f->set.macros[t.focus].desc;
+    s1 = fitStart(m, 29);
+    s2 = m.size() > 29 ? fitStart(m.substr(29), 29) : std::string();
+    sc = TEXT;
   } else {
     s1 = "CMD+ARROWS SET/MACRO, 1-4";
     s2 = "CMD+G GOOD  CMD+D BAD";
   }
   g.text(4, kStatusY, s1.c_str(), sc);
-  g.text(4, kStatusY + 8, s2.c_str(), sc == RED ? uint8_t(RED) : uint8_t(DIM));
+  g.text(4, kStatusY + 8, s2.c_str(), sc == RED || sc == AMBER || sc == TEXT ? sc : uint8_t(DIM));
 
   // sliders
   for (int m = 0; m < pm::kMaxMacros; ++m) {
@@ -702,10 +735,19 @@ void Lab::draw(uint8_t* px) {
       continue;
     }
     const bool foc = m == t.focus;
-    g.text(4, y + 2, f->set.macros[m].name, foc ? AMBER : TEXT);
+    const pm::Macro& mac = f->set.macros[m];
+    g.text(4, y + 2, mac.name, foc ? AMBER : TEXT);
     g.rect(kBarX, y + 2, kBarW, kBarH, RAISED);
     const int fill = int(t.pos[m] * float(kBarW - 1) + 0.5f);
     g.rect(kBarX, y + 2, fill + 1, kBarH, foc ? AMBER_D : CYAN_D);
+    // the end labels inside the bar, at their ends
+    if (mac.lo[0]) g.text(kBarX + 2, y + 2, upperStr(mac.lo).c_str(), TEXT);
+    if (mac.hi[0]) g.textR(kBarX + kBarW - 3, y + 2, upperStr(mac.hi).c_str(), TEXT);
+    // a tick under the bar where an enum parameter jumps (the other macros where they are)
+    float jp[16];
+    uint8_t jparam[16];
+    const int nj = pm::enumJumps(f->set, pt_, m, t.pos, t.under, jp, jparam, 16);
+    for (int k = 0; k < nj; ++k) g.rect(kBarX + int(jp[k] * float(kBarW - 1) + 0.5f), y + 10, 1, 2, AMBER);
     g.rect(kBarX + fill - 1, y + 1, 3, kBarH + 2, WHITE);
     g.textR(W - 3, y + 2, posText(t.pos[m]).c_str(), TEXT);
   }
@@ -716,6 +758,17 @@ void Lab::draw(uint8_t* px) {
   g.rect(kPadX + kPadS / 2, kPadY, 1, kPadS, RAISED);
   g.rect(kPadX, kPadY + kPadS / 2, kPadS, 1, RAISED);
   if (nm > 0) {
+    // the axes' end labels: X along the bottom edge, Y up the left edge
+    const pm::Macro& mx = f->set.macros[t.axisX];
+    // (the bottom row holds 10 characters with a gap: the low label gets up to 5, the high one the rest)
+    const std::string xlo = fitStart(upperStr(mx.lo), 5), xhi = fitStart(upperStr(mx.hi), 10 - xlo.size());
+    if (mx.lo[0]) g.text(kPadX + 1, kPadY + kPadS - 8, xlo.c_str(), DIM);
+    if (mx.hi[0]) g.textR(kPadX + kPadS - 2, kPadY + kPadS - 8, xhi.c_str(), DIM);
+    if (nm > 1 && t.axisY != t.axisX) {
+      const pm::Macro& my = f->set.macros[t.axisY];
+      if (my.hi[0]) g.text(kPadX + 1, kPadY + 1, upperStr(my.hi).c_str(), DIM);
+      if (my.lo[0]) g.text(kPadX + 1, kPadY + kPadS - 17, upperStr(my.lo).c_str(), DIM);
+    }
     int x = 0, y = 0;
     padPoint(t.pos[t.axisX], t.axisY != t.axisX ? t.pos[t.axisY] : 0.5f, &x, &y);
     g.rect(x - 1, y - 1, 3, 3, AMBER);

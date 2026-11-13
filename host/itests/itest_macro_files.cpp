@@ -9,19 +9,27 @@
 //   3. every set evaluated over a grid of macro positions stays inside every
 //      parameter's range, and owns exactly what it names;
 //   4. the sets together use every feature (base patch, add, mul, by, smooth,
-//      step on an enum, a non-monotonic curve, a mixer row, a start position),
+//      step on an enum, a non-monotonic curve, a mixer row, a start position,
+//      a morph, end labels, a curve longer than model v1 allowed),
 //      there is a set for every track, one bass macro drives both cutoff and
 //      resonance and one lead macro both vibrato and decay (the two pairings
 //      the owner named);
 //   5. every set has a name, set names are unique per track, and every file
 //      starts with its comment header, whose first line names the family
-//      ("# NAME -- family: ...", see macros/INDEX.md).
+//      ("# NAME -- family: ...", see macros/INDEX.md); that line is the set's
+//      about line (the parser keeps "family: ..." in MacroSet::about);
+//   6. no set loads with a warning, a loaded set fits in 2 KB, and the time one
+//      evaluation takes on this host is printed per set.
 // That every set also SOUNDS sane (no silent, clipping or NaN point) is the
 // macro_audit test (host/tools/macro_audit.cpp).
 #include <dirent.h>
 #include <sys/stat.h>
 
+#include <strings.h>
+
 #include <cctype>
+#include <chrono>
+#include <cstring>
 #include <set>
 #include <string>
 #include <vector>
@@ -36,6 +44,8 @@ namespace {
 
 pg::Instrument g_inst;
 ParamTable g_pt;
+double g_worstNs = 0.0;
+unsigned g_sink = 0;
 
 void listFiles(const std::string& dir, std::vector<std::string>* out) {
   DIR* d = opendir(dir.c_str());
@@ -109,7 +119,7 @@ bool sameSet(const MacroSet& a, const MacroSet& b) {
 
 struct Features {
   bool base = false, add = false, mul = false, by = false, smooth = false, enumStep = false, nonMono = false,
-       mixer = false, start = false;
+       mixer = false, start = false, morph = false, labels = false, longCurve = false;
   bool track[kNumTracks] = {};
   bool cutReso = false, vibDecay = false;
 };
@@ -117,28 +127,36 @@ struct Features {
 void scan(const MacroSet& s, Features* f) {
   f->track[s.track] = true;
   f->base |= s.baseMask != 0;
+  f->morph |= s.numMorphs > 0;
   for (int i = 0; i < s.numMacros; ++i) {
     const Macro& m = s.macros[i];
-    f->start |= m.start != 0.0f;
+    f->start |= m.start1000 != 0;
+    f->labels |= m.lo[0] && m.hi[0];
     uint32_t drives = 0;
-    for (int j = 0; j < m.numTargets; ++j) {
-      const Target& t = m.targets[j];
+    for (int j = 0; j < m.n; ++j) {
+      const Target& t = s.target(i, j);
       drives |= 1u << t.param;
-      f->add |= t.op == Op::Add;
-      f->mul |= t.op == Op::Mul;
-      f->by |= t.by != kNoMacro;
-      f->smooth |= t.curve.interp == Interp::Smooth;
+      f->add |= t.op() == Op::Add;
+      f->mul |= t.op() == Op::Mul;
+      f->by |= t.by() != kNoMacro;
+      f->smooth |= t.interp() == Interp::Smooth;
       f->mixer |= t.param >= kSoundParams;
+      f->longCurve |= t.n > 8;   // more points than model v1 allowed
       const ParamInfo* in = g_pt.info[s.track][t.param];
-      f->enumStep |= in->fmt == ParamFormat::Enum && t.curve.interp == Interp::Step && t.curve.n > 2;
+      f->enumStep |= in->fmt == ParamFormat::Enum && t.interp() == Interp::Step && t.n > 2;
       int dir = 0;
-      for (int k = 1; k < t.curve.n; ++k) {
-        const float d = t.curve.val[k] - t.curve.val[k - 1];
+      for (int k = 1; k < t.n; ++k) {
+        const int32_t d = pointValMilli(s.points[t.first + k]) - pointValMilli(s.points[t.first + k - 1]);
         const int sd = d > 0 ? 1 : d < 0 ? -1 : 0;
         if (sd && dir && sd != dir) f->nonMono = true;
         if (sd) dir = sd;
       }
     }
+    for (int k = 0; k < s.numMorphs; ++k)
+      if (s.morphs[k].macro == i) {
+        const Patch& pa = s.patches[s.morphs[k].patch];
+        for (int e = 0; e < pa.n; ++e) drives |= 1u << s.patchValues[pa.first + e].param;
+      }
     if (s.track == kTrackBass && (drives & (1u << bass::kCutoff)) && (drives & (1u << bass::kReso))) f->cutReso = true;
     if (s.track == kTrackLead && (drives & (1u << lead::kPVibrato)) && (drives & (1u << lead::kPDecay)))
       f->vibDecay = true;
@@ -167,11 +185,15 @@ int main() {
       while ((n = std::fread(b, 1, sizeof(b), fp)) > 0) text.append(b, n);
       std::fclose(fp);
     }
-    MacroSet s, s2;
+    static MacroSet s, s2;
     ParseError e;
-    const bool ok = parse(text.data(), text.size(), g_pt, &s, &e);
+    Warnings w;
+    const bool ok = parse(text.data(), text.size(), g_pt, &s, &e, &w);
     it::check(ok, "%s:%d: %s", path.c_str(), e.line, e.msg);
     if (!ok) continue;
+    // a set in macros/ loads without warnings (a deliberate override is marked 'override')
+    for (int k = 0; k < w.count && k < kMaxWarnings; ++k)
+      it::check(false, "%s:%d: warning: %s", path.c_str(), w.w[k].line, w.w[k].msg);
     char buf[8192];
     const size_t n = format(s, g_pt, buf, sizeof(buf));
     it::check(n > 0 && parse(buf, n, g_pt, &s2, &e) && sameSet(s, s2), "%s: format/parse round trip", path.c_str());
@@ -182,7 +204,7 @@ int main() {
     bool inRange = true, ownsRight = true;
     for (int m = 0; m < s.numMacros; ++m)
       for (int k = 0; k <= 8; ++k) {
-        for (int i = 0; i < s.numMacros; ++i) pos[i] = s.macros[i].start;
+        for (int i = 0; i < s.numMacros; ++i) pos[i] = s.macros[i].start();
         pos[m] = float(k) / 8.0f;
         const uint32_t owned = evaluate(s, g_pt, pos, under, out);
         ownsRight &= owned == s.ownedMask();
@@ -201,17 +223,45 @@ int main() {
     for (char& c : key) c = char(std::toupper(c));
     it::check(names.insert(key).second, "%s: set name %s is used twice on %s", path.c_str(), s.name,
               trackName(s.track));
+    // the header: the first line "# NAME -- family: ...", which is also the set's about line
+    // (the parser drops the "NAME -- " that repeats the name)
     const size_t eol = text.find('\n');
     const std::string first = text.substr(0, eol == std::string::npos ? text.size() : eol);
-    it::check(first.size() > 2 && first[0] == '#' && first.find(" -- family: ") != std::string::npos,
+    const std::string head = std::string("# ") + s.name + " -- ";
+    it::check(strncasecmp(first.c_str(), head.c_str(), head.size()) == 0,
               "%s: the first line is the header '# NAME -- family: ...' (got '%s')", path.c_str(), first.c_str());
+    it::check(std::strncmp(s.about, "family: ", 8) == 0, "%s: the about line names the family (got '%s')",
+              path.c_str(), s.about);
+    // cheap enough to evaluate at a few hundred Hz on the device's UI core
+    {
+      float p[kMaxMacros] = {0.1f, 0.4f, 0.6f, 0.9f};
+      const int kN = 20000;
+      unsigned sink = 0;
+      const auto t0 = std::chrono::steady_clock::now();
+      for (int i = 0; i < kN; ++i) {
+        p[i & 3] = float(i % 101) / 100.0f;
+        evaluate(s, g_pt, p, under, out);
+        sink += out[0];
+      }
+      const double ns =
+          double(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - t0).count()) / kN;
+      g_worstNs = ns > g_worstNs ? ns : g_worstNs;
+      g_sink += sink;
+      std::printf("  %-26s %3d targets %3d points %2d morphs %2d patch values %d trims  %4.0f ns/eval\n", path.c_str(),
+                  s.numTargets, s.numPoints, s.numMorphs, s.numPatchValues, s.numTrims, ns);
+    }
     std::printf("  %-26s %-5s %-12s %d macros, owns %d params\n", path.c_str(), trackName(s.track), s.name,
                 s.numMacros, __builtin_popcount(s.ownedMask()));
   }
-  it::check(f.base && f.add && f.mul && f.by && f.smooth && f.enumStep && f.nonMono && f.mixer && f.start,
+  it::check(f.base && f.add && f.mul && f.by && f.smooth && f.enumStep && f.nonMono && f.mixer && f.start && f.morph &&
+                f.labels && f.longCurve,
             "the sets use every feature (base %d add %d mul %d by %d smooth %d enum-step %d "
-            "non-monotonic %d mixer %d start %d)",
-            f.base, f.add, f.mul, f.by, f.smooth, f.enumStep, f.nonMono, f.mixer, f.start);
+            "non-monotonic %d mixer %d start %d morph %d end labels %d a curve over 8 points %d)",
+            f.base, f.add, f.mul, f.by, f.smooth, f.enumStep, f.nonMono, f.mixer, f.start, f.morph, f.labels,
+            f.longCurve);
+  std::printf("sizeof(MacroSet) = %zu bytes; slowest set: %.0f ns per evaluation on this host (%u)\n",
+              sizeof(MacroSet), g_worstNs, g_sink & 1u);
+  it::check(sizeof(MacroSet) <= 2048, "a loaded set fits in 2 KB (%zu bytes)", sizeof(MacroSet));
   for (int t = 0; t < kNumTracks; ++t) it::check(f.track[t], "a set for %s", trackName(t));
   it::check(f.cutReso, "a bass macro drives both cutoff and resonance");
   it::check(f.vibDecay, "a lead macro drives both vibrato and decay");

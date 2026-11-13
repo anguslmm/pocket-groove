@@ -392,13 +392,56 @@ void printPoint(const Point& p, const char* tag) {
               tag);
 }
 
+// A trim line per macro that would hold the loudness along its line (the others at
+// their start) at what it is at the macro's start position: the existing trims of
+// that macro plus the measured difference, at 0, 1/4 .. 1, rounded to 0.5 dB.
+// Printed ready to paste (in place of that macro's own trim lines) when the line
+// strays more than 2 dB from its start. Whether flat is right is the author's call:
+// a "more" macro may be meant to get louder.
+void suggestTrims(const MacroSet& s, const std::vector<Point>& pts, const std::vector<std::vector<size_t>>& lines,
+                  const float* start) {
+  for (int m = 0; m < s.numMacros; ++m) {
+    const std::vector<size_t>& L = lines[size_t(m)];
+    if (L.size() < 9) continue;
+    auto loudAt = [&](float x) {   // linear between the line's 1/8 points
+      const float f = x * 8.0f;
+      const int k = std::min(7, int(f));
+      return pts[L[size_t(k)]].loudDb + (pts[L[size_t(k + 1)]].loudDb - pts[L[size_t(k)]].loudDb) * (f - float(k));
+    };
+    const float ref = loudAt(start[m]);
+    float worst = 0.0f;
+    for (size_t k = 0; k < L.size(); ++k) worst = std::max(worst, std::fabs(pts[L[k]].loudDb - ref));
+    if (worst <= 2.0f) continue;
+    std::string line = "  trim";
+    bool boost = false;
+    for (int q = 0; q <= 4; ++q) {
+      const float x = float(q) / 4.0f;
+      float have = 0.0f;   // this macro's own trims (not scaled by another macro)
+      for (int k = 0; k < s.numTrims; ++k)
+        if (s.trims[k].macro == m && s.trims[k].by == kNoMacro)
+          have += curveAt(s.points + s.trims[k].first, s.trims[k].n, Interp(s.trims[k].interp), x);
+      float db = have - (pts[L[size_t(q * 2)]].loudDb - ref);
+      db = std::round(db * 2.0f) / 2.0f;
+      db = std::max(-float(kTrimMaxDb), std::min(float(kTrimMaxDb), db));
+      boost |= db > 2.0f;
+      char t[32];
+      std::snprintf(t, sizeof(t), " %g:%g", double(x), double(db == 0.0f ? 0.0f : db));
+      line += t;
+    }
+    std::printf("  suggest, macro %s (strays up to %.1f dB from its start's %.1f dB)%s; paste under it:\n%s\n",
+                s.macros[m].name, double(worst), double(ref),
+                boost ? " (a boost over +2 dB may hit the level's ceiling)" : "", line.c_str());
+  }
+}
+
 int auditFile(const std::string& path) {
   const std::string text = readFile(path);
-  MacroSet s;
+  static MacroSet s;
   ParseError e;
+  Warnings pw;
   Summary sm;
   sm.path = path;
-  if (!parse(text.data(), text.size(), g_pt, &s, &e)) {
+  if (!parse(text.data(), text.size(), g_pt, &s, &e, &pw)) {
     std::printf("%s:%d: %s\n", path.c_str(), e.line, e.msg);
     sm.hard = 1;
     g_sum.push_back(sm);
@@ -426,7 +469,7 @@ int auditFile(const std::string& path) {
     return pts.size() - 1;
   };
   float start[kMaxMacros] = {};
-  for (int i = 0; i < nm; ++i) start[i] = s.macros[i].start;
+  for (int i = 0; i < nm; ++i) start[i] = s.macros[i].start();
   std::vector<std::vector<size_t>> lines(static_cast<size_t>(nm));
   for (int m = 0; m < nm; ++m)
     for (int k = 0; k <= 8; k += g_o.hard ? 2 : 1) {   // --hard: 0, 0.25 .. 1 is enough
@@ -462,6 +505,17 @@ int auditFile(const std::string& path) {
   // hard checks
   std::vector<std::string> problems;
   char b[400];
+  // the parser's warnings (a plain set wiping out an earlier line, an unused patch)
+  for (int k = 0; k < pw.count && k < kMaxWarnings; ++k) {
+    std::snprintf(b, sizeof(b), "warn  %s:%d: %s", path.c_str(), pw.w[k].line, pw.w[k].msg);
+    problems.push_back(b);
+    sm.warn++;
+  }
+  if (pw.count > kMaxWarnings) {
+    std::snprintf(b, sizeof(b), "warn  %d more parser warning(s)", pw.count - kMaxWarnings);
+    problems.push_back(b);
+    sm.warn++;
+  }
   unsigned subWhere = 0;
   int subPoints = 0;
   for (const Point& p : pts) {
@@ -599,9 +653,25 @@ int auditFile(const std::string& path) {
   } else {
     std::printf("\n== %s  (%s %s, %d macros, %d points)\n", path.c_str(), sm.voice.c_str(), sm.name.c_str(), nm,
                 sm.points);
+    if (s.about[0]) std::printf("   %s\n", s.about);
     std::printf("    %-34s %6s %6s %6s %6s %6s %6s\n", "point", "peak", "loud", "rms", "centr", "hf", "decay");
     for (int m = 0; m < nm; ++m) {
-      std::printf("  %s alone:\n", s.macros[m].name);
+      const Macro& mac = s.macros[m];
+      if (mac.lo[0]) std::printf("  %s alone (%s .. %s):\n", mac.name, mac.lo, mac.hi);
+      else std::printf("  %s alone:\n", mac.name);
+      // where an enum parameter jumps along this line (the others at their start)
+      float jp[24];
+      uint8_t jparam[24];
+      const int nj = enumJumps(s, g_pt, m, start, g_defaults[track], jp, jparam, 24);
+      if (nj) {
+        std::string j = "    enum jumps:";
+        for (int k = 0; k < nj; ++k) {
+          char t[48];
+          std::snprintf(t, sizeof(t), " %s@%.3f", g_pt.info[track][jparam[k]]->name, double(jp[k]));
+          j += t;
+        }
+        std::printf("%s\n", j.c_str());
+      }
       for (size_t k = 0; k < lines[size_t(m)].size(); ++k) {
         const Point& p = pts[lines[size_t(m)][k]];
         char tag[32] = "";
@@ -625,6 +695,7 @@ int auditFile(const std::string& path) {
                 double(sm.loMin), double(sm.loMax), double(sm.loMax - sm.loMin), double(sm.pkMax),
                 double(sm.cenMin), double(sm.cenMax));
     std::printf("  travel (sum of neighbour distances along each macro): %s\n", sm.travel.c_str());
+    suggestTrims(s, pts, lines, start);
     for (const std::string& pr : problems) std::printf("  %s\n", pr.c_str());
     if (problems.empty()) std::printf("  no problems\n");
   }

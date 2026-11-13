@@ -4,7 +4,7 @@ A workbench for designing the instrument's macros: a few designed controls per v
 
 **edit a `.pgm` file (or `git pull`) → hear it in the desktop app, already playing → mark what feels good or bad → paste `lab-notes.txt` back.**
 
-It is a development tool, not a product feature: off unless the desktop app is started with `--lab`, a plain panel beside the device screen, nothing stored in projects. The macro model and the file parser are portable core code (`lib/pg/src/pg/macro/`, no heap, float only), so the device can load the same files later.
+It is a development tool, not a product feature: off unless the desktop app is started with `--lab`, a plain panel beside the device screen, nothing stored in projects. The macro model and the file parser are portable core code (`lib/pg/src/pg/macro/`, no heap, float only, 1.9 KB per loaded set), so the device can load the same files later: a macro set is meant to become the instrument a track slot holds.
 
 ## Start it
 
@@ -21,11 +21,12 @@ Run it from the repository root. With `--lab` the window is wider (the panel is 
 ```
   MACRO LAB                  BASS     <- the selected track (SHIFT+pad selects silently)
   [<]         ACID  1/2         [>]   <- the set on this track; < > step: none, then each set
-  macros/bass/acid.pgm                <- its file
-  RELOADED ACID.PGM                   <- what just happened, or an error (red), or the keys
-  OPEN  [=====|--------------]  0.40  <- one slider per macro; drag it. Amber = the keyboard's macro
-  BITE  [|-------------------]  0.00
-  WOBL  [|-------------------]  0.00
+  FAMILY: INTERACTION.                <- its about line (the file's first comment), else its file
+  RELOADED ACID.PGM                   <- what just happened, an error (red), a warning (amber),
+                                         the keyboard macro's description, or the keys
+  OPEN  [SHUT=|--------OPEN]  0.40    <- one slider per macro, its end labels inside; drag it.
+  BITE  [|-------------------]  0.00     Amber = the keyboard's macro. A tick under a slider:
+  WOBL  [|-------------------]  0.00     an enum parameter jumps there
   +---------+   CUT   57  RES   98    <- what the set drives, as the instrument has it now:
   |    .    |   ENV   68  DCY   44       amber value = edited by hand since (differs from the set)
   |         |   ...                      cyan name = p-locked on steps of this pattern
@@ -33,7 +34,7 @@ Run it from the repository root. With `--lab` the window is wider (the panel is 
   [X OPEN][Y BITE]  lab-notes.txt     <- the XY pad drives two macros; click X / Y to choose them
 ```
 
-The **XY pad** stands in for tilting the device: click or drag in it and the X macro follows left-right, the Y macro bottom-top. With one macro, X and Y are the same and X wins.
+The **XY pad** stands in for tilting the device: click or drag in it and the X macro follows left-right, the Y macro bottom-top. With one macro, X and Y are the same and X wins. The axes' end labels are written along the pad's bottom edge (X) and up its left edge (Y).
 
 ## Keys and mouse
 
@@ -64,7 +65,7 @@ None of these reach the instrument (Command never does; while a note is typed th
 
 The folder is polled four times a second (plain `stat`, any depth, files ending `.pgm`; hidden files are ignored). A changed, new or deleted file takes effect at once, while the app plays; the panel says `RELOADED ACID.PGM` and the terminal prints what happened. On a reload the macro positions are kept by macro name and every owned value is sent once. A deleted active set puts the track back to the values from before it.
 
-A file that does not parse **never half-loads**: the last good version stays active, and the panel shows the error in red with file, line and reason (`acid.pgm:7: unknown parameter 'cutof' for bass`) until the file is fixed; the terminal prints it too. A file that never parsed is not offered.
+A file that does not parse **never half-loads**: the last good version stays active, and the panel shows the error in red with file, line and reason (`acid.pgm:7: unknown parameter 'cutof' for bass`) until the file is fixed; the terminal prints it too. A file that never parsed is not offered. A **warning** (see the format) never stops a load: the terminal prints every warning of a file each time it loads, and while that set is active the status line shows its first one in amber (`23: BODY: plain set undoes line 17 (LO-HI); add 'override' if meant`, with the count in brackets when there are more).
 
 ## The marks file
 
@@ -79,55 +80,101 @@ time, GOOD/BAD, track, set name, file `@` the version (FNV-1a of the file's text
 
 ## The .pgm format
 
-One file per set, plain text. Keep them under `macros/<track>/` (the lab does not care where; the `voice` line decides the track).
+One file per set, plain text. Keep them under `macros/<track>/` (the lab does not care where; the `voice` line decides the track). A set is an instrument: a character (the base, and named patches to morph toward) plus up to four controls. This is model v2 (2026-11-13); every v1 file loads unchanged and evaluates to the same values, bit for bit (`itest_macro_pin` pins the 24 round-1 files as they were, kept in `host/tests/macro_v1/`).
 
 ```
-# ACID: a 303 line. Everything after # is a comment.
-voice bass                         # first line: kick snare clap chh ohh perc bass lead
+# ACID -- family: INTERACTION.     <- the first line, a comment: the set's about line
+voice bass                         # first statement: kick snare clap chh ohh perc bass lead
 name ACID                          # optional, up to 12 characters (else the file name)
 base wave=0 sub=40 lfoshape=sine   # optional, any number of lines: fixed values under the macros
 
-macro OPEN 0.4                     # up to 4 macros; name up to 6 characters; start position (default 0)
-  cutoff   0:18 0.5:62 1:108 smooth        # a target: parameter, then points position:value
-  reso     0:70 0.6:112 1:96               # any shape: this one peaks at 60 % and backs off
-  envmod   add 0:10 1:-20                  # add: an offset on top of what came before
+macro OPEN 0.4 "SHUT" "OPEN" "the 303 filter"   # up to 4 macros; name up to 6 characters; start
+  cutoff   0:18 0.5:62 1:108 smooth           # a target: parameter, then points position:value
+  reso     0:70 0.6:112 1:96                  # any shape: this one peaks at 60 % and backs off
+  envmod   add 0:10 1:-20                     # add: an offset on top of what came before
 
 macro BITE
-  fold     0.5:0 1:70                      # flat before the first and after the last point
-  reso     add 0:0 1:12 by OPEN            # by: the effect scales with OPEN's position
-  sub      mul 0:1 1:0.6                   # mul: a factor on what came before
+  fold     0.5:0 1:70                         # flat before the first and after the last point
+  reso     add 0:0 1:12 by OPEN               # by: the effect scales with OPEN's position
+  sub      mul 0:1 1:0.6                      # mul: a factor on what came before
+  trim     0:0 1:-3                           # trim: dB on the level, applied last
 macro WOBL
-  rate     0:1/4 0.4:1/8 0.75:1/8t 1:1/16  # enum parameters take names and step by default
+  rate     0:1/4 0.4:1/8 0.75:1/8t 1:1/16     # enum parameters take names and step by default
   cutoff   add 0:0 1:-15 linear
 ```
 
-**The model.** A set owns its base parameters and every parameter a target names. For each owned parameter, start from the base value (or, without one, the value the parameter had when the set was chosen), then apply every target on that parameter in file order: `set` replaces the value with the curve's value `c`, `add` adds `c`, `mul` multiplies by `c`, where `c` is the curve at that macro's position. With `by M`, the target's effect is scaled by macro M's position `s`: set moves `s` of the way to `c`, add adds `c*s`, mul multiplies by `1+(c-1)*s`. At the end clamp to the parameter's range and round to an integer. Parameters the set does not own are left alone.
+A morph set (lead KEYS is the real one):
 
-**Lines.** One statement per line; indentation and spacing do not matter; words are case-insensitive; `#` starts a comment.
+```
+base  wave=orgn mix=0 sus=110 cutoff=100 shape=92 ...     # the organ
+patch PLUCK mix=127 sus=0 cutoff=58 shape=36 ...          # a named patch: parameter=value pairs
+patch BELL  wave=bell@0.3 mix=0 sus=12 cutoff=116 ...     # @0.3: this enum switches at amount 0.3
+macro PLUCK "ORGAN" "PLUCK"
+  morph PLUCK                       # 0 = the base, 1 = the patch, every parameter it lists
+macro BELL "ORGAN" "BELL"
+  morph BELL 0:0 0.3:0 1:1 switch 0.6     # optional: an amount curve, and the line's enum switch point
+  cutoff   add 0:0 1:-10                  # targets still adjust after the morphs
+```
+
+**The model.** A set owns its base parameters, every parameter a target names, every parameter a used patch lists, and the level if it has trims. For each owned parameter:
+
+1. **Start** from the base value (or, without one, the value the parameter had when the set was chosen).
+2. **Morphs**, all morph lines together, wherever they are in the file. Each line has an amount `a` (the macro's position, or its curve at that position, 0..1) and a patch. If the amounts add up to more than 1 they are scaled down so they add up to 1. A continuous parameter becomes the start plus, for every line whose patch lists it, its scaled amount times (patch value - start). So the result is a mix of the base and the patches, the base weighted by whatever is left, and never beyond them. An enum parameter cannot mix: it takes the value of the patch whose line has the largest amount among the lines past their switch point (`a >= switch`; the value's own `@`, else the line's `switch`, else 0.5; a later line wins a tie), else it stays at the start value.
+3. **Targets**, in file order: `set` replaces the value with the curve's value `c`, `add` adds `c`, `mul` multiplies by `c`, where `c` is the curve at that macro's position. With `by M`, the target's effect is scaled by macro M's position `s`: set moves `s` of the way to `c`, add adds `c*s`, mul multiplies by `1+(c-1)*s`.
+4. **Trims**: the level is multiplied by 10^(dB/60), where dB is the sum of every trim line's curve at its macro's position (times its `by` macro's position). The mixer's level taper is cubic (100 = unity, gain = (level/100)^3), so that is dB on the sound. One raw level step is about 0.26 dB at 100, and the level stops at 127 (+2.1 dB over 100), so a trim cannot lift a quiet corner much: lower the loud ones instead.
+5. **Clamp** to the parameter's range and round to an integer. Parameters the set does not own are left alone.
+
+**The XY pad with two morphs** (the combination rule): with PLUCK on X and BELL on Y, the bottom left is the base, the right edge's end the pluck, the top edge's end the bell, and the top right an even mix of pluck and bell (the amounts 1 + 1 are scaled to 0.5 + 0.5). Below the diagonal from top left to bottom right each morph simply adds its share of the difference from the base; beyond it the base has no weight left and the pad moves between the patches.
+
+**Lines.** One statement per line; indentation and spacing do not matter; words are case-insensitive; `#` starts a comment (except inside a string).
 
 | line | |
 |---|---|
+| `# TEXT` | the first non-blank line, if it is a comment, is the set's **about** line (up to 72 characters, the rest is cut). When it starts with the set's name and ` -- ` (the round-1 header `# ACID -- family: ...`), that part is dropped: the about line is then `family: ...`. There is no separate `about` statement: the header is the one source |
 | `voice TRACK` | required, first statement. `kick snare clap chh ohh perc bass lead` (also `snar`, `closedhat`, `openhat`) |
 | `name NAME` | optional, one word, up to 12 characters, shown in capitals |
 | `base p=v p=v ...` | optional, repeatable; no spaces around `=` |
-| `macro NAME [START]` | up to 4; NAME up to 6 characters (letters, digits, `-`, `_`); START 0..1 |
-| `PARAM [set\|add\|mul] POS:VAL ... [linear\|smooth\|step] [by MACRO]` | a target of the macro above; up to 8 per macro; 1 to 8 points |
+| `patch NAME p=v p=v@SW ...` | a named patch, up to 4; NAME up to 8 characters (letters, digits, `-`, `_`); repeat the line to continue it (also after other patches). `@SW` (only on enum parameters): this value's switch point, above 0 and at most 1, 2 decimals |
+| `macro NAME [START] ["LOW" "HIGH"] ["DESCRIPTION"]` | up to 4; NAME up to 6 characters (letters, digits, `-`, `_`); START 0..1. Strings in double quotes: two are the **end labels** (up to 8 characters each, e.g. `"DARK" "BRIGHT"`), one alone or a third is the **description** (up to 40) |
+| `PARAM [set\|add\|mul] POS:VAL ... [linear\|smooth\|step] [by MACRO] [override]` | a target of the macro above; up to 32 per macro, 64 in the set; 1 to 16 points. `override`: this plain set is meant to replace what earlier lines did (silences the warning below) |
+| `morph PATCH [POS:AMOUNT ...] [linear\|smooth\|step] [switch SW]` | a morph line of the macro above: blends from the base toward PATCH. Without points the amount is the macro's position; with them, a curve (amounts 0..1). `switch SW` is the enum switch point for this line (default 0.5). Up to 8 morph lines in the set; a macro morphs toward a patch at most once |
+| `trim POS:DB ... [linear\|smooth\|step] [by MACRO]` | a level trim of the macro above, dB -24..+24, applied after everything else whatever its place in the file. Up to 8 in the set |
 
 **Parameters** by short or long name from the list below, ignoring case, spaces and punctuation (`cut`, `cutoff`, `envmod` = `Env Mod`, `lfo_rate`), or by a unique start of the long name of at least 3 letters (`reso` = Resonance, `snappy` = Snappy). A start that fits two parameters is an error that says so.
 
-**Values** are the raw stored numbers (the ranges below), not what the screen shows: `tune=24` is 0 semitones, `pan=64` is centre. Enum parameters also take their value names (`rate=1/8t`, `wave=supr`); a name wins over a number (`fmratio=2` is the ratio 2, raw 3). `add` and `mul` take plain numbers (`add` -255..255, `mul` 0..16). Numbers: optional sign, at most 3 decimals.
+**Values** are the raw stored numbers (the ranges below), not what the screen shows: `tune=24` is 0 semitones, `pan=64` is centre. Enum parameters also take their value names (`rate=1/8t`, `wave=supr`); a name wins over a number (`fmratio=2` is the ratio 2, raw 3). `add` and `mul` take plain numbers (`add` -255..255, `mul` 0..16). Numbers: optional sign, at most 3 decimals. Base and patch values are rounded to whole raw values.
 
 **Curves.** `POS` 0..1, positions in order; two points at the same position make a jump. Between points: `linear` (default), `smooth` (an S-curve, flat at each point) or `step` (holds the left point's value; the default for enum parameters). Before the first point and after the last the curve is flat; one point is a constant.
 
-**`by MACRO`** names any macro of the set, also one declared further down.
+**Enum jumps.** An enum parameter (wave, filter type, LFO rate, percussion model ...) can only jump. In a target the jump is where its step curve's points are; in a morph it is the switch point (0.5 unless `@` or `switch` says otherwise). The lab draws a tick under a slider wherever moving it makes an enum parameter jump (the other macros where they are), and `macro_audit` prints the positions per macro.
 
-**Errors** are reported with the line and stop the load (the last good version stays): an unknown or ambiguous parameter, a value out of range or not a value name, positions going backwards, a target before any `macro`, a missing `voice` line, a duplicate `voice` / `name` / macro / base value, too many macros (4), targets (8 per macro), points (8), a name too long, a line over 200 characters, a character that is not plain ASCII.
+**`by MACRO`** names any macro of the set, also one declared further down; `morph PATCH` names any patch, also one declared further down.
 
-**Limits** live in `lib/pg/src/pg/macro/macro.h` (`kMaxMacros`, `kMaxTargets`, `kMaxPoints`, name lengths). One set is a 2.4 KB table (`sizeof(pg::macro::MacroSet)`); evaluation is a few hundred float operations.
+**Warnings** do not stop the load; the lab shows the active set's in its status line (amber) and the terminal prints them all, and `macro_audit` lists them: a plain `set` (no `by`, no `override`) on a parameter that an earlier target, or a morph of another macro, already moves (that earlier work is thrown away: round 1 lost CRACK's body offset this way), and a patch no morph line uses.
+
+**Errors** are reported with the line and stop the load (the last good version stays): an unknown or ambiguous parameter, a value out of range or not a value name, positions going backwards, a target, morph or trim before any `macro`, a missing `voice` line, a duplicate `voice` / `name` / macro / base value / patch value, a morph toward an unknown patch or twice toward one patch in a macro, a limit exceeded (the message says which), a name or string too long, a string without its closing quote, a string where none belongs, a line over 200 characters, a character that is not plain ASCII (outside comments).
+
+### Limits, memory, cost
+
+Limits live in `lib/pg/src/pg/macro/macro.h`:
+
+| | per set | |
+|---|---|---|
+| macros | 4 | |
+| targets | 64 (pool), at most 32 in one macro | 4 bytes each |
+| curve points | 192 (pool), at most 16 on one curve | 4 bytes each |
+| patches | 4 | 11 bytes each |
+| patch values | 96 (pool) | 3 bytes each |
+| morph lines / trim lines | 8 / 8 | 6 / 5 bytes each |
+| strings | name 12, about 72, per macro: name 6, labels 8 + 8, description 40 | |
+
+One loaded set is **1856 bytes** (`sizeof(pg::macro::MacroSet)`; v1 was 2420 with 4 x 8 targets of 8 float points), so eight loaded sets take 14.5 KB. Targets and points live in pools shared by the set's macros, so one long journey macro can use what the others do not. A curve point packs its position in thousandths (10 bits) and its value in thousandths, signed (22 bits): every number the format can write (3 decimals: `mul` 0.125, `add` -1.5, value 126.999) is stored exactly, and decoding gives the very float v1's parser produced. Switch points are hundredths. The parser needs about 1.5 KB of stack and no heap.
+
+Evaluation of one set: per target a search for the segment (one position decode per point passed: an integer compare and one float division), two value decodes (integer divide and one float division each), one division and a few multiply-adds for the curve; per patch value of an active morph two multiply-adds; per trim a curve, and one 2^x from a 6-term polynomial for all trims (no `powf`, no libm); then a clamp and round per owned parameter. On this host it takes about 130 to 340 ns per set (KEYS and TRIO, all morph, are the cheapest, POLES with 22 targets and 64 points the dearest; `itest_macro_files` prints each), about 0.8 us for a set near the limits (60 targets, 188 points, two 22-value morphs, 4 trims; `test_macro_eval`). For POLES that is roughly 150 float divisions (point decoding and the curve segments), 200 other float operations and the integer work around them. On the ESP32-S3 (240 MHz, single-precision FPU) expect very roughly ten to thirty times the host time, around 3 to 10 us per set: eight sets at 300 Hz would be about 1 to 3 % of one core (an estimate from the host figures, not measured on the device).
 
 ## The sets in macros/
 
-[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works (`itest_macro_files` checks the first line and that set names are unique per track).
+[`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works (`itest_macro_files` checks the first line, which is also the set's about line, that set names are unique per track, and that no set loads with a warning).
 
 ## Auditing a set (macro_audit)
 
@@ -157,10 +204,19 @@ build/host/macro_audit --hard macros             # hard checks only, one line pe
 | `decay` | ms from the loudest 10 ms of the decay window until 20 dB below it (synths: the long note; drums: the first hit); `>` = it never fell that far inside the window |
 | `d` | spectrogram distance to the next point on the line, dB: the mean level difference over the time-frequency cells (2048-point FFT, 96 log bands 40 Hz..16 kHz) within 60 dB of the top, each weighted by the square root of its amplitude. 0 = the same sound; one CUT value at a time on a resonant bass is about 0.6; a stepped flavour change is 5 to 25 |
 
-Per set it then prints the loudness range across the whole space, the highest peak, the centroid range, the **travel** of each macro (the sum of the `d` values along its line: how much happens over its whole throw; under about 5 is a macro that barely does anything) and the problems:
+Each macro's line is headed with its end labels, and with the positions where an enum parameter jumps along it (`enum jumps: WAVE@0.125 FLT@0.440 ...`). Per set it then prints the loudness range across the whole space, the highest peak, the centroid range, the **travel** of each macro (the sum of the `d` values along its line: how much happens over its whole throw; under about 5 is a macro that barely does anything) and the problems:
 
 - **HARD** (exit 1, fails the ctest): the file does not parse, a point is **silent** (peak below -45 dBFS), a point **clips** (stem peak above 0 dBFS), **NaN / Inf** in the output, engine faults.
-- **warn** (reported, exit 0): **dead travel** (neighbours on a macro's line closer than `--dead` dB, default 0.5; merged into stretches, and counted separately for the rest of the pad), a **level jump** between neighbours (loudness differs by more than `--jump` dB, default 6), **hot** points (peak above -3 dBFS), a **loudness range** over 18 dB across the space, **subnormal** samples (with where: the track stem, the delay or the reverb return). Today the engine's delay and reverb produce subnormals on their default settings (their one-pole states decay into the subnormal range when the input goes quiet), so almost every set with a send warns; that is an engine matter, not the set's.
+- **warn** (reported, exit 0): the parser's **warnings** (a plain set that undoes an earlier line, an unused patch), **dead travel** (neighbours on a macro's line closer than `--dead` dB, default 0.5; merged into stretches, and counted separately for the rest of the pad), a **level jump** between neighbours (loudness differs by more than `--jump` dB, default 6), **hot** points (peak above -3 dBFS), a **loudness range** over 18 dB across the space, **subnormal** samples (with where: the track stem, the delay or the reverb return). Today the engine's delay and reverb produce subnormals on their default settings (their one-pole states decay into the subnormal range when the input goes quiet), so almost every set with a send warns; that is an engine matter, not the set's.
+
+**Level suggestions.** For every macro whose line strays more than 2 dB in loudness from its loudness at its start position (the others at their start), the audit prints a ready-to-paste trim line that would hold it there: that macro's own trims plus the measured difference, at 0, 1/4 .. 1, rounded to 0.5 dB, for example
+
+```
+  suggest, macro GRIT (strays up to 4.5 dB from its start's -19.7 dB); paste under it:
+  trim 0:0 0.25:-1 0.5:-2 0.75:-3.5 1:-4.5
+```
+
+Paste it in place of the macro's own trim lines (not its `lvl` targets, which it measured with). Flat is not always right: a "more" macro may be meant to get louder, and a flattened macro can turn out to do little else (VOYAGE's GRIT, flattened, is dead travel at the flute station: it is mostly a loudness control there). Boosts over +2 dB are flagged: the level stops at 127.
 
 A set whose dead stretch or jump is the idea (stepped flavours, a macro that only works combined with another) says so in a comment line, `# audit: allow-dead NAME` or `# audit: allow-jump NAME` (`*` for every macro), and the warning is not raised for that macro.
 

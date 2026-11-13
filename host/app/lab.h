@@ -9,6 +9,13 @@
 //            kPollMs; changed, added and removed files take effect at once.
 //            A file that does not parse keeps its last good version, and the
 //            error (file:line: reason) shows in the panel and the terminal.
+//            Warnings (pm::Warnings: a plain `set` that wipes out an earlier
+//            line, an unused patch) never stop a load; the terminal prints
+//            them at every load and the status line shows the active set's.
+//   panel    the set's about line under its name, each macro's end labels on
+//            its slider and on the XY pad's axes, its description (the
+//            keyboard macro's) in the idle status line, and a tick under a
+//            slider wherever moving it makes an enum parameter jump.
 //   apply    while a set is active on a track, its owned parameters follow
 //            the macros: evaluated at most once per UI frame and only values
 //            that changed are sent, through LabHost::setParam (Ui::setTrackParam,
@@ -80,6 +87,7 @@ class Lab {
   bool setMacro(int track, int m, float pos);
   int reloads() const { return reloads_; }   // files (re)loaded or removed since init, after the first scan
   int errors() const;                         // files currently not parsing
+  int warnings() const;                       // warnings of the loaded (good) versions, all files
   // True when every active set's last sent values are what the host reports.
   bool synced();
   std::string describe(int track);            // the notes line's body for `track`
@@ -99,6 +107,8 @@ class Lab {
     pg::macro::MacroSet set;
     std::string label;          // set name, or the file name in capitals
     std::string err;            // "" or "line: reason" of the current content
+    std::vector<std::string> warns;   // "line: reason" of the good version's warnings (pm::Warnings)
+    int warnCount = 0;          // all of them (warns keeps the first kMaxWarnings)
     bool seen = false;
   };
   struct Track {

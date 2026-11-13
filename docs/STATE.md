@@ -1,4 +1,4 @@
-# Work state (2026-11-11)
+# Work state (2026-11-13)
 
 v0.1 complete and host-verified: 55/55 host tests pass; both firmware envs build clean.
 Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
@@ -49,8 +49,8 @@ Order of work (owner, updated 2026-11-12):
    only AFTER the redesign: the goal is a fun experience that is not hindered by the tiny device.
    First step built: the macro lab (docs/MACROLAB.md), a workbench, not the design. A portable,
    heap-free macro model and .pgm text format (lib/pg/src/pg/macro: per track a base patch and up
-   to 4 macros, each driving up to 8 parameters through breakpoint curves with set/add/mul and
-   "by" scaling), and `tools/pg-desktop --lab`: hot-reloaded sets from macros/, sliders and an XY
+   to 4 macros, each driving parameters through breakpoint curves with set/add/mul and "by"
+   scaling; model v2 below), and `tools/pg-desktop --lab`: hot-reloaded sets from macros/, sliders and an XY
    pad (standing in for tilt), good/bad marks with a note to lab-notes.txt. The loop: Claude
    writes or edits sets -> the owner `git pull`s (the app picks them up while playing) -> plays,
    marks -> pastes lab-notes.txt back. Host-verified only (headless: test_desktop_app part 8); not
@@ -61,6 +61,28 @@ Order of work (owner, updated 2026-11-12):
    but checked by host/tools/macro_audit (renders a phrase over a grid of macro positions; ctest
    macro_audit fails any silent, clipping or NaN point; docs/MACROLAB.md "Auditing a set"). NEXT:
    the owner plays and marks them; round 2 keeps the families that score and drops the rest.
+   DIRECTION (owner, after playing round 1, 2026-11-13: "these are all so good... it almost
+   makes me think we can offer these as different instruments in each slot"): A MACRO SET IS AN
+   INSTRUMENT, a character plus up to four controls; a track slot holds one, and the device will
+   later load the same .pgm files from its flash file system, eight loaded at once.
+   MODEL V2 built for that (2026-11-13, docs/MACROLAB.md "The .pgm format"): pooled storage per
+   set (64 targets, at most 32 per macro; 192 curve points, at most 16 per curve; 4 named patches
+   over 96 parameter=value pairs; 8 morph and 8 trim lines), packed points (position and value
+   in thousandths, exact for every number the format writes); one loaded set is 1856 bytes (v1:
+   2420), evaluation 130-340 ns per set on the host, no libm. New in the format: `patch` +
+   `morph` (blend from the base toward a named patch; several morphs mix the patches, scaled down
+   when their amounts add up to more than 1; enums switch at 0.5 or a stated point), end labels
+   and a description per macro (`macro TONE "DARK" "BRIGHT" "..."`), the file's first comment as
+   the set's about line, `trim` (dB on the level, applied last), warnings (a plain set that
+   undoes an earlier line; `override` silences it). The lab shows labels, the about line,
+   warnings and ticks where an enum jumps; macro_audit lists warnings and enum jumps and prints
+   ready-to-paste trim lines. All 24 round-1 files load unchanged and evaluate bit-identically
+   (itest_macro_pin over frozen copies in host/tests/macro_v1/). Rewritten with v2: KEYS and
+   TRIO (native morphs; pad edges as before, the inside now mixes the patches), POLES and CRACK
+   (end labels, readable macro names; CRACK's PITCH now really moves the body: the new warning
+   found that a later plain set had undone it), VOYAGE (its last wave jump now covered). The
+   other sets sound exactly as before (TICK, BOOM, WOOD, ALLOY got end labels). Not built, not
+   designed out: loading sets on the device, device UI, project format changes, smoothing.
    Found on the way: the engine's delay and reverb returns produce subnormal floats on default
    settings (one-pole states decaying in silence); harmless on the host so far, not checked on
    the ESP32-S3.

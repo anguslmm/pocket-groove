@@ -1,0 +1,39 @@
+# ROAD -- family: JOURNEY.
+# Idea: one macro is a road through five different basses; smooth curves
+# dwell at each station (flat at the point) and travel between them, and the
+# FM ratio changes only where the FM is quiet or masked by the fold:
+#   0.00 DEEP    closed saw, sub-heavy, barely any envelope
+#   0.25 ACID    resonant 303 squelch
+#   0.50 HOLLOW  open square, organ-like house bass
+#   0.75 GROWL   the FM pair at ratio 2, lightly folded
+#   1.00 SCREAM  narrow pulse into FM 3.5, folded hard, resonant
+# DIRT and MOVE are spice that works at every station (MOVE's timbre LFO only
+# bites from GROWL on, where there is FM and fold to move).
+# Feel if it works: ROAD is a place you travel, not a knob you turn up;
+# stopping between stations gives hybrids worth keeping.
+# Try: ROAD on X, DIRT on Y; play a one-note groove and walk ROAD slowly
+# from left to right, then jump back.
+voice bass
+name ROAD
+base drive=28 fmdepth=72 tenv=70 decay=48 accent=90 adcy=96 lfoshape=tri ltmb=0 lfodepth=0
+
+macro ROAD
+  cutoff   0:22 0.25:44 0.5:66 0.75:78 1:104 smooth
+  reso     0:20 0.25:108 0.5:40 0.75:30 1:66 smooth
+  envmod   0:20 0.25:80 0.5:36 0.75:44 1:60 smooth
+  wave     0:0 0.25:0 0.5:64 0.75:64 1:127 smooth
+  sub      0:100 0.25:36 0.5:64 0.75:64 1:30 smooth
+  fmix     0:0 0.5:0 0.75:120 1:127 smooth
+  fold     0:0 0.5:0 0.75:24 1:96 smooth
+  fmratio  0:1 0.55:2 0.9:3.5              # stepped: under the FM fade-in, then under the fold
+
+macro DIRT
+  drive    0:28 1:104
+  envmod   add 0:0 1:16
+  sub      mul 0:1 1:0.7
+  lvl      0:100 0.5:94 1:92
+
+macro MOVE
+  lfodepth 0:0 1:72
+  ltmb     0:0 1:110
+  rate     0:1/4 0.35:1/8 0.7:1/8t 0.9:1/16

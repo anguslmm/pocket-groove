@@ -1,0 +1,28 @@
+# BLAST -- family: ENERGY.
+# Idea: MORE makes the open hat brighter, more metallic, harder at the front
+# and a little longer, all at once; CALM is a different kind of quiet: a
+# soft, dark, noisy wash that sits far back (more noise than metal, no tick
+# at the front, more reverb), the hat of a breakdown.
+# Feel if it works: tilting toward MORE is the track lifting into the drop;
+# toward CALM it is the breakdown.
+# Try: MORE on X, CALM on Y with off-beat open hats; ride MORE over 8 bars.
+voice ohh
+name BLAST
+base tune=60 dcy=48 tone=66 mtl=70 colr=50 snap=24 sprd=60
+
+macro MORE
+  tone     0:52 1:118
+  mtl      0:60 1:122
+  snap     0:14 1:96
+  dcy      0:40 1:70
+  tune     0:56 1:78
+  colr     0:44 1:70
+  lvl      0:102 1:92
+
+macro CALM
+  mtl      mul 0:1 1:0.25            # mostly noise
+  tone     add 0:0 1:-36
+  snap     mul 0:1 1:0.1             # no tick: a soft start
+  dcy      add 0:0 1:30
+  rev      0:24 1:104
+  lvl      add 0:0 1:4

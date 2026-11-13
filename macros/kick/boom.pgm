@@ -15,7 +15,7 @@ voice kick
 name BOOM
 base lvl=100 drive=26 tone=100 harm=34 cton=56
 
-macro SIZE 0.45
+macro SIZE 0.45 "SMALL" "BIG"
   tune     0:84 0.5:56 1:32
   decay    0:22 0.5:48 1:90
   hold     0:6 0.5:30 1:56
@@ -23,13 +23,13 @@ macro SIZE 0.45
   punch    0:66 1:84
   lvl      add 0:2 0.5:0 1:-4    # a long boom carries more energy
 
-macro SKIN 0.35
+macro SKIN 0.35 "TIGHT" "LOOSE"
   sweep    add 0:-22 0.5:0 1:30
   punch    add 0:-10 0.5:0 1:34
   click    0:96 0.5:70 1:36
   cton     add 0:-20 0.5:0 1:40  # loose: a noisier, duller thwack
 
-macro WD-MTL 0.4
+macro WD-MTL 0.4 "WOOD" "METAL"
   harm     0:10 0.4:34 1:96
   cton     add 0:-24 0.4:0 1:-30  # metal: the short tick
   click    add 0:-16 0.4:0 1:30
@@ -37,7 +37,7 @@ macro WD-MTL 0.4
   tone     add 0:-20 0.4:0 1:20
   lvl      add 0:0 0.4:0 1:-4
 
-macro FAR
+macro FAR "NEAR" "FAR"
   tone     add 0:6 0.4:-30 1:-60
   click    mul 0:1.1 0.5:0.5 1:0.25
   punch    mul 0:1 1:0.6            # the attack smears with distance

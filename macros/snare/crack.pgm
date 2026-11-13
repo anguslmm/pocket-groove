@@ -1,29 +1,33 @@
 # CRACK -- family: OPPOSITES.
 # Idea: three axes between two words, neutral (a 909-ish snare) in the
 # middle where every macro starts, a usable snare at both ends:
-#   LO-HI   a low, fat, tuned body .. a high piccolo crack
-#   DR-RTL  dry: all drum, almost no wires .. rattle: long buzzing wires
-#   SF-HRD  soft: a round, gentle tap .. hard: a bent, ringing, driven hit
+#   PITCH  LOW: a low, fat, tuned body .. HIGH: a high piccolo crack
+#   WIRES  DRY: all drum, almost no wires .. RATTLE: long buzzing wires
+#   TOUCH  SOFT: a round, gentle tap .. HARD: a bent, ringing, driven hit
+# The words are the macros' end labels (round 1 had to spell them into the
+# names: LO-HI, DR-RTL, SF-HRD).
 # Feel if it works: "lower and drier" is one move; you aim at a snare from
 # memory and land on it.
-# Try: LO-HI on X, DR-RTL on Y, backbeat on 2 and 4; then SF-HRD for the fill.
+# Try: PITCH on X, WIRES on Y, backbeat on 2 and 4; then TOUCH for the fill.
 voice snare
 name CRACK
+base body=52
 
-macro LO-HI 0.5
+macro PITCH 0.5 "LOW" "HIGH" "low fat body .. high piccolo crack"
   tune     0:14 0.5:60 1:112
   dtun     0:36 0.5:50 1:80
   tone     0:44 0.5:70 1:104
   body     add 0:18 0.5:0 1:-20     # a big drum rings longer
   lvl      0:100 0.5:96 1:92        # the high end cuts through: keep it level
 
-macro DR-RTL 0.5
+macro WIRES 0.5 "DRY" "RATTLE" "all drum .. long buzzing wires"
   snappy   0:18 0.5:80 1:122
   decay    0:16 0.5:56 1:108
-  body     0:72 0.5:52 1:30
+  body     add 0:20 0.5:0 1:-22     # dry: the shell rings; rattle: the wires take over
+                                    # (round 1 wrote this as a plain set, which undid PITCH's body)
   lvl      add 0:3 0.5:0 1:-3
 
-macro SF-HRD 0.5
+macro TOUCH 0.5 "SOFT" "HARD" "a gentle tap .. a bent, driven hit"
   drive    0:0 0.5:26 1:100
   bend     0:16 0.5:60 1:112
   ring     0:28 0.5:64 1:104
