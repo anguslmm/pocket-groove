@@ -12,6 +12,7 @@
 #include "../macro/macro.h"
 #include "../platform.h"
 #include "../project.h"
+#include "../sampler/sampler.h"
 #include "format.h"
 #include "ghost.h"
 #include "scope.h"
@@ -176,6 +177,17 @@ class Ui {
   // instrument itself (id 0 = CLASSIC; positions nullptr = the set's defaults).
   void setMacro(int track, int m, int value);
   void setInstrument(int track, uint16_t id, const uint8_t* positions = nullptr);
+  // SAMPLER (stage F1, UX.md 10.3 "Sampler instruments"): the PERC track's sampler
+  // voice, for the waveform picture (its pool and playhead). Call after init() (which
+  // forgets it); without it the picture shows the built-in sounds and no playhead.
+  void setSampler(const sampler::SamplerVoice* v) { sampler_ = v; ++serial_; }
+  // Track t plays a sampler instrument (its set is of the sampler kind and the
+  // engine hosts that kind on t).
+  bool samplerOn(int t) const;
+  // The track's sample pool slot 0..11 (TrackSettings::sampleSlot), pending-aware.
+  int sampleSlotOf(int t) const;
+  // Sets it the way SHIFT+; / . does (no undo snapshot, no toast): host tools.
+  void setSampleSlot(int t, int slot);
   // A host's short message in the toast line (the desktop: a sample file dropped on the window).
   void notify(const char* text, bool error = false) { toast(text, error ? 2 : 0); }
 
@@ -346,6 +358,11 @@ class Ui {
 
   // step helpers
   bool isSynth(int t) const { return t >= kNumDrumTracks; }
+  // The note keys play pitches (synths, and a sampler instrument's chop), and the step's
+  // gate is a gate (a drum ignores it: the GATE field is PTCH there).
+  bool pitched(int t) const { return isSynth(t) || samplerOn(t); }
+  int samplerNote(int degree) const;   // 60 + the scale's degree (60 = the chop as recorded)
+  bool stepSampleSlot(int dir);        // SHIFT+; / . on a sampler instrument's page
   Step newStep(int t) const;
   int noteFor(int t, int degree) const;
   uint8_t chordForDegree(int degree) const;
@@ -381,6 +398,7 @@ class Ui {
   void drawInstrument(Framebuffer& fb);
   void drawInstrumentList(Framebuffer& fb);
   void drawScope(Framebuffer& fb);
+  void drawWave(Framebuffer& fb);      // the sampler's picture in the scope's box
   bool scopeShown() const;
   bool scopeCovered() const;
   void refreshJumps();
@@ -524,6 +542,11 @@ class Ui {
   uint8_t pendPatLen_ = 0, pendPatLenFrame_ = 0, pendLenPat_ = 0;
   uint8_t pendMute_[kNumTracks] = {};        // 0 none, 1 unmuted, 2 muted
   uint8_t pendMuteFrame_[kNumTracks] = {};
+  uint8_t pendSlot_[kNumTracks] = {};        // 0 none, else the sample slot + 1
+  uint8_t pendSlotFrame_[kNumTracks] = {};
+  const sampler::SamplerVoice* sampler_ = nullptr;
+  int32_t wavePlayhead_ = -1;                // the playhead the picture last drew (-1 none)
+  uint32_t wavePoolGen_ = 0;
 
   // outbox: commands the engine queue had no room for, retried in order
   Command outbox_[kOutbox] = {};
@@ -559,7 +582,9 @@ class Ui {
   uint16_t clipInst_[kNumTracks] = {};   // each clipped track's instrument id when it was copied
   bool undoValid_ = false, undoIsRedo_ = false;
   // an instrument change is undone without a pattern snapshot (ui_edit.cpp)
-  uint8_t undoKind_ = 0, undoTrack_ = 0;   // 0 pattern, 1 instrument
+  uint8_t undoKind_ = 0, undoTrack_ = 0;   // 0 pattern, 1 instrument, 2 sample slot
+  uint8_t undoSlot_ = 0;
+  uint32_t slotUndoMs_ = 0;
   uint16_t undoInst_ = 0;
   uint8_t undoPos_[kTrackMacros] = {};
   uint8_t undoParams_[kSoundParams] = {};

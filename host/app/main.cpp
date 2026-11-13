@@ -975,6 +975,7 @@ int main(int argc, char** argv) {
     }
   }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
+  g_ui.setSampler(&g_inst.sampler());
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter
   g_ui.setDevMode(opt.dev || opt.lab);
   const bool hadSession = fs.exists(pg::io::kSessionPath);

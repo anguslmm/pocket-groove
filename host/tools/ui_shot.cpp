@@ -28,6 +28,8 @@
 //                           starts the gesture as the firmware does (it engages after 150 ms),
 //                           the axes go to the Ui every 20 ms, `up G0` glides back; a `- / =`
 //                           while G0 is held cancels it (the firmware's volume keys)
+//   sample <slot> <file.wav>  put an audio file into sample pool slot 1..12 (converted as the
+//                           desktop does, host/common/sample_convert.h); `sample <slot> -` empties it
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -35,6 +37,7 @@
 #include <string>
 #include <sys/stat.h>
 
+#include "common/sample_convert.h"
 #include "common/ui_harness.h"
 #include "pg/io/project_io.h"
 #include "pg/demo/demo.h"
@@ -145,6 +148,31 @@ int main(int argc, char** argv) {
       rig.engineRuns = false;
     } else if (op == "unfreeze") {
       rig.engineRuns = true;
+    } else if (op == "sample") {
+      static pg::sampler::MemoryPool pool;
+      static std::vector<int16_t> bufs[pg::sampler::kPoolSlots];
+      const int slot = std::atoi(a) - 1;
+      if (slot < 0 || slot >= pg::sampler::kPoolSlots) { ++errors; continue; }
+      if (bufs[slot].empty()) bufs[slot].assign(pg::sampler::kSlotMaxSamples, 0);
+      if (!std::strcmp(b, "-")) {
+        pool.clear(slot);
+      } else {
+        std::vector<int16_t> x;
+        std::string err, stem = b;
+        if (!sconv::convertFile(b, &x, &err)) {
+          std::fprintf(stderr, "line %d: %s: %s\n", lineNo, b, err.c_str());
+          ++errors;
+          continue;
+        }
+        const size_t sl = stem.find_last_of('/');
+        if (sl != std::string::npos) stem = stem.substr(sl + 1);
+        if (stem.size() > 3 && stem[2] == '-') stem = stem.substr(3);
+        std::copy(x.begin(), x.end(), bufs[slot].begin());
+        pool.set(slot, bufs[slot].data(), uint32_t(x.size()), stem.substr(0, stem.rfind('.')).c_str());
+      }
+      rig.eng.suspend();
+      rig.inst.setSamplePool(&pool);
+      rig.eng.resume();
     } else if (op == "tilt") {
       rig.tiltX = float(std::atof(a));
       rig.tiltY = float(std::atof(b));

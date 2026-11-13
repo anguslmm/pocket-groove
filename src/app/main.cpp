@@ -810,6 +810,7 @@ void setup() {
   g_inst.init(static_cast<float>(sampleRate()), /*monoOutput=*/true);
 #endif
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
+  g_ui.setSampler(&g_inst.sampler());
   g_xfer.init(&fs, PG_VERSION);
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards
   g_ui.boot(sys::millis());

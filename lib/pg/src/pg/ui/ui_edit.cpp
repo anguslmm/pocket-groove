@@ -206,6 +206,20 @@ void Ui::snapshotInstrument(int t) {
 
 void Ui::undo() {
   if (!undoValid_) { toast("NOTHING TO UNDO", 0); return; }
+  if (undoKind_ == 2) {
+    // a run of sample slot steps (stepSampleSlot): swap the slot with the snapshot
+    const int t = undoTrack_;
+    const int now = sampleSlotOf(t);
+    setSampleSlot(t, undoSlot_);
+    undoSlot_ = uint8_t(now);
+    undoIsRedo_ = !undoIsRedo_;
+    slotUndoMs_ = 0;
+    char buf[40];
+    char* o = cat(cat(cat(buf, undoIsRedo_ ? "UNDO: " : "REDO: "), kTrackNames[t & 7]), " SLOT ");
+    catP2(o, sampleSlotOf(t) + 1);
+    toast(buf, 1);
+    return;
+  }
   if (undoKind_ == 1) {
     // swap the track's instrument state with the snapshot
     const int t = undoTrack_;
