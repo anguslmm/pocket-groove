@@ -9,8 +9,11 @@
 // reaches writeExpect_.
 //
 // What is undoable: every change to a pattern's steps and lengths the player
-// makes (step edits through setStep, live recording, the bulk actions). Sound
-// and mixer values, the SONG chain and project load/new are not.
+// makes (step edits through setStep, live recording, the bulk actions), and a
+// change of a track's instrument (an instrument snapshot: the track's id, macro
+// positions and sound parameters, so CLASSIC comes back exactly; a run of
+// instrument steps while the list is up is one unit). Macro moves, sound and
+// mixer values, the SONG chain and project load/new are not.
 //
 // One gesture = one undo unit. Each snapshot remembers the key event / frame
 // it was taken in (undoEvt_) and the gesture it belongs to (undoGest_); a step
@@ -85,6 +88,7 @@ void Ui::copyPatternShadowed(int pat, Pattern& out) const {
 void Ui::snapshotUndo(int pat, const char* label, uint32_t gest) {
   copyPatternShadowed(pat, snap_[undoIdx_]);
   undoPat_ = uint8_t(pat);
+  undoKind_ = 0;
   undoValid_ = true;
   undoIsRedo_ = false;
   undoGest_ = gest;
@@ -103,7 +107,7 @@ uint32_t Ui::gestureNow() const {
 
 // Does the current snapshot already cover a write to pat_ made now, in gesture gest?
 bool Ui::undoCovers(uint32_t gest) const {
-  if (!undoValid_ || undoIsRedo_ || undoPat_ != pat_) return false;
+  if (!undoValid_ || undoIsRedo_ || undoKind_ != 0 || undoPat_ != pat_) return false;
   return undoEvt_ == evtGest_ || (gest && undoGest_ == gest);
 }
 
@@ -156,8 +160,48 @@ bool Ui::postWrite(int pat, int track, int buf) {
   return true;
 }
 
+// Before an instrument change on track t (stepInstrument).
+void Ui::snapshotInstrument(int t) {
+  undoKind_ = 1;
+  undoTrack_ = uint8_t(t);
+  undoInst_ = instrumentIdOf(t);
+  for (int m = 0; m < kTrackMacros; ++m) undoPos_[m] = uint8_t(macroValue(t, m));
+  for (int i = 0; i < kSoundParams; ++i) undoParams_[i] = uint8_t(paramValue(t, i));
+  undoValid_ = true;
+  undoIsRedo_ = false;
+  undoGest_ = undoEvt_ = 0;
+  undoQueued_ = false;
+  char* o = cat(undoLabel_, kTrackNames[t & 7]);
+  cat(o, " INSTRUMENT");
+}
+
 void Ui::undo() {
   if (!undoValid_) { toast("NOTHING TO UNDO", 0); return; }
+  if (undoKind_ == 1) {
+    // swap the track's instrument state with the snapshot
+    const int t = undoTrack_;
+    const uint16_t id = instrumentIdOf(t);
+    uint8_t pos[kTrackMacros], params[kSoundParams];
+    for (int m = 0; m < kTrackMacros; ++m) pos[m] = uint8_t(macroValue(t, m));
+    for (int i = 0; i < kSoundParams; ++i) params[i] = uint8_t(paramValue(t, i));
+    setInstrument(t, undoInst_, undoPos_);
+    // CLASSIC (or an id the library lacks) plays its stored values: put them back
+    if (!macro::findInstrument(undoInst_))
+      for (int i = 0; i < kSoundParams; ++i)
+        if (eng_->trackParamInfo(t, i) && paramValue(t, i) != undoParams_[i])
+          setValue(ValueRef{false, uint8_t(t), uint8_t(i)}, undoParams_[i]);
+    undoInst_ = id;
+    std::memcpy(undoPos_, pos, sizeof(pos));
+    std::memcpy(undoParams_, params, sizeof(params));
+    undoIsRedo_ = !undoIsRedo_;
+    listUntil_ = 0;
+    const macro::MacroSet* s = instrumentOf(t);
+    char buf[40];
+    char* o = cat(cat(cat(buf, undoIsRedo_ ? "UNDO: " : "REDO: "), kTrackNames[t & 7]), " ");
+    cat(o, s ? s->name : (instrumentIdOf(t) ? "UNKNOWN" : "CLASSIC"));
+    toast(buf, 1);
+    return;
+  }
   if (writeBusy_) {
     // The previous undo/paste is still being copied in (normally under one
     // frame): queue this one; update() runs it when the write lands. Pressing
@@ -239,7 +283,8 @@ void Ui::paste() {
       // Another voice: its sound-param locks mean something else; only the lead has chords.
       for (Step& s : d.steps) {
         if (sel_ != kTrackLead) s.chord = 0;
-        if (s.lockParam && s.lockParam <= kSoundParams) { s.lockParam = 0; s.lockValue = 0; }
+        // (a macro lock means something only on the instrument it was made on)
+        if ((s.lockParam && s.lockParam <= kSoundParams) || isMacroLock(s.lockParam)) { s.lockParam = 0; s.lockValue = 0; }
       }
     }
     postWrite(pat_, sel_, spare);

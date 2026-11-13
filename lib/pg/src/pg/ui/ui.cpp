@@ -25,6 +25,9 @@ constexpr uint32_t kPopupMs = 1200;
 constexpr uint32_t kToastMs[3] = {1500, 2500, 3000};
 constexpr uint32_t kFlashMs = 80;
 constexpr uint8_t kPendFrames = 10;        // a pending value outlives the engine round trip by this much
+constexpr uint32_t kListMs = 1500;         // the instrument list after a change
+constexpr int kMacroTap = 2;               // macro units (0..255) per tap; a repeat moves 2 / 4 / 8
+constexpr int kMacroCoarse = 16;           // with SHIFT
 inline int clampi(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 inline bool after(uint32_t now, uint32_t t) { return int32_t(now - t) >= 0; }
 
@@ -112,6 +115,7 @@ int Ui::patternLen() const {
 
 int Ui::paramValue(int t, int i) const {
   t &= 7;
+  if (isMacroIndex(i)) return macroValue(t, i - kMacroIndex0);
   i &= 31;
   if ((pendTPMask_[t] >> i) & 1) return pendTP_[t][i];
   return proj_->tracks[t].params[i];
@@ -169,7 +173,202 @@ int Ui::playStep(int t) const {
 }
 
 const ParamInfo* Ui::infoFor(const ValueRef& r) const {
-  return r.global ? Engine::globalParamInfo(r.index) : eng_->trackParamInfo(r.track, r.index);
+  return r.global ? Engine::globalParamInfo(r.index) : trackInfo(r.track, r.index);
+}
+
+// ============================================================ instruments ====
+
+uint16_t Ui::instrumentIdOf(int t) const {
+  t &= 7;
+  if ((pendInstMask_ >> t) & 1) return pendInst_[t];
+  return instrumentId(proj_->tracks[t]);
+}
+
+const macro::MacroSet* Ui::instrumentOf(int t) const {
+  const macro::MacroSet* s = macro::findInstrument(instrumentIdOf(t));
+  return s && s->track == (t & 7) ? s : nullptr;
+}
+
+int Ui::macroValue(int t, int m) const {
+  t &= 7;
+  m &= 3;
+  if ((pendMacMask_[t] >> m) & 1) return pendMac_[t][m];
+  return proj_->tracks[t].macro[m];
+}
+
+bool Ui::instrumentPage() const {
+  if (!devMode_) return true;
+  return (instrumentOf(sel_) != nullptr) != devFlip_;   // dev mode: CLASSIC shows the parameters, `l` flips
+}
+
+const ParamInfo* Ui::macroInfo(int t, int m) const {
+  const macro::MacroSet* s = instrumentOf(t);
+  if (!s || m < 0 || m >= s->numMacros) return nullptr;
+  ParamInfo& in = macInfo_[macInfoNext_++ & 3];
+  in.name = s->macros[m].name;
+  in.longName = s->macros[m].name;
+  in.min = 0;
+  in.max = uint8_t(macro::kPosMax);
+  in.def = macro::startByte(s->macros[m]);
+  in.fmt = ParamFormat::Percent;
+  in.enumNames = nullptr;
+  return &in;
+}
+
+const ParamInfo* Ui::trackInfo(int t, int i) const {
+  if (isMacroIndex(i)) return macroInfo(t, i - kMacroIndex0);
+  return eng_->trackParamInfo(t, i);
+}
+
+// What -/= edit for track t when it gets the focus: its remembered focus if that
+// still exists; on a track with an instrument a macro (the bare sound parameters
+// are not the player's, except in developer mode); on CLASSIC a parameter.
+int Ui::focusIndexFor(int t) const {
+  const int f = trackFocus_[t & 7];
+  const macro::MacroSet* s = instrumentOf(t);
+  if (isMacroIndex(f)) {
+    if (s && f - kMacroIndex0 < s->numMacros) return f;
+    if (s) return kMacroIndex0;
+    return t == kTrackPerc ? 1 : 0;
+  }
+  if (s && f < kSoundParams && !devMode_) return kMacroIndex0;
+  return f;
+}
+
+// After the instrument of track t changed: a focus on its sound follows (a mixer row stays).
+void Ui::refocus(int t) {
+  if (!focus_.global && focus_.track == t && !(focus_.index >= kMixLevel && focus_.index < kMacroIndex0))
+    focus_ = ValueRef{false, uint8_t(t), uint8_t(focusIndexFor(t))};
+}
+
+void Ui::setMacro(int t, int m, int v) {
+  if (t < 0 || t >= kNumTracks || m < 0 || m >= kTrackMacros) return;
+  v = clampi(v, 0, macro::kPosMax);
+  if (v == macroValue(t, m)) return;
+  pendMac_[t][m] = uint8_t(v);
+  pendMacFrame_[t][m] = frame_;
+  pendMacMask_[t] |= uint8_t(1u << m);
+  send(cmd(CmdType::SetMacro, t, m, v));
+  ++serial_;
+}
+
+void Ui::setInstrument(int t, uint16_t id, const uint8_t* positions) {
+  if (t < 0 || t >= kNumTracks) return;
+  uint8_t pos[kTrackMacros] = {0, 0, 0, 0};
+  const macro::MacroSet* s = macro::findInstrument(id);
+  for (int m = 0; m < kTrackMacros; ++m)
+    pos[m] = positions ? positions[m] : (s && m < s->numMacros ? macro::startByte(s->macros[m]) : 0);
+  pendInst_[t] = id;
+  pendInstFrame_[t] = frame_;
+  pendInstMask_ |= uint8_t(1u << t);
+  for (int m = 0; m < kTrackMacros; ++m) {
+    pendMac_[t][m] = pos[m];
+    pendMacFrame_[t][m] = frame_;
+  }
+  pendMacMask_[t] = 0x0F;
+  send(setInstrumentCommand(t, id, pos));
+  refocus(t);
+  ++serial_;
+}
+
+// The instrument before / after this one in the track's list (UX.md 10.3). CLASSIC
+// (and an id the library does not know) is not in the list: from there `.` goes to
+// the first instrument and `;` to the last. A run of steps while the list is up is
+// one undo unit, so CTRL+Z goes back to what the track had before the run.
+void Ui::stepInstrument(int dir) {
+  const int t = sel_;
+  const int n = macro::instrumentCount(t);
+  if (n <= 0) return;
+  const uint16_t cur = instrumentIdOf(t);
+  const int idx = macro::instrumentIndex(t, cur);
+  const int next = idx < 0 ? (dir > 0 ? 0 : n - 1) : ((idx + dir) % n + n) % n;
+  const macro::MacroSet* s = macro::instrumentAt(t, next);
+  if (!s) return;
+  if (!(undoValid_ && undoKind_ == 1 && undoTrack_ == t && !undoIsRedo_ && listUntil_)) snapshotInstrument(t);
+  // remember the positions of the one we leave, find those of the one we go to
+  if (idx >= 0) {
+    Memo* slot = nullptr;
+    for (Memo& mm : memo_)
+      if (mm.used && mm.id == cur && mm.track == t) slot = &mm;
+    if (!slot) slot = &memo_[memoNext_++ % kMemos];
+    slot->used = 1;
+    slot->id = cur;
+    slot->track = uint8_t(t);
+    for (int m = 0; m < kTrackMacros; ++m) slot->pos[m] = uint8_t(macroValue(t, m));
+  }
+  const uint8_t* pos = nullptr;
+  for (const Memo& mm : memo_)
+    if (mm.used && mm.id == s->id && mm.track == t) pos = mm.pos;
+  setInstrument(t, s->id, pos);
+  listUntil_ = (now_ + kListMs) | 1u;
+  toastUntil_ = popUntil_ = 0;
+}
+
+// ---- macro keys (UX.md 10.3): z/x c/v b/n m/, = macro 1..4 down/up -----------------
+
+void Ui::macroKeyDown(int k, int n, bool shift) {
+  const macro::MacroSet* s = instrumentOf(sel_);
+  if (!s) {
+    toast(heldStep_ >= 0 ? "NO INSTRUMENT ON THIS TRACK" : ". OR 9: PICK AN INSTRUMENT", 0);
+    return;
+  }
+  const int m = n / 2, dir = (n & 1) ? 1 : -1;
+  if (m >= s->numMacros) return;
+  trackFocus_[sel_] = uint8_t(kMacroIndex0 + m);
+  focus_ = ValueRef{false, sel_, uint8_t(kMacroIndex0 + m)};
+  rec_[k] = KeyRec{kActMacro, uint8_t(m), 0, 0};
+  const int partner = kKNote0 + (n ^ 1);
+  if (isHeld(partner) && rec_[partner].act == kActMacro) {
+    // both keys of a pair: the set's default (a lock: the default on that step)
+    const int def = macro::startByte(s->macros[m]);
+    if (heldStep_ >= 0) {
+      Step st = stepAt(heldTrack_, heldStep_);
+      st.lockParam = uint8_t(kLockMacro0 + m);
+      st.lockValue = uint8_t(def);
+      heldEdited(st);
+      setStep(heldTrack_, heldStep_, st);
+    } else {
+      setMacro(sel_, m, def);
+    }
+    char buf[24];
+    cat(cat(buf, s->macros[m].name), " DEFAULT");
+    toast(buf, 0);
+    macRep_[m].key = -1;
+    rec_[partner].act = kActNone;
+    rec_[k].act = kActNone;
+    return;
+  }
+  macroEvent(m, dir, 1, shift);
+  macRep_[m] = MacRep{int8_t(k), int8_t(dir), now_, now_ + kRepeatDelayMs};
+}
+
+// One move of macro m: on the held step's lock while a step is held (SOUND), else the macro.
+void Ui::macroEvent(int m, int dir, int mag, bool shift) {
+  const int d = dir * (shift ? kMacroCoarse : kMacroTap * mag);
+  if (heldStep_ >= 0 && view_ != View::Groove) {
+    focus_ = ValueRef{false, heldTrack_, uint8_t(kMacroIndex0 + m)};
+    editLock(dir, mag, shift);
+    return;
+  }
+  setMacro(sel_, m, macroValue(sel_, m) + d);
+  showPopup(ValueRef{false, sel_, uint8_t(kMacroIndex0 + m)});
+}
+
+// Each macro key repeats on its own, so two macros sweep at once (two fingers).
+void Ui::runMacroRepeats() {
+  const bool shift = isHeld(kKShift);
+  for (int m = 0; m < kTrackMacros; ++m) {
+    MacRep& r = macRep_[m];
+    if (r.key < 0) continue;
+    if (!isHeld(r.key) || rec_[r.key].act != kActMacro || view_ != View::Sound) { r.key = -1; continue; }
+    for (int guard = 0; guard < 8 && after(now_, r.nextMs); ++guard) {
+      const uint32_t rep = r.nextMs - (r.startMs + kRepeatDelayMs);
+      const int mag = shift ? 1 : (rep < 500 ? 1 : (rep < 1000 ? 2 : 4));
+      macroEvent(m, r.dir, mag, shift);
+      r.nextMs += kRepeatMs;
+    }
+    if (!after(r.nextMs, now_ - 1000)) r.nextMs = now_;
+  }
 }
 
 int Ui::valueOf(const ValueRef& r) const {
@@ -181,7 +380,7 @@ int Ui::valueOf(const ValueRef& r) const {
 void Ui::send(const Command& c) {
   if (outCount_ == 0 && eng_->post(c)) return;
   // Coalesce value repeats: only the latest value per parameter waits (UX 16.7).
-  if (c.type == CmdType::SetTrackParam || c.type == CmdType::SetGlobal) {
+  if (c.type == CmdType::SetTrackParam || c.type == CmdType::SetGlobal || c.type == CmdType::SetMacro) {
     for (int i = 0; i < outCount_; ++i) {
       Command& o = outbox_[(outHead_ + i) % kOutbox];
       if (o.type == c.type && o.a == c.a && (c.type == CmdType::SetGlobal || o.b == c.b)) {
@@ -218,6 +417,13 @@ void Ui::prunePending() {
       pendTrackLen_[t] = 0;
     if (pendMute_[t] && ((proj_->tracks[t].mute != 0) == (pendMute_[t] == 2) || stale(pendMuteFrame_[t])))
       pendMute_[t] = 0;
+    if (((pendInstMask_ >> t) & 1) &&
+        (instrumentId(proj_->tracks[t]) == pendInst_[t] || stale(pendInstFrame_[t])))
+      pendInstMask_ &= uint8_t(~(1u << t));
+    for (int m = 0; m < kTrackMacros; ++m)
+      if (((pendMacMask_[t] >> m) & 1) && !((pendInstMask_ >> t) & 1) &&
+          (proj_->tracks[t].macro[m] == pendMac_[t][m] || stale(pendMacFrame_[t][m])))
+        pendMacMask_[t] &= uint8_t(~(1u << m));
   }
   uint32_t m = pendGMask_;
   while (m) {
@@ -300,6 +506,9 @@ void Ui::setValue(const ValueRef& r, int v) {
     pendGFrame_[r.index & 31] = frame_;
     pendGMask_ |= 1u << (r.index & 31);
     send(cmd(CmdType::SetGlobal, r.index, 0, v));
+  } else if (isMacroIndex(r.index)) {
+    setMacro(r.track & 7, r.index - kMacroIndex0, v);
+    return;
   } else {
     pendTP_[r.track & 7][r.index & 31] = uint8_t(v);
     pendTPFrame_[r.track & 7][r.index & 31] = frame_;
@@ -367,7 +576,9 @@ void Ui::toast(const char* s, uint8_t kind) {
 bool Ui::valueOnScreen(const ValueRef& r) const {
   switch (view_) {
     case View::Sound:
-      return !r.global && r.track == sel_ && r.index < kSoundParams && r.index / 8 == soundPage_[sel_];
+      if (r.global || r.track != sel_) return false;
+      if (instrumentPage()) return isMacroIndex(r.index);
+      return r.index < kSoundParams && r.index / 8 == soundPage_[sel_];
     case View::Mix:
       return !r.global && r.index == kMixRowParam[mixRow_];
     case View::Fx:
@@ -551,6 +762,12 @@ void Ui::keyUp(int k) {
     case kActSweep:
       if (swKey_ == k) swKey_ = -1;
       break;
+    case kActMacro:
+      if (macRep_[r.a & 3].key == k) {
+        runMacroRepeats();   // repeats due since the last frame still count
+        macRep_[r.a & 3].key = -1;
+      }
+      break;
     case kActErase:
       erasing_ = false;
       eraseFinished();
@@ -602,6 +819,7 @@ void Ui::viewKey(View v) {
   }
   switch (v) {   // the view key again = next page / row / tab
     case View::Sound: {
+      if (instrumentPage()) { stepInstrument(1); break; }   // 9 again: the next instrument
       int n = 0;
       while (n < kSoundParams && eng_->trackParamInfo(sel_, n)) ++n;
       const int pages = n ? (n + 7) / 8 : 1;
@@ -629,8 +847,9 @@ void Ui::selectTrack(int t) {
   } else if (view_ == View::Fx) {
     if (fxTab_ == kFxDuck) focus_ = ValueRef{false, sel_, kMixDuck};
   } else {
-    focus_ = ValueRef{false, sel_, trackFocus_[t]};
+    focus_ = ValueRef{false, sel_, uint8_t(focusIndexFor(t))};
   }
+  listUntil_ = 0;
   const int pages = (trackLen(t) + 15) / 16;
   if (shownPage_ >= pages) shownPage_ = uint8_t(pages - 1);
 }
@@ -734,6 +953,7 @@ void Ui::columnKey(int n) {
 }
 
 void Ui::noteDown(int k, int n, bool shift) {
+  if (view_ == View::Sound && instrumentPage()) { macroKeyDown(k, n, shift); return; }
   if (view_ == View::Sound || view_ == View::Mix || view_ == View::Fx) { columnKey(n); return; }
   if (heldStep_ >= 0) { stepEditNote(k, n); return; }
   if (stepWriteActive() && view_ == View::Groove) { stepWriteNote(k, n, shift); return; }
@@ -825,6 +1045,7 @@ void Ui::semicolonDot(int dir, bool octave) {
   }
   switch (view_) {
     case View::Sound: {
+      if (instrumentPage()) { stepInstrument(-dir); return; }   // ; = previous, . = next instrument
       int n = 0;
       while (n < kSoundParams && eng_->trackParamInfo(sel_, n)) ++n;
       const int pages = n ? (n + 7) / 8 : 1;
@@ -880,6 +1101,11 @@ void Ui::addPage() {
 }
 
 void Ui::chordKey(bool shift) {
+  if (view_ == View::Sound && devMode_ && heldStep_ < 0) {   // developer mode: player page <> parameters
+    devFlip_ = !devFlip_;
+    toast(instrumentPage() ? "DEV: PLAYER PAGE" : "DEV: PARAMETER PAGES", 0);
+    return;
+  }
   if (heldStep_ >= 0) {
     if (view_ != View::Groove || heldTrack_ != kTrackLead) return;
     Step s = stepAt(heldTrack_, heldStep_);
@@ -1052,11 +1278,11 @@ bool Ui::targetIsSmall(Target t) const {
       if (stepField_ == kFLock) {
         const Step s = stepAt(heldTrack_, heldStep_);
         const int p = s.lockParam ? s.lockParam - 1 : trackFocus_[heldTrack_];
-        return isSmallRange(eng_->trackParamInfo(heldTrack_, p));
+        return isSmallRange(trackInfo(heldTrack_, p));
       }
       return false;
     }
-    case Target::Lock: return focus_.global ? false : isSmallRange(eng_->trackParamInfo(heldTrack_, focus_.index));
+    case Target::Lock: return focus_.global ? false : isSmallRange(trackInfo(heldTrack_, focus_.index));
     default: return false;
   }
 }
@@ -1094,6 +1320,7 @@ void Ui::valueEvent(int dir, int mag, bool shift) {
       if (!info) return;
       int d = mag;
       if (shift) d = isSmallRange(info) ? 1 : 8;
+      if (!focus_.global && isMacroIndex(focus_.index)) d = shift ? kMacroCoarse : kMacroTap * mag;
       editFocus(focus_, dir * d, true);
       return;
     }
@@ -1172,10 +1399,12 @@ void Ui::editField(int dir, int mag, bool shift) {
     case kFSlide: s.flags ^= kStepSlide; break;
     case kFChord: s.chord = uint8_t(clampi(s.chord + dir, 0, kChordNum - 1)); break;
     case kFLock: {
-      const int p = s.lockParam ? s.lockParam - 1 : trackFocus_[t];
-      const ParamInfo* info = eng_->trackParamInfo(t, p);
-      const int lo = info ? info->min : 0, hi = info ? info->max : 127;
-      const int d = shift ? (isSmallRange(info) ? 1 : 8) : mag;
+      const int p = s.lockParam ? s.lockParam - 1 : focusIndexFor(t);
+      const ParamInfo* info = trackInfo(t, p);
+      if (!info && !s.lockParam) return;
+      const int lo = info ? info->min : 0, hi = info ? info->max : (isMacroIndex(p) ? 255 : 127);
+      int d = shift ? (isSmallRange(info) ? 1 : 8) : mag;
+      if (isMacroIndex(p)) d = shift ? kMacroCoarse : kMacroTap * mag;
       const int base = s.lockParam ? s.lockValue : paramValue(t, p);
       s.lockParam = uint8_t(p + 1);
       s.lockValue = uint8_t(clampi(base + dir * d, lo, hi));
@@ -1194,17 +1423,18 @@ void Ui::editLock(int dir, int mag, bool shift) {
     return;
   }
   const int t = heldTrack_, p = focus_.index;
-  const ParamInfo* info = eng_->trackParamInfo(t, p);
+  const ParamInfo* info = trackInfo(t, p);
   if (!info) return;
   Step s = stepAt(t, heldStep_);
-  const int d = shift ? (isSmallRange(info) ? 1 : 8) : mag;
+  int d = shift ? (isSmallRange(info) ? 1 : 8) : mag;
+  if (isMacroIndex(p)) d = shift ? kMacroCoarse : kMacroTap * mag;
   int base;
   if (s.lockParam == p + 1) {
     base = s.lockValue;
   } else {
     base = paramValue(t, p);
     if (s.lockParam) {
-      const ParamInfo* old = eng_->trackParamInfo(t, s.lockParam - 1);
+      const ParamInfo* old = trackInfo(t, s.lockParam - 1);
       char buf[40];
       char* o = cat(buf, "LOCK ");
       o = cat(o, info->name);
@@ -1225,11 +1455,12 @@ void Ui::editLock(int dir, int mag, bool shift) {
 void Ui::sweepDown(int k, bool shift) {
   const int other = k == kKLBracket ? kKRBracket : kKLBracket;
   const ValueRef dj{true, 0, kGMasterFilter};
-  const ValueRef cut{false, kTrackBass, 0};
+  // SHIFT: the bass's macro 1 (CLASSIC bass: its cutoff, as before instruments)
+  const ValueRef cut{false, kTrackBass, uint8_t(instrumentOf(kTrackBass) ? kMacroIndex0 : 0)};
   if (isHeld(other) && rec_[other].act == kActSweep) {
     const bool bass = rec_[other].a != 0 || shift;
     if (bass) {
-      if (paramValue(kTrackBass, 0) != bassReturn_) setValue(cut, bassReturn_);
+      if (paramValue(kTrackBass, cut.index) != bassReturn_) setValue(cut, bassReturn_);
       showPopup(cut);
     } else {
       if (globalValue(kGMasterFilter) != 64) setValue(dj, 64);
@@ -1241,9 +1472,9 @@ void Ui::sweepDown(int k, bool shift) {
   }
   const bool bass = shift;
   const ValueRef r = bass ? cut : dj;
-  if (bass && !(swKey_ >= 0 && swBass_)) bassReturn_ = uint8_t(paramValue(kTrackBass, 0));
+  if (bass && !(swKey_ >= 0 && swBass_)) bassReturn_ = uint8_t(paramValue(kTrackBass, cut.index));
   const int dir = k == kKLBracket ? -1 : 1;
-  editFocus(r, dir, true);                      // the tap nudge
+  editFocus(r, dir * (isMacroIndex(r.index) ? kMacroTap : 1), true);   // the tap nudge
   swKey_ = int8_t(k);
   swDir_ = int8_t(dir);
   swBass_ = bass;
@@ -1273,21 +1504,25 @@ void Ui::runTimers() {
   // -/= repeat
   if (repKey_ >= 0 && isHeld(repKey_)) runRepeat();
   else repKey_ = -1;
+  runMacroRepeats();
+  if (listUntil_ && (after(now_, listUntil_) || view_ != View::Sound)) { listUntil_ = 0; ++serial_; }
   // [ ] sweep
   if (swKey_ >= 0 && isHeld(swKey_)) {
-    const ValueRef r = swBass_ ? ValueRef{false, kTrackBass, 0} : ValueRef{true, 0, kGMasterFilter};
+    const ValueRef r = swBass_ ? ValueRef{false, kTrackBass, uint8_t(instrumentOf(kTrackBass) ? kMacroIndex0 : 0)}
+                               : ValueRef{true, 0, kGMasterFilter};
+    const bool mac = isMacroIndex(r.index);   // 0..255: twice the units per tick, the same time end to end
     for (int guard = 0; guard < 8 && after(now_, swNextMs_); ++guard) {
       const uint32_t tick = swNextMs_;
       swNextMs_ += kSweepTickMs;
       if (!after(tick, swPauseUntil_)) continue;
       const float prev = swPos_;
-      swPos_ += float(swDir_) * kSweepPerTick;
+      swPos_ += float(swDir_) * kSweepPerTick * (mac ? 2.0f : 1.0f);
       if (!swBass_ && ((prev < 64.0f && swPos_ >= 64.0f) || (prev > 64.0f && swPos_ <= 64.0f))) {
         swPos_ = 64.0f;                            // detent at OFF
         swPauseUntil_ = tick + kDetentMs;
       }
       if (swPos_ < 0.0f) swPos_ = 0.0f;
-      if (swPos_ > 127.0f) swPos_ = 127.0f;
+      if (swPos_ > (mac ? 255.0f : 127.0f)) swPos_ = mac ? 255.0f : 127.0f;
       const int v = int(swPos_ + 0.5f);
       if (v != valueOf(r)) setValue(r, v);
       showPopup(r);

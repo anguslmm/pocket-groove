@@ -1,0 +1,79 @@
+# SOUND view as the instrument page (docs/ux/instrument*.png, docs/UX.md 10.3).
+# Real-UI screenshots: build/host/ui_shot host/ui_scripts/instrument.txt docs/ux
+dev 0
+
+# a new project: every track starts with its first instrument (bass ACID: no end labels)
+empty
+down ctl
+tap n
+up ctl
+wait 1600
+down shift
+tap j
+up shift
+tap 9
+tap x
+tap x
+tap v
+tap spc
+until 6 6
+shot instrument
+
+# bass POLES: end labels on every macro (the list overlay right after the step)
+empty
+down ctl
+tap n
+up ctl
+wait 1600
+down shift
+tap j
+up shift
+tap 9
+tap .
+shot instrument-list
+wait 1700
+tap z
+tap n
+tap n
+tap spc
+until 6 6
+shot instrument-labels
+
+# a step held + a macro key: a macro lock on that step
+empty
+down ctl
+tap n
+up ctl
+wait 1600
+down shift
+tap j
+up shift
+tap 9
+down 4
+wait 300
+down shift
+tap x
+tap x
+tap x
+up shift
+shot instrument-lock
+up 4
+
+# the kick's BOOM (four macros with end labels)
+empty
+down ctl
+tap n
+up ctl
+wait 1600
+tap 9
+tap spc
+until 0 6
+shot instrument-kick
+
+# a CLASSIC track (the mockup demo): the page invites a choice
+demo
+down shift
+tap j
+up shift
+tap 9
+shot instrument-classic

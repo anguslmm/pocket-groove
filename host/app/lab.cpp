@@ -133,19 +133,33 @@ std::string valueText(const pg::ParamInfo* in, int v) {
 
 // ============================================================================ files ====
 
+Lab::~Lab() {
+  if (host_) pg::macro::setLibraryOverlay(nullptr);
+}
+
 void Lab::init(const std::string& dir, const std::string& notesPath, const pm::ParamTable& pt, LabHost* host,
                uint32_t nowMs) {
   dir_ = dir;
   while (dir_.size() > 1 && dir_.back() == '/') dir_.pop_back();
   notesPath_ = notesPath;
   pt_ = pt;
+  for (int t = 0; t < pg::kNumTracks; ++t)
+    for (int p = 0; p < pg::kParamsPerTrack; ++p) def_[t][p] = pt_.info[t][p] ? pt_.info[t][p]->def : 0;
   host_ = host;
   now_ = nowMs;
+  posted_ = host_->instrumentRefreshes();
   scan(nowMs, true);
-  int good = 0;
-  for (const File& f : files_) good += f.good;
-  std::printf("[lab] watching %s/: %d set(s), %d with errors; marks go to %s\n", dir_.c_str(), good, errors(),
-              notesPath_.c_str());
+  pm::setLibraryOverlay(this);
+  publishPending_ = true;   // the tracks bound to built-ins before the overlay existed: bind them again
+  publish();
+  int good = 0, over = 0;
+  for (const File& f : files_) {
+    good += f.good;
+    over += f.good && f.slot >= 0 && pm::findBuiltin(f.set->id) != nullptr;
+  }
+  std::printf("[lab] watching %s/: %d set(s) (%d replace a built-in instrument, %d extra), %d with errors; "
+              "marks go to %s\n",
+              dir_.c_str(), good, over, good - over, errors(), notesPath_.c_str());
   std::fflush(stdout);
   nextPoll_ = nowMs + kPollMs;
 }
@@ -217,12 +231,18 @@ void Lab::scan(uint32_t nowMs, bool first) {
   }
   for (size_t i = 0; i < files_.size();) {
     if (files_[i].seen) { ++i; continue; }
-    const std::string p = files_[i].path;
-    for (int t = 0; t < pg::kNumTracks; ++t)
-      if (tr_[t].path == p) deactivate(t);
-    std::printf("[lab] removed %s\n", p.c_str());
-    setStatus("REMOVED " + upperStr(baseName(p)), AMBER, 2500);
+    File& f = files_[i];
+    std::printf("[lab] removed %s%s\n", f.path.c_str(),
+                f.good && pm::findBuiltin(f.set->id) ? " (its built-in instrument is back)" : "");
+    setStatus("REMOVED " + upperStr(baseName(f.path)), AMBER, 2500);
+    if (f.slot >= 0) {   // unpublish; the engine may still hold the set: retire it
+      slots_[f.slot].id.store(0);
+      slots_[f.slot].set.store(nullptr);
+      f.slot = -1;
+    }
+    if (f.set) retired_.push_back(Retired{std::move(f.set), 0});
     files_.erase(files_.begin() + long(i));
+    publishPending_ = true;
     ++reloads_;
   }
   std::sort(files_.begin(), files_.end(), [](const File& a, const File& b) { return a.path < b.path; });
@@ -236,10 +256,10 @@ void Lab::load(File& f, bool first) {
   const uint32_t h = fnv(text);
   if (h == f.hash && (f.good || !f.err.empty())) return;   // same content as last time
   f.hash = h;
-  static pm::MacroSet fresh;   // 1.9 KB; the main thread only
+  std::unique_ptr<pm::MacroSet> fresh(new pm::MacroSet);
   pm::ParseError e;
   pm::Warnings w;
-  if (!pm::parse(text.data(), text.size(), pt_, &fresh, &e, &w)) {
+  if (!pm::parse(text.data(), text.size(), pt_, fresh.get(), &e, &w)) {
     char b[160];
     std::snprintf(b, sizeof(b), "%d: %s", e.line, e.msg);
     f.err = b;
@@ -248,11 +268,28 @@ void Lab::load(File& f, bool first) {
     dirty_ = true;
     return;
   }
+  if (!fresh->name[0]) {   // no name line: named after the file (its id needs a name)
+    std::string stem = upperStr(baseName(f.path).substr(0, baseName(f.path).size() - 4));
+    stem = stem.substr(0, size_t(pm::kSetNameLen));
+    std::memcpy(fresh->name, stem.c_str(), stem.size() + 1);
+    fresh->id = pm::setId(fresh->track, fresh->name);
+  }
   const bool had = f.good;
-  for (int t = 0; t < pg::kNumTracks; ++t)   // the file now names another voice: give this one back
-    if (tr_[t].path == f.path && fresh.track != t) deactivate(t);   // (saves positions under the old names)
-  const pm::MacroSet old = f.set;
-  f.set = fresh;
+  // Tracks playing the old version keep their macro positions by macro name.
+  if (had && fresh->id == f.set->id) {
+    for (int t = 0; t < pg::kNumTracks; ++t) {
+      if (host_->instrument(t) != f.set->id) continue;
+      int was[4];
+      for (int m = 0; m < 4; ++m) was[m] = host_->paramValue(t, 32 + m);
+      for (int m = 0; m < fresh->numMacros; ++m) {
+        const int k = f.set->findMacro(fresh->macros[m].name);
+        const int v = k >= 0 ? was[k] : pm::startByte(fresh->macros[m]);
+        if (v != was[m]) host_->setMacro(t, m, v);
+      }
+    }
+  }
+  if (f.set) retired_.push_back(Retired{std::move(f.set), 0});   // the engine may still hold it
+  f.set = std::move(fresh);
   f.goodHash = h;
   f.good = true;
   f.err.clear();
@@ -266,128 +303,132 @@ void Lab::load(File& f, bool first) {
   }
   if (w.count > pm::kMaxWarnings)
     std::printf("[lab] %s: %d more warning(s)\n", f.path.c_str(), w.count - pm::kMaxWarnings);
-  f.label =f.set.name[0] ? std::string(f.set.name) : upperStr(baseName(f.path).substr(0, baseName(f.path).size() - 4));
-  for (int t = 0; t < pg::kNumTracks; ++t)
-    if (tr_[t].path == f.path) reconcile(t, old, had);
+  f.label = f.set->name;
+  publishPending_ = true;
   if (!first) {
-    std::printf("[lab] %s %s (%s, %s, %d macro%s)\n", had ? "reloaded" : "loaded", f.path.c_str(), f.label.c_str(),
-                pm::trackName(f.set.track), f.set.numMacros, f.set.numMacros == 1 ? "" : "s");
+    std::printf("[lab] %s %s (%s, %s, %d macro%s, %s)\n", had ? "reloaded" : "loaded", f.path.c_str(),
+                f.label.c_str(), pm::trackName(f.set->track), f.set->numMacros, f.set->numMacros == 1 ? "" : "s",
+                pm::findBuiltin(f.set->id) ? "replaces the built-in" : "an extra instrument");
     setStatus((had ? "RELOADED " : "LOADED ") + upperStr(baseName(f.path)), GREEN, 2500);
     ++reloads_;
   }
   dirty_ = true;
 }
 
-std::vector<int> Lab::setsFor(int track) const {
-  std::vector<int> v;
-  for (size_t i = 0; i < files_.size(); ++i)
-    if (files_[i].good && files_[i].set.track == track) v.push_back(int(i));
-  return v;
+// The slots the engine reads (find()) follow files_: each good file whose voice and
+// name no earlier file has is published under its id. Sets replaced or removed since
+// the last publish are retired with the number of the refresh posted now.
+void Lab::publish() {
+  if (!publishPending_) return;
+  publishPending_ = false;
+  std::map<uint16_t, std::string> first;
+  for (File& f : files_) {
+    if (!f.good) continue;
+    const auto it = first.find(f.set->id);
+    const bool shadowed = it != first.end();
+    if (shadowed && !f.shadowed)
+      std::printf("[lab] %s: the same voice and name as %s: ignored\n", f.path.c_str(), it->second.c_str());
+    f.shadowed = shadowed;
+    if (!shadowed) first[f.set->id] = f.path;
+  }
+  for (File& f : files_) {
+    const bool want = f.good && !f.shadowed;
+    if (!want) {
+      if (f.slot >= 0) {
+        slots_[f.slot].id.store(0);
+        slots_[f.slot].set.store(nullptr);
+        f.slot = -1;
+      }
+      continue;
+    }
+    if (f.slot < 0)
+      for (int s = 0; s < kSlots && f.slot < 0; ++s)
+        if (!slots_[s].set.load() && !slots_[s].id.load()) f.slot = s;
+    if (f.slot < 0) {
+      std::printf("[lab] %s: more than %d sets, not offered\n", f.path.c_str(), kSlots);
+      continue;
+    }
+    Slot& s = slots_[f.slot];
+    if (s.set.load() != f.set.get() || s.id.load() != f.set->id) {
+      s.id.store(0);   // find() checks the set's own id too, so a reader never mixes two sets
+      s.set.store(f.set.get());
+      s.id.store(f.set->id);
+    }
+  }
+  // the engine binds again (every track), and lets go of the retired sets
+  host_->refreshInstruments();
+  ++posted_;
+  for (Retired& r : retired_)
+    if (r.target == 0) r.target = posted_ ? posted_ : 1;
+  dirty_ = true;
 }
 
-// ======================================================================= applying ====
-
-void Lab::savePositions(int track) {
-  Track& t = tr_[track];
-  File* f = find(t.path);
-  if (!f || !f->good) return;
-  Saved& s = saved_[t.path];
-  s.n = f->set.numMacros;
-  for (int m = 0; m < s.n; ++m) {
-    s.names[m] = f->set.macros[m].name;
-    s.pos[m] = t.pos[m];
+const pm::MacroSet* Lab::find(uint16_t id) const {
+  if (id == pm::kNoInstrument) return nullptr;
+  for (const Slot& s : slots_) {
+    if (s.id.load(std::memory_order_acquire) != id) continue;
+    const pm::MacroSet* set = s.set.load(std::memory_order_acquire);
+    if (set && set->id == id) return set;
   }
+  return nullptr;
 }
 
-void Lab::activate(int track, int idx) {
+int Lab::extraCount(int track) const {
+  int n = 0;
+  for (const File& f : files_)
+    n += f.good && f.slot >= 0 && f.set->track == track && !pm::findBuiltin(f.set->id);
+  return n;
+}
+
+const pm::MacroSet* Lab::extra(int track, int i) const {
+  for (const File& f : files_)
+    if (f.good && f.slot >= 0 && f.set->track == track && !pm::findBuiltin(f.set->id) && i-- == 0) return f.set.get();
+  return nullptr;
+}
+
+const Lab::File* Lab::fileFor(uint16_t id) const {
+  for (const File& f : files_)
+    if (f.good && f.slot >= 0 && f.set->id == id) return &f;
+  return nullptr;
+}
+
+// ======================================================================= instruments ====
+
+const pm::MacroSet* Lab::setOf(int track) {
+  const pm::MacroSet* s = pm::findInstrument(host_->instrument(track));
+  return s && s->track == track ? s : nullptr;
+}
+
+int Lab::listIndex(int track) {
+  const int i = pm::instrumentIndex(track, host_->instrument(track));
+  return i < 0 ? 0 : i + 1;
+}
+
+// The track's instrument becomes `id` (0 = none, CLASSIC), at the positions it had in
+// this session, else its defaults.
+void Lab::choose(int track, uint16_t id) {
+  const uint16_t cur = host_->instrument(track);
+  if (const pm::MacroSet* s = setOf(track)) {
+    std::vector<uint8_t>& keep = remembered_[uint32_t(track) << 16 | cur];
+    keep.assign(4, 0);
+    for (int m = 0; m < 4; ++m) keep[size_t(m)] = uint8_t(host_->paramValue(track, 32 + m));
+    (void)s;
+  }
+  const auto it = remembered_.find(uint32_t(track) << 16 | id);
+  host_->setInstrument(track, id, it != remembered_.end() ? it->second.data() : nullptr);
+  const pm::MacroSet* s = id ? pm::findInstrument(id) : nullptr;
+  if (!s) {
+    std::printf("[lab] %s: none (CLASSIC: the sound parameters stay as they are)\n", pm::trackName(track));
+  } else {
+    const File* f = fileFor(id);
+    std::printf("[lab] %s: %s (%s)\n", pm::trackName(track), s->name, f ? f->path.c_str() : "built-in");
+  }
   Track& t = tr_[track];
-  const std::string path = idx >= 0 ? files_[size_t(idx)].path : std::string();
-  if (path == t.path) return;
-  deactivate(track);
-  if (idx < 0) {
-    std::printf("[lab] %s: none (bare parameters, back to the values from before)\n", pm::trackName(track));
-    std::fflush(stdout);
-    return;
-  }
-  const pm::MacroSet& set = files_[size_t(idx)].set;
-  t.path = path;
-  for (int p = 0; p < pg::kParamsPerTrack; ++p) t.under[p] = uint8_t(host_->paramValue(track, p));
-  const auto it = saved_.find(path);
-  for (int m = 0; m < set.numMacros; ++m) {
-    t.pos[m] = set.macros[m].start();
-    if (it != saved_.end())
-      for (int k = 0; k < it->second.n; ++k)
-        if (it->second.names[k] == set.macros[m].name) t.pos[m] = it->second.pos[k];
-  }
-  t.owned = set.ownedMask();
-  t.sentMask = 0;
-  t.force = true;
   t.focus = 0;
   t.axisX = 0;
-  t.axisY = set.numMacros > 1 ? 1 : 0;
-  std::printf("[lab] %s: %s (%s)\n", pm::trackName(track), files_[size_t(idx)].label.c_str(), path.c_str());
+  t.axisY = s && s->numMacros > 1 ? 1 : 0;
   std::fflush(stdout);
   dirty_ = true;
-}
-
-void Lab::deactivate(int track) {
-  Track& t = tr_[track];
-  if (t.path.empty()) return;
-  savePositions(track);
-  for (int p = 0; p < pg::kParamsPerTrack; ++p)
-    if ((t.owned >> p) & 1) host_->setParam(track, p, t.under[p]);
-  t.path.clear();
-  t.owned = 0;
-  t.sentMask = 0;
-  dirty_ = true;
-}
-
-// The active set's file was reloaded: keep the positions of macros that kept their name,
-// give back parameters it no longer owns, and send everything once.
-void Lab::reconcile(int track, const pm::MacroSet& old, bool hadOld) {
-  Track& t = tr_[track];
-  const File* f = find(t.path);
-  if (!f) return;
-  const pm::MacroSet& set = f->set;
-  float pos[pm::kMaxMacros];
-  for (int m = 0; m < set.numMacros; ++m) {
-    pos[m] = set.macros[m].start();
-    if (hadOld) {
-      const int k = old.findMacro(set.macros[m].name);
-      if (k >= 0) pos[m] = t.pos[k];
-    }
-  }
-  std::memcpy(t.pos, pos, sizeof(pos));
-  const uint32_t owned = set.ownedMask();
-  for (int p = 0; p < pg::kParamsPerTrack; ++p) {
-    const uint32_t b = 1u << p;
-    if ((t.owned & b) && !(owned & b)) host_->setParam(track, p, t.under[p]);   // given back
-    if (!(t.owned & b) && (owned & b)) t.under[p] = uint8_t(host_->paramValue(track, p));   // newly owned
-  }
-  t.owned = owned;
-  t.force = true;
-  if (t.focus >= set.numMacros) t.focus = 0;
-  if (t.axisX >= set.numMacros) t.axisX = 0;
-  if (t.axisY >= set.numMacros) t.axisY = set.numMacros > 1 ? 1 : 0;
-}
-
-void Lab::apply(int track) {
-  Track& t = tr_[track];
-  if (t.path.empty()) return;
-  const File* f = find(t.path);
-  if (!f || !f->good) return;
-  uint8_t out[pg::kParamsPerTrack];
-  pm::evaluate(f->set, pt_, t.pos, t.under, out);
-  for (int p = 0; p < pg::kParamsPerTrack; ++p) {
-    const uint32_t b = 1u << p;
-    if (!(t.owned & b)) continue;
-    if (t.force || !(t.sentMask & b) || out[p] != t.sent[p]) {
-      host_->setParam(track, p, out[p]);
-      t.sent[p] = out[p];
-      t.sentMask |= b;
-    }
-  }
-  t.force = false;
 }
 
 void Lab::tick(uint32_t nowMs) {
@@ -395,18 +436,26 @@ void Lab::tick(uint32_t nowMs) {
   now_ = nowMs;
   if (int32_t(nowMs - nextPoll_) >= 0) {
     scan(nowMs, false);
+    publish();
     nextPoll_ = nowMs + kPollMs;
   }
-  for (int t = 0; t < pg::kNumTracks; ++t) apply(t);
+  // free the sets the engine has let go of
+  const uint8_t done = host_->instrumentRefreshes();
+  for (size_t i = 0; i < retired_.size();) {
+    if (retired_[i].target && int8_t(uint8_t(done - retired_[i].target)) >= 0) retired_.erase(retired_.begin() + long(i));
+    else ++i;
+  }
   if (statusUntil_ && int32_t(nowMs - statusUntil_) >= 0) {
     statusUntil_ = 0;
     status_.clear();
     dirty_ = true;
   }
-  // redraw when what the panel shows changed: the track, its values (hand edits, p-locks)
+  // redraw when what the panel shows changed: the track, its instrument, positions, values
   const int sel = (host_->selectedTrack() & 7);
   uint32_t h = 2166136261u;
-  for (int p = 0; p < pg::kParamsPerTrack; ++p) h = (h ^ uint32_t(host_->paramValue(sel, p))) * 16777619u;
+  h = (h ^ host_->instrument(sel)) * 16777619u;
+  for (int p = 0; p < 36; ++p) h = (h ^ uint32_t(host_->paramValue(sel, p))) * 16777619u;
+  h = (h ^ host_->lockedMask(sel)) * 16777619u;
   if (sel != lastShownTrack_ || h != lastDrawHash_) {
     lastShownTrack_ = sel;
     lastDrawHash_ = h;
@@ -415,12 +464,19 @@ void Lab::tick(uint32_t nowMs) {
 }
 
 bool Lab::synced() {
+  if (int8_t(uint8_t(host_->instrumentRefreshes() - posted_)) < 0) return false;
   for (int t = 0; t < pg::kNumTracks; ++t) {
-    const Track& s = tr_[t];
-    if (s.path.empty()) continue;
-    if (s.force) return false;
-    for (int p = 0; p < pg::kParamsPerTrack; ++p)
-      if (((s.owned >> p) & 1) && (!((s.sentMask >> p) & 1) || host_->paramValue(t, p) != s.sent[p])) return false;
+    if (host_->instrument(t) != host_->projectInstrument(t)) return false;
+    for (int m = 0; m < 4; ++m)
+      if (host_->paramValue(t, 32 + m) != host_->projectValue(t, 32 + m)) return false;
+    const pm::MacroSet* s = pm::findInstrument(host_->projectInstrument(t));
+    if (!s || s->track != t) continue;
+    float p[4];
+    for (int m = 0; m < 4; ++m) p[m] = float(host_->projectValue(t, 32 + m)) / 255.0f;
+    uint8_t out[pg::kParamsPerTrack];
+    pm::evaluate(*s, pt_, p, def_[t], out);
+    for (int i = 0; i < pg::kSoundParams; ++i)
+      if (pt_.info[t][i] && host_->projectValue(t, i) != out[i]) return false;
   }
   return true;
 }
@@ -430,53 +486,55 @@ bool Lab::synced() {
 bool Lab::selectSet(int track, const std::string& which) {
   if (track < 0 || track >= pg::kNumTracks) return false;
   if (which == "none") {
-    activate(track, -1);
+    choose(track, pm::kNoInstrument);
     return true;
   }
-  for (int i : setsFor(track)) {
-    const File& f = files_[size_t(i)];
+  for (const File& f : files_) {
+    if (!f.good || f.slot < 0 || f.set->track != track) continue;
     const std::string fn = baseName(f.path);
     if (upperStr(which) == f.label || which == f.path || which == fn || which + ".pgm" == fn) {
-      activate(track, i);
+      choose(track, f.set->id);
+      return true;
+    }
+  }
+  for (int i = 0; i < pm::instrumentCount(track); ++i) {   // a built-in without a file here
+    const pm::MacroSet* s = pm::instrumentAt(track, i);
+    if (s && upperStr(which) == s->name) {
+      choose(track, s->id);
       return true;
     }
   }
   return false;
 }
 
-bool Lab::setMacro(int track, int m, float pos) {
+bool Lab::setMacro(int track, int m, float p) {
   if (track < 0 || track >= pg::kNumTracks) return false;
-  const File* f = find(tr_[track].path);
-  if (!f || m < 0 || m >= f->set.numMacros) return false;
-  tr_[track].pos[m] = pos < 0.0f ? 0.0f : pos > 1.0f ? 1.0f : pos;
+  const pm::MacroSet* s = setOf(track);
+  if (!s || m < 0 || m >= s->numMacros) return false;
+  host_->setMacro(track, m, pm::posToByte(p));
   dirty_ = true;
   return true;
 }
 
 void Lab::step(int dir) {
   const int track = (host_->selectedTrack() & 7);
-  const std::vector<int> sets = setsFor(track);
-  // positions: none, then the sets in path order
-  int cur = 0;
-  for (size_t i = 0; i < sets.size(); ++i)
-    if (files_[size_t(sets[i])].path == tr_[track].path) cur = int(i) + 1;
-  const int n = int(sets.size()) + 1;
-  const int next = ((cur + dir) % n + n) % n;
-  activate(track, next == 0 ? -1 : sets[size_t(next - 1)]);
-  dirty_ = true;
+  // positions: none, then the library's list (built-ins, replaced where a file says so, then extras)
+  const int n = pm::instrumentCount(track) + 1;
+  const int next = ((listIndex(track) + dir) % n + n) % n;
+  choose(track, next == 0 ? pm::kNoInstrument : pm::instrumentAt(track, next - 1)->id);
 }
 
 void Lab::nudge(float d) {
   const int track = (host_->selectedTrack() & 7);
   Track& t = tr_[track];
-  setMacro(track, t.focus, t.pos[t.focus] + d);
+  setMacro(track, t.focus, pos(track, t.focus) + d);
 }
 
 void Lab::action(int act, bool shift) {
   if (!host_) return;
   const int track = (host_->selectedTrack() & 7);
-  const File* f = find(tr_[track].path);
-  const int nm = f ? f->set.numMacros : 0;
+  const pm::MacroSet* s = setOf(track);
+  const int nm = s ? s->numMacros : 0;
   if (act == kActLabGood || act == kActLabBad) mark(act == kActLabGood);
   else if (act == kActLabPrev) step(-1);
   else if (act == kActLabNext) step(+1);
@@ -491,8 +549,8 @@ void Lab::mouseDown(int x, int y) {
   if (!host_) return;
   const int track = (host_->selectedTrack() & 7);
   Track& t = tr_[track];
-  const File* f = find(t.path);
-  const int nm = f ? f->set.numMacros : 0;
+  const pm::MacroSet* s = setOf(track);
+  const int nm = s ? s->numMacros : 0;
   auto in = [&](int x0, int y0, int w, int h) { return x >= x0 && x < x0 + w && y >= y0 && y < y0 + h; };
   if (in(kPrevX, kSetY, kArrowW, kSetH)) return step(-1);
   if (in(kNextX, kSetY, kArrowW, kSetH)) return step(+1);
@@ -528,8 +586,8 @@ void Lab::mouseMove(int x, int y) {
 
 void Lab::mouseUp() { drag_ = kDragNone; }
 
-void Lab::sliderPoint(int m, float pos, int* x, int* y) const {
-  *x = kBarX + int(pos * float(kBarW - 1) + 0.5f);
+void Lab::sliderPoint(int m, float p, int* x, int* y) const {
+  *x = kBarX + int(p * float(kBarW - 1) + 0.5f);
   *y = kSlY0 + m * kSlH + kSlH / 2;
 }
 
@@ -559,40 +617,46 @@ void Lab::setStatus(const std::string& s, uint8_t colour, uint32_t ms) {
 // ========================================================================== marks ====
 
 // "SHORT=value" for the parameters the set owns (all sound parameters with no set),
-// in index order; with flagHand a '*' marks a value that differs from what the set
-// computes (edited by hand since).
+// in index order, as the instrument plays them (mixer rows: the player's values
+// combined by the mixer rule). With flagHand a '*' marks a value that differs from
+// what the set computes (a parameter edited by hand in developer mode, or a mixer
+// row the player moved).
 std::string Lab::valuesText(int track, bool flagHand) {
-  const Track& t = tr_[track];
-  const File* f = find(t.path);
-  uint8_t out[pg::kParamsPerTrack];
+  const pm::MacroSet* set = setOf(track);
+  uint8_t out[pg::kParamsPerTrack], eff[pg::kParamsPerTrack];
   uint32_t owned = 0;
-  if (f && f->good) owned = pm::evaluate(f->set, pt_, t.pos, t.under, out);
-  const uint32_t locked = host_->lockedMask(track);
+  for (int p = 0; p < pg::kParamsPerTrack; ++p) eff[p] = uint8_t(host_->projectValue(track, p));
+  if (set) {
+    float p[4];
+    for (int m = 0; m < 4; ++m) p[m] = pos(track, m);
+    owned = pm::evaluate(*set, pt_, p, def_[track], out);
+    pm::combineMixer(eff, out, def_[track], eff);
+  }
   std::string s;
   for (int p = 0; p < pg::kParamsPerTrack; ++p) {
     const pg::ParamInfo* in = pt_.info[track][p];
     if (!in) continue;
     if (owned ? !((owned >> p) & 1) : p >= pg::kSoundParams) continue;
-    const int v = host_->paramValue(track, p);
     if (!s.empty()) s += " ";
-    s += std::string(in->name) + "=" + valueText(in, v);
-    if (flagHand && owned && v != out[p]) s += "*";
-    if (flagHand && ((locked >> p) & 1)) s += "~";
+    s += std::string(in->name) + "=" + valueText(in, eff[p]);
+    if (flagHand && owned && eff[p] != out[p]) s += "*";
   }
   return s;
 }
 
 std::string Lab::describe(int track) {
-  const Track& t = tr_[track];
-  const File* f = find(t.path);
+  const pm::MacroSet* set = setOf(track);
   std::string s = pm::trackName(track);
-  if (!f || !f->good) {
+  if (!set) {
     s += " none -";
   } else {
+    const File* f = fileFor(set->id);
     char h[12];
-    std::snprintf(h, sizeof(h), "%08x", f->goodHash);
-    s += " " + f->label + " " + f->path + "@" + h;
-    for (int m = 0; m < f->set.numMacros; ++m) s += std::string(" ") + f->set.macros[m].name + "=" + posText(t.pos[m]);
+    std::snprintf(h, sizeof(h), "%08x", f ? f->goodHash : 0u);
+    s += std::string(" ") + set->name + " " + (f ? f->path : std::string("builtin")) + "@" + h;
+    const uint32_t locked = host_->lockedMask(track);
+    for (int m = 0; m < set->numMacros; ++m)
+      s += std::string(" ") + set->macros[m].name + "=" + posText(pos(track, m)) + (((locked >> m) & 1) ? "~" : "");
   }
   return s + " | " + valuesText(track, true);
 }
@@ -657,9 +721,14 @@ void Lab::draw(uint8_t* px) {
   if (!host_) return;
   const int track = (host_->selectedTrack() & 7);
   Track& t = tr_[track];
-  const File* f = find(t.path);
-  const bool active = f && f->good;
-  const int nm = active ? f->set.numMacros : 0;
+  const pm::MacroSet* set = setOf(track);
+  const File* f = set ? fileFor(set->id) : nullptr;
+  const int nm = set ? set->numMacros : 0;
+  float p[4];
+  for (int m = 0; m < 4; ++m) p[m] = pos(track, m);
+  if (t.focus >= nm) t.focus = 0;
+  if (t.axisX >= nm) t.axisX = 0;
+  if (t.axisY >= nm) t.axisY = nm > 1 ? 1 : 0;
 
   // header: the tool's name, the track
   g.text(4, 2, "MACRO LAB", CYAN);
@@ -667,31 +736,32 @@ void Lab::draw(uint8_t* px) {
   g.rrect(W - 4 - tw(tn.c_str()) - 4, 1, tw(tn.c_str()) + 4, 9, tc(track, kBright));
   g.text(W - 4 - tw(tn.c_str()) - 2, 2, tn.c_str(), BG);
 
-  // the set: < NAME n/N >
-  const std::vector<int> sets = setsFor(track);
-  int cur = 0;
-  for (size_t i = 0; i < sets.size(); ++i)
-    if (files_[size_t(sets[i])].path == t.path) cur = int(i) + 1;
+  // the instrument: < NAME n/N >
+  const int count = pm::instrumentCount(track);
   g.button(kPrevX, kSetY, kArrowW, kSetH, PG_ICON_LEFT, false, CYAN);
   g.button(kNextX, kSetY, kArrowW, kSetH, PG_ICON_RIGHT, false, CYAN);
   char setText[40];
-  if (active) std::snprintf(setText, sizeof(setText), "%s  %d/%d", f->label.c_str(), cur, int(sets.size()));
-  else std::snprintf(setText, sizeof(setText), "NONE  0/%d", int(sets.size()));
-  g.textC(W / 2, kSetY + 2, setText, active ? WHITE : DIM);
+  if (set) std::snprintf(setText, sizeof(setText), "%s  %d/%d", set->name, listIndex(track), count);
+  else std::snprintf(setText, sizeof(setText), "%s  0/%d", host_->instrument(track) ? "UNKNOWN" : "NONE", count);
+  g.textC(W / 2, kSetY + 2, setText, set ? WHITE : DIM);
   // under the name: the set's about line ("family: ..."), else its file
-  if (active && f->set.about[0]) g.text(4, kPathY, fitStart(upperStr(f->set.about), 29).c_str(), TEXT);
+  if (set && set->about[0]) g.text(4, kPathY, fitStart(upperStr(set->about), 29).c_str(), TEXT);
   else
-    g.text(4, kPathY, fitEnd(active ? f->path : sets.empty() ? "no set for this track" : "bare parameters", 29).c_str(),
+    g.text(4, kPathY,
+           fitEnd(set ? (f ? f->path : std::string("built-in (no file here)")) : std::string("CLASSIC: bare parameters"),
+                  29).c_str(),
            DIM);
 
   // status: typing > an error in this set > any error > a passing notice > a warning of this
-  // set > p-locks > the keyboard macro's description > the keys
+  // set > macro locks > the keyboard macro's description > the keys
   std::string s1, s2;
   uint8_t sc = DIM;
   const File* errFile = nullptr;
-  if (f && !f->err.empty()) errFile = f;
+  for (const File& e : files_)
+    if (set && e.set && e.set->id == set->id && !e.err.empty()) errFile = &e;
   for (const File& e : files_)
     if (!errFile && !e.err.empty()) errFile = &e;
+  const uint32_t locked = host_->lockedMask(track);
   if (typing_) {
     s1 = "TYPE A NOTE: RETURN SAVES";
     s2 = "ESC SAVES WITHOUT ONE";
@@ -704,19 +774,19 @@ void Lab::draw(uint8_t* px) {
   } else if (!status_.empty()) {
     s1 = fitStart(status_, 29);
     sc = statusColour_;
-  } else if (active && !f->warns.empty()) {
+  } else if (f && !f->warns.empty()) {
     // amber, "line: reason" of the active set (the terminal has every warning in full)
     std::string m = f->warns[0];
     if (f->warnCount > 1) m = "(" + std::to_string(f->warnCount) + ") " + m;
     s1 = fitStart(m, 29);
     s2 = m.size() > 29 ? fitStart(m.substr(29), 29) : std::string();
     sc = AMBER;
-  } else if (active && (host_->lockedMask(track) & t.owned)) {
-    s1 = "CYAN: P-LOCKED ON STEPS OF";
-    s2 = "THIS PATTERN (LOCKS WIN)";
+  } else if (set && locked) {
+    s1 = "CYAN: MACRO LOCKED ON STEPS";
+    s2 = "OF THIS PATTERN (LOCKS WIN)";
     sc = CYAN;
-  } else if (active && t.focus < nm && f->set.macros[t.focus].desc[0]) {
-    const std::string m = std::string(f->set.macros[t.focus].name) + ": " + f->set.macros[t.focus].desc;
+  } else if (set && t.focus < nm && set->macros[t.focus].desc[0]) {
+    const std::string m = std::string(set->macros[t.focus].name) + ": " + set->macros[t.focus].desc;
     s1 = fitStart(m, 29);
     s2 = m.size() > 29 ? fitStart(m.substr(29), 29) : std::string();
     sc = TEXT;
@@ -727,7 +797,7 @@ void Lab::draw(uint8_t* px) {
   g.text(4, kStatusY, s1.c_str(), sc);
   g.text(4, kStatusY + 8, s2.c_str(), sc == RED || sc == AMBER || sc == TEXT ? sc : uint8_t(DIM));
 
-  // sliders
+  // sliders: the track's own macro positions
   for (int m = 0; m < pm::kMaxMacros; ++m) {
     const int y = kSlY0 + m * kSlH;
     if (m >= nm) {
@@ -735,10 +805,10 @@ void Lab::draw(uint8_t* px) {
       continue;
     }
     const bool foc = m == t.focus;
-    const pm::Macro& mac = f->set.macros[m];
-    g.text(4, y + 2, mac.name, foc ? AMBER : TEXT);
+    const pm::Macro& mac = set->macros[m];
+    g.text(4, y + 2, mac.name, ((locked >> m) & 1) ? uint8_t(CYAN) : (foc ? uint8_t(AMBER) : uint8_t(TEXT)));
     g.rect(kBarX, y + 2, kBarW, kBarH, RAISED);
-    const int fill = int(t.pos[m] * float(kBarW - 1) + 0.5f);
+    const int fill = int(p[m] * float(kBarW - 1) + 0.5f);
     g.rect(kBarX, y + 2, fill + 1, kBarH, foc ? AMBER_D : CYAN_D);
     // the end labels inside the bar, at their ends
     if (mac.lo[0]) g.text(kBarX + 2, y + 2, upperStr(mac.lo).c_str(), TEXT);
@@ -746,10 +816,10 @@ void Lab::draw(uint8_t* px) {
     // a tick under the bar where an enum parameter jumps (the other macros where they are)
     float jp[16];
     uint8_t jparam[16];
-    const int nj = pm::enumJumps(f->set, pt_, m, t.pos, t.under, jp, jparam, 16);
+    const int nj = pm::enumJumps(*set, pt_, m, p, def_[track], jp, jparam, 16);
     for (int k = 0; k < nj; ++k) g.rect(kBarX + int(jp[k] * float(kBarW - 1) + 0.5f), y + 10, 1, 2, AMBER);
     g.rect(kBarX + fill - 1, y + 1, 3, kBarH + 2, WHITE);
-    g.textR(W - 3, y + 2, posText(t.pos[m]).c_str(), TEXT);
+    g.textR(W - 3, y + 2, posText(p[m]).c_str(), TEXT);
   }
 
   // XY pad
@@ -759,53 +829,53 @@ void Lab::draw(uint8_t* px) {
   g.rect(kPadX, kPadY + kPadS / 2, kPadS, 1, RAISED);
   if (nm > 0) {
     // the axes' end labels: X along the bottom edge, Y up the left edge
-    const pm::Macro& mx = f->set.macros[t.axisX];
+    const pm::Macro& mx = set->macros[t.axisX];
     // (the bottom row holds 10 characters with a gap: the low label gets up to 5, the high one the rest)
     const std::string xlo = fitStart(upperStr(mx.lo), 5), xhi = fitStart(upperStr(mx.hi), 10 - xlo.size());
     if (mx.lo[0]) g.text(kPadX + 1, kPadY + kPadS - 8, xlo.c_str(), DIM);
     if (mx.hi[0]) g.textR(kPadX + kPadS - 2, kPadY + kPadS - 8, xhi.c_str(), DIM);
     if (nm > 1 && t.axisY != t.axisX) {
-      const pm::Macro& my = f->set.macros[t.axisY];
+      const pm::Macro& my = set->macros[t.axisY];
       if (my.hi[0]) g.text(kPadX + 1, kPadY + 1, upperStr(my.hi).c_str(), DIM);
       if (my.lo[0]) g.text(kPadX + 1, kPadY + kPadS - 17, upperStr(my.lo).c_str(), DIM);
     }
     int x = 0, y = 0;
-    padPoint(t.pos[t.axisX], t.axisY != t.axisX ? t.pos[t.axisY] : 0.5f, &x, &y);
+    padPoint(p[t.axisX], t.axisY != t.axisX ? p[t.axisY] : 0.5f, &x, &y);
     g.rect(x - 1, y - 1, 3, 3, AMBER);
     char ax[16];
-    std::snprintf(ax, sizeof(ax), "X %s", f->set.macros[t.axisX].name);
+    std::snprintf(ax, sizeof(ax), "X %s", set->macros[t.axisX].name);
     g.button(kAxisXX, kAxisY, kAxisW, 9, ax, false, CYAN);
-    std::snprintf(ax, sizeof(ax), "Y %s", nm > 1 ? f->set.macros[t.axisY].name : "-");
+    std::snprintf(ax, sizeof(ax), "Y %s", nm > 1 ? set->macros[t.axisY].name : "-");
     g.button(kAxisYX, kAxisY, kAxisW, 9, ax, false, CYAN);
   }
 
-  // readout: what the set drives, as the instrument has it now (amber = edited by hand,
-  // cyan = p-locked on steps of the current pattern, where the lock plays instead)
-  if (active) {
-    const uint32_t locked = host_->lockedMask(track);
-    uint8_t out[pg::kParamsPerTrack];
-    const uint32_t owned = pm::evaluate(f->set, pt_, t.pos, t.under, out);
+  // readout: what the set drives, as the instrument plays it now (amber = differs from what
+  // the set computes: a hand edit in developer mode, or a mixer row the player moved)
+  if (set) {
+    uint8_t out[pg::kParamsPerTrack], eff[pg::kParamsPerTrack];
+    const uint32_t owned = pm::evaluate(*set, pt_, p, def_[track], out);
+    for (int i = 0; i < pg::kParamsPerTrack; ++i) eff[i] = uint8_t(host_->projectValue(track, i));
+    pm::combineMixer(eff, out, def_[track], eff);
     int n = 0, total = __builtin_popcount(owned);
-    for (int p = 0; p < pg::kParamsPerTrack; ++p) {
-      if (!((owned >> p) & 1)) continue;
+    for (int i = 0; i < pg::kParamsPerTrack; ++i) {
+      if (!((owned >> i) & 1)) continue;
       if (n == kReadRows * 2 - 1 && total > kReadRows * 2) {
         char more[12];
         std::snprintf(more, sizeof(more), "+%d", total - n);
         g.text(kColX + 46, kReadY + (n / 2) * 8, more, DIM);
         break;
       }
-      const pg::ParamInfo* in = pt_.info[track][p];
-      const int v = host_->paramValue(track, p);
+      const pg::ParamInfo* in = pt_.info[track][i];
       // the name, then the value right-aligned in its 7-character cell
       const int x = kColX + (n % 2) * 46, y = kReadY + (n / 2) * 8;
-      g.text(x, y, in->name, ((locked >> p) & 1) ? uint8_t(CYAN) : uint8_t(DIM));
-      g.textR(x + 44, y, fitStart(valueText(in, v), 3).c_str(), v != out[p] ? uint8_t(AMBER) : uint8_t(TEXT));
+      g.text(x, y, in->name, DIM);
+      g.textR(x + 44, y, fitStart(valueText(in, eff[i]), 3).c_str(), eff[i] != out[i] ? uint8_t(AMBER) : uint8_t(TEXT));
       ++n;
     }
   } else {
-    g.text(kColX, kReadY, "NO SET:", DIM);
-    g.text(kColX, kReadY + 8, "PARAMETERS ARE", DIM);
-    g.text(kColX, kReadY + 16, "AS THEY ARE", DIM);
+    g.text(kColX, kReadY, "NO INSTRUMENT:", DIM);
+    g.text(kColX, kReadY + 8, "CLASSIC, THE", DIM);
+    g.text(kColX, kReadY + 16, "STORED VALUES", DIM);
   }
 
   // marks

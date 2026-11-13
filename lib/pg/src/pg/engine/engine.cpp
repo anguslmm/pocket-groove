@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstring>
 
+#include "../macro/macro.h"
 #include "delay.h"
 #include "dsp_util.h"
 #include "ducker.h"
@@ -71,6 +72,16 @@ struct TrackRt {
   uint8_t recHeld, recNote, recPattern, recStep;
   uint32_t recStartQ;                 // quantum counter at its note-on
   uint32_t liveHeld[4];               // live keys down (NoteOn without NoteOff yet), bit per MIDI note
+  // ---- instrument (engine.h "INSTRUMENTS") ----
+  const macro::MacroSet* inst;        // the bound set, nullptr = CLASSIC or unknown id
+  uint16_t boundId;                   // the Project id it was bound from
+  uint8_t bindValid;                  // 0: (re)bind at the next quantum
+  uint8_t evPos[kTrackMacros];        // the positions the derived values came from
+  uint8_t iMix[macro::kMixRows];      // the instrument's evaluated mixer rows (level .. duck)
+  uint8_t lkSound[kSoundParams];      // with a macro lock in scope: the sound params with that macro at the lock
+  uint8_t lkMix[macro::kMixRows];     // ... and its mixer rows
+  uint8_t lkValid;                    // lkSound / lkMix hold the current macro lock's evaluation
+  uint8_t dMix[macro::kMixRows];      // mixer defaults, the reference of the mixer rule
   // ---- params ----
   uint8_t eff[kParamsPerTrack];       // effective params this quantum (p-lock applied)
   uint8_t mute;                       // cached Project mute
@@ -104,7 +115,7 @@ struct State {
 
   // ---- audio -> UI status ----
   std::atomic<bool> aPlaying, aRecording;
-  std::atomic<uint8_t> aPattern, aQueued, aSongSlot, aSongRep, aMasterStep, aWritesDone;
+  std::atomic<uint8_t> aPattern, aQueued, aSongSlot, aSongRep, aMasterStep, aWritesDone, aInstRefreshes;
   std::atomic<uint8_t> aStep[kNumTracks], aTrig[kNumTracks];
   std::atomic<float> aPeakL, aPeakR, aDuck;
   std::atomic<uint32_t> aRevision;
@@ -125,6 +136,7 @@ struct State {
   bool songFresh;                     // song mode was just switched on: enter songStart at the next boundary
   uint8_t songStart;                  // slot the song starts from (SetSongMode a)
   uint8_t writesDone;                 // WriteTrack / WritePattern commands consumed
+  uint8_t instRefreshes;              // RefreshInstruments commands consumed
   uint32_t qCount;                    // quanta processed (record timing)
   uint32_t absStep;                   // master steps fired since Play (roll phase lock)
   int masterPos, masterNext;
@@ -214,6 +226,12 @@ struct State {
   void afterNoteOn(int t);
   void buildEff(int t);
   void ensureParams(int t);
+  // instruments
+  void trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const;
+  void deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const;
+  void evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out);
+  void refreshInstrument(int t, bool rebind);
+  void evalLock(int t);
   uint32_t rand32() {
     uint32_t x = rng;
     x ^= x << 13; x ^= x >> 17; x ^= x << 5;
@@ -248,6 +266,7 @@ void State::init(float sampleRate, Project* p) {
   faults = 0;
   monoOut = false;
   writesDone = 0;
+  instRefreshes = 0;
   qCount = 0;
 #if PG_STEM_TAP
   seqHeld = false;
@@ -311,6 +330,9 @@ void State::resetRuntime() {
     r.settled = 0;
     r.hasSends = 0;
     std::memset(r.eff, 0, sizeof(r.eff));
+    r.bindValid = 0;                  // a new project may be in place: bind at the next quantum
+    r.inst = nullptr;
+    r.lkValid = 0;
   }
   duck.reset();
   fxDuckPrev = 1.0f;
@@ -339,6 +361,12 @@ void State::cacheVoiceRanges(int t) {
     r.pMax[i] = info ? info->max : 255;
     if (info) r.pHas |= 1u << i;
   }
+  for (int i = 0; i < macro::kMixRows; ++i) {
+    const ParamInfo* info = mixParamInfo(t, kMixLevel + i);
+    r.dMix[i] = info ? info->def : 0;
+    r.iMix[i] = r.lkMix[i] = r.dMix[i];
+  }
+  r.bindValid = 0;
 }
 
 void State::paramRange(int track, int idx, int& lo, int& hi) const {
@@ -362,8 +390,8 @@ bool State::sanitizeStep(int track, Step& s) const {
   if (s.gate < 1) s.gate = 1;
   if (s.prob > 100) s.prob = 100;
   if (s.chord >= kChordNum || track != kTrackLead) s.chord = 0;
-  if (s.lockParam > kParamsPerTrack) s.lockParam = 0;
-  if (s.lockParam) {
+  if (s.lockParam >= kLockMacro0 + kTrackMacros) s.lockParam = 0;
+  if (s.lockParam && !isMacroLock(s.lockParam)) {   // a macro lock's value is any position 0..255
     const int idx = s.lockParam - 1;
     const bool exists = idx < kSoundParams ? (tr[track].pHas >> idx) & 1u : mixParamInfo(track, idx) != nullptr;
     if (!exists) {
@@ -389,6 +417,17 @@ bool State::sanitizeTrack(Project& p, int t) const {
     if (v != ts.params[i]) { ts.params[i] = v; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
+  // DECISION: an instrument track's sound parameters are derived values, so the
+  // sanitiser derives them (a project saved with an older version of a set comes
+  // back with what the set gives now; the engine then finds nothing to change).
+  if (const macro::MacroSet* set = macro::findInstrument(instrumentId(ts))) {
+    if (set->track == t) {
+      uint8_t out[kParamsPerTrack];
+      deriveInto(*set, t, ts.macro, out);
+      for (int i = 0; i < kSoundParams; ++i)
+        if (((tr[t].pHas >> i) & 1u) && ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
+    }
+  }
   for (int pt = 0; pt < kNumPatterns; ++pt) {
     TrackPattern& tp = p.patterns[pt].tracks[t];
     const uint8_t len = uint8_t(sanitizeLength(tp.length));
@@ -404,7 +443,19 @@ bool State::sanitizeAll(Project& p) const {
   bool changed = false;
   const uint8_t magic[4] = {'P', 'G', 'R', 'V'};
   if (std::memcmp(p.magic, magic, 4) != 0) { std::memcpy(p.magic, magic, 4); changed = true; }
-  if (p.version != kProjectVersion) { p.version = kProjectVersion; changed = true; }
+  if (p.version != kProjectVersion) {
+    // DECISION: version 1 had no instruments (the bytes were reserved, zero): it loads
+    // with none on any track (CLASSIC), whatever those bytes hold, so it sounds exactly
+    // as it did. Any other foreign version is treated the same way.
+    for (int t = 0; t < kNumTracks; ++t) {
+      TrackSettings& ts = p.tracks[t];
+      std::memset(ts.instrument, 0, sizeof(ts.instrument));
+      std::memset(ts.macro, 0, sizeof(ts.macro));
+      std::memset(ts.reserved, 0, sizeof(ts.reserved));
+    }
+    p.version = kProjectVersion;
+    changed = true;
+  }
   // Name: printable ASCII up to the first NUL, NUL padded after it, and
   // always NUL terminated.
   {
@@ -540,9 +591,11 @@ void State::discardCommands(uint32_t upTo) {
   for (; h != upTo; ++h) {
     const CmdType ty = queue[h & (kQueueSize - 1)].type;
     if (ty == CmdType::WriteTrack || ty == CmdType::WritePattern) { ++writesDone; wrote = true; }
+    if (ty == CmdType::RefreshInstruments) ++instRefreshes;
   }
   qHead.store(h, std::memory_order_release);
   if (wrote) aWritesDone.store(writesDone, std::memory_order_relaxed);
+  aInstRefreshes.store(instRefreshes, std::memory_order_relaxed);
 }
 
 // First quantum that sees a suspend request: stop rolls and release held
@@ -692,7 +745,11 @@ void State::apply(const Command& c) {
       for (int s = 0; s < kMaxSteps; ++s) {
         Step& st = dst.steps[s];
         if (c.c != kTrackLead) st.chord = 0;
-        if (st.lockParam && st.lockParam <= kSoundParams) { st.lockParam = 0; st.lockValue = 0; }
+        // sound-param and macro locks mean something else on another voice / instrument
+        if ((st.lockParam && st.lockParam <= kSoundParams) || isMacroLock(st.lockParam)) {
+          st.lockParam = 0;
+          st.lockValue = 0;
+        }
         sanitizeStep(c.c, st);
       }
       bump();
@@ -700,6 +757,31 @@ void State::apply(const Command& c) {
     }
     case CmdType::Roll:
       if (c.a < kNumTracks && c.c <= 4) startRoll(c.a, c);
+      break;
+    case CmdType::SetInstrument: {
+      if (c.a >= kNumTracks) break;
+      TrackSettings& ts = proj->tracks[c.a];
+      setInstrumentId(ts, uint16_t(c.step.lockParam | (c.step.lockValue << 8)));
+      ts.macro[0] = c.step.note;
+      ts.macro[1] = c.step.flags;
+      ts.macro[2] = c.step.vel;
+      ts.macro[3] = c.step.gate;
+      bump();
+      refreshInstrument(c.a, true);   // now, so later commands of this drain see it
+      break;
+    }
+    case CmdType::SetMacro:
+      if (c.a >= kNumTracks || c.b >= kTrackMacros) break;
+      if (proj->tracks[c.a].macro[c.b] != c.c) {
+        proj->tracks[c.a].macro[c.b] = c.c;
+        bump();
+      }
+      break;   // derived after the drain (quantum()), once for any number of moves
+    case CmdType::RefreshInstruments:
+      for (int t = 0; t < kNumTracks; ++t)
+        if (c.a == 0xFF || c.a == t) refreshInstrument(t, true);
+      ++instRefreshes;
+      aInstRefreshes.store(instRefreshes, std::memory_order_relaxed);
       break;
     case CmdType::WriteTrack:
       // DECISION: writesDone counts every Write command the engine has
@@ -880,8 +962,89 @@ void State::buildEff(int t) {
   TrackRt& r = tr[t];
   const TrackSettings& ts = proj->tracks[t];
   std::memcpy(r.eff, ts.params, kParamsPerTrack);
-  if (r.lockParam) r.eff[r.lockParam - 1] = r.lockValue;
+  if (!r.inst) {
+    if (r.lockParam && r.lockParam <= kParamsPerTrack) r.eff[r.lockParam - 1] = r.lockValue;   // CLASSIC
+  } else {
+    // An instrument: params[0..23] are derived (or, with a macro lock in scope, its
+    // evaluation); sound-param locks are ignored; a mixer lock replaces the player's
+    // value, which then combines with the instrument's level and sends.
+    const bool macroLock = isMacroLock(r.lockParam) && r.lkValid;
+    if (macroLock) std::memcpy(r.eff, r.lkSound, kSoundParams);
+    if (r.lockParam > kSoundParams && r.lockParam <= kParamsPerTrack) r.eff[r.lockParam - 1] = r.lockValue;
+    macro::combineMixerRows(r.eff, macroLock ? r.lkMix : r.iMix, r.dMix, r.eff);
+  }
   r.mute = ts.mute;
+}
+
+// ---------------------------------------------------------- instruments ----
+
+// The track's parameter metadata and its defaults (the values under a set).
+void State::trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const {
+  for (int i = 0; i < kParamsPerTrack; ++i) {
+    info[i] = i < kSoundParams ? (voice[t] ? voice[t]->paramInfo(i) : nullptr) : mixParamInfo(t, i);
+    defaults[i] = info[i] ? info[i]->def : 0;
+  }
+}
+
+// DECISION (evaluation site): the audio thread evaluates, at a quantum edge, only
+// when the bound id or a position changed (commands, or a Project changed under
+// the engine) and at a step whose macro lock differs from the one in scope. The
+// values under the set are the voice's defaults, so an instrument sounds the
+// same whatever the track held before. Not on the per-sample or per-quantum path.
+void State::deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const {
+  const ParamInfo* info[kParamsPerTrack];
+  uint8_t under[kParamsPerTrack];
+  trackInfo(t, info, under);
+  float pos[kTrackMacros];
+  for (int m = 0; m < kTrackMacros; ++m) pos[m] = macro::posFromByte(positions[m]);
+  macro::evaluate(set, info, pos, under, out);
+}
+
+void State::evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out) {
+  uint8_t pos[kTrackMacros];
+  std::memcpy(pos, proj->tracks[t].macro, kTrackMacros);
+  if (lockMacro >= 0 && lockMacro < kTrackMacros) pos[lockMacro] = lockPos;
+  deriveInto(*tr[t].inst, t, pos, out);
+}
+
+void State::refreshInstrument(int t, bool rebind) {
+  TrackRt& r = tr[t];
+  TrackSettings& ts = proj->tracks[t];
+  const uint16_t id = instrumentId(ts);
+  if (rebind || !r.bindValid || id != r.boundId) {
+    const macro::MacroSet* s = macro::findInstrument(id);
+    r.inst = (s && s->track == t) ? s : nullptr;   // a set for another voice is as unknown
+    r.boundId = id;
+    r.bindValid = 1;
+  }
+  std::memcpy(r.evPos, ts.macro, kTrackMacros);
+  r.lkValid = 0;
+  r.paramsSent = 0;
+  if (!r.inst) return;   // CLASSIC or unknown: the stored parameters play
+  uint8_t out[kParamsPerTrack];
+  evalInstrument(t, -1, 0, out);
+  bool changed = false;
+  for (int i = 0; i < kSoundParams; ++i) {
+    if (!((r.pHas >> i) & 1u)) continue;           // unused voice slots stay 0 (sanitised)
+    if (ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
+  }
+  for (int i = 0; i < macro::kMixRows; ++i) r.iMix[i] = out[kMixLevel + i];
+  if (changed) bump();
+  if (isMacroLock(r.lockParam)) evalLock(t);
+}
+
+// The macro lock in scope (r.lockParam 33..36): the instrument with that macro at the lock's value.
+void State::evalLock(int t) {
+  TrackRt& r = tr[t];
+  r.lkValid = 0;
+  if (!r.inst || !isMacroLock(r.lockParam)) return;
+  const int m = r.lockParam - kLockMacro0;
+  if (m >= r.inst->numMacros) return;              // the set has no such macro: the lock does nothing
+  uint8_t out[kParamsPerTrack];
+  evalInstrument(t, m, r.lockValue, out);
+  for (int i = 0; i < kSoundParams; ++i) r.lkSound[i] = ((r.pHas >> i) & 1u) ? out[i] : 0;
+  for (int i = 0; i < macro::kMixRows; ++i) r.lkMix[i] = out[kMixLevel + i];
+  r.lkValid = 1;
 }
 
 void State::ensureParams(int t) {
@@ -992,10 +1155,12 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
 
   // Parameter lock scope: from this step until the next step of this track
   // that FIRES (with or without a lock of its own).
-  const uint8_t newLock = (st.lockParam >= 1 && st.lockParam <= kParamsPerTrack) ? st.lockParam : 0;
-  if (newLock != r.lockParam || st.lockValue != r.lockValue) r.paramsSent = 0;
+  const uint8_t newLock = (st.lockParam >= 1 && st.lockParam < kLockMacro0 + kTrackMacros) ? st.lockParam : 0;
+  const bool lockChanged = newLock != r.lockParam || st.lockValue != r.lockValue;
+  if (lockChanged) r.paramsSent = 0;
   r.lockParam = newLock;
   r.lockValue = st.lockValue;
+  if (r.inst && isMacroLock(newLock) && (lockChanged || !r.lkValid)) evalLock(t);
 
   const int ratchets = stepRatchet(st);
   int32_t gate = int32_t((int64_t(st.gate) * stepTicks) / (kGateUnitsPerStep * ratchets));
@@ -1650,6 +1815,7 @@ void State::publishStatus() {
   aSongRep.store(songRep, rx);
   aMasterStep.store(uint8_t(masterPos), rx);
   aWritesDone.store(writesDone, rx);
+  aInstRefreshes.store(instRefreshes, rx);
   for (int t = 0; t < kNumTracks; ++t) {
     aStep[t].store(tr[t].pos, rx);
     aTrig[t].store(tr[t].trig, rx);
@@ -1670,6 +1836,13 @@ void State::quantum(int16_t* out) {
   }
   for (int t = 0; t < kNumTracks; ++t) tr[t].paramsSent = 0;
   drainCommands();
+  // Instruments follow the Project bytes (engine.h): a compare per track, an evaluation only on a change.
+  for (int t = 0; t < kNumTracks; ++t) {
+    const TrackRt& r = tr[t];
+    const TrackSettings& ts = proj->tracks[t];
+    if (!r.bindValid || instrumentId(ts) != r.boundId || (r.inst && std::memcmp(ts.macro, r.evPos, kTrackMacros) != 0))
+      refreshInstrument(t, false);
+  }
   refreshGlobals();
   if (playing) sequencerTick();
   else rollTick();
@@ -1837,6 +2010,22 @@ bool Engine::post(const Command& c) {
 
 bool Engine::isPlaying() const { return impl_->aPlaying.load(std::memory_order_relaxed); }
 
+uint8_t Engine::instrumentRefreshes() const { return impl_->aInstRefreshes.load(std::memory_order_relaxed); }
+
+Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4]) {
+  Command c;
+  std::memset(&c, 0, sizeof(c));
+  c.type = CmdType::SetInstrument;
+  c.a = uint8_t(track);
+  c.step.lockParam = uint8_t(id & 0xFF);
+  c.step.lockValue = uint8_t(id >> 8);
+  c.step.note = positions[0];
+  c.step.flags = positions[1];
+  c.step.vel = positions[2];
+  c.step.gate = positions[3];
+  return c;
+}
+
 EngineStatus Engine::status() {
   engine_detail::State& s = *impl_;
   const std::memory_order rx = std::memory_order_relaxed;
@@ -1857,6 +2046,7 @@ EngineStatus Engine::status() {
   st.peakR = s.aPeakR.exchange(0.0f, rx);
   st.duckGain = s.aDuck.load(rx);
   st.revision = s.aRevision.load(rx);
+  st.instrumentRefreshes = s.aInstRefreshes.load(rx);
   return st;
 }
 
@@ -1892,6 +2082,10 @@ int delayTimeSamples() { return g_state ? 2 * g_state->delayHalfSamples : 0; }
 bool fxIdle() { return g_state ? !g_state->fxRunning : true; }
 void setRumbleFilterBypass(bool bypass) {
   if (g_state) g_state->master.setRumbleBypass(bypass);
+}
+void effectiveParams(int track, uint8_t* out) {
+  if (!g_state || track < 0 || track >= kNumTracks) return;
+  std::memcpy(out, g_state->tr[track].eff, kParamsPerTrack);
 }
 uint32_t faultCount() { return g_state ? g_state->faults + g_state->master.faults() : 0; }
 

@@ -177,6 +177,22 @@ static void testVersions() {
   g[8] = kProjectVersion + 1;
   fixCrc(g);
   CHECK_ST(decodeFromBuffer(g.data(), g.size(), *d), Status::ProjectVersion);
+  // a version-1 project (before instruments) is still read, byte for byte (the engine's
+  // sanitiser then makes it a version-2 project with no instrument: itest_golden)
+  {
+    typicalProject(*p);
+    p->version = 1;
+    MemFs v1;
+    CHECK_ST(saveProject(v1, kMountInt, "OLD", *p), Status::Ok);
+    sentinel(*d);
+    HeaderInfo hv{};
+    CHECK_ST(loadProject(v1, kMountInt, "OLD", *d, &hv), Status::Ok);
+    CHECK(hv.projectVersion == 1);
+    CHECK(same(*p, *d));
+    p->version = 0;
+    CHECK_ST(saveProject(v1, kMountInt, "ZERO", *p), Status::BadProject);
+    p->version = kProjectVersion;
+  }
   // raw Project file (old format of UX.md 13.2) is not mistaken for a valid file
   std::vector<uint8_t> raw(reinterpret_cast<const uint8_t*>(p.get()), reinterpret_cast<const uint8_t*>(p.get()) + sizeof(Project));
   CHECK_ST(decodeFromBuffer(raw.data(), raw.size(), *d), Status::NotPgFile);

@@ -45,8 +45,8 @@ bool inRange(const Engine& eng, const Project& p, const char** why) {
         if (s.note > 127 || s.vel < 1 || s.vel > 127 || s.gate < 1 || s.prob > 100) { *why = "step field"; return false; }
         if (s.flags & ~(kStepOn | kStepAccent | kStepSlide | kStepRatchetMask)) { *why = "step flags"; return false; }
         if (s.chord >= kChordNum || (t != kTrackLead && s.chord)) { *why = "chord"; return false; }
-        if (s.lockParam > kParamsPerTrack) { *why = "lockParam"; return false; }
-        if (s.lockParam) {
+        if (s.lockParam >= kLockMacro0 + kTrackMacros) { *why = "lockParam"; return false; }
+        if (s.lockParam && !isMacroLock(s.lockParam)) {   // a macro lock's value is any position
           const ParamInfo* info = eng.trackParamInfo(t, s.lockParam - 1);
           if (!info || s.lockValue < info->min || s.lockValue > info->max) { *why = "lock"; return false; }
         }

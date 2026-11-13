@@ -464,6 +464,9 @@ int auditFile(const std::string& path) {
     auto it = index.find(p.label);
     if (it != index.end()) return it->second;
     evaluate(s, g_pt, p.pos, g_defaults[track], p.params);
+    // as an instrument plays it: the mixer rows are the player's (here at their defaults),
+    // combined with the set's level and sends by the mixer rule (docs/MACROLAB.md)
+    combineMixer(g_defaults[track], p.params, g_defaults[track], p.params);
     index[p.label] = pts.size();
     pts.push_back(p);
     return pts.size() - 1;

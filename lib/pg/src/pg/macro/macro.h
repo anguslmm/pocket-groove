@@ -162,6 +162,7 @@ struct Macro {
 struct MacroSet {
   uint8_t track;   // TrackId
   uint8_t numMacros, numTargets, numPoints, numPatches, numPatchValues, numMorphs, numTrims;
+  uint16_t id;                  // setId(track, name): how a project names this instrument; 0 = no name yet
   char name[kSetNameLen + 1];   // may be empty: the lab names it after the file
   char about[kAboutLen + 1];    // the file's first comment line (minus "NAME -- "), may be empty
   uint32_t baseMask;            // bit i: base[i] is given
@@ -189,12 +190,70 @@ struct ParamTable {
   const ParamInfo* info[kNumTracks][kParamsPerTrack];
 };
 
+// One track's parameter metadata (ParamTable::info[track]), for callers that
+// have no whole table (the engine builds it on the stack).
+using TrackParams = const ParamInfo* const*;   // kParamsPerTrack entries
+
 // out[0..31] = the track's parameters with the set applied at `positions`
 // (set.numMacros entries, each clamped to 0..1). under[0..31] = the values
 // underneath (what the track had before the set); parameters the set does not
 // own are copied from it. Returns set.ownedMask().
 uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* positions, const uint8_t* under,
                   uint8_t* out);
+// The same with only the set's track's metadata (info[0..31] = ParamTable::info[set.track]).
+uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
+                  uint8_t* out);
+
+// ---- instruments (docs/MACROLAB.md "Instruments") ------------------------------------------
+// A track slot holds one macro set, its instrument. A project names it by a
+// 16-bit id derived from the voice and the set's name (FNV-1a of "voice:NAME",
+// upper case, folded to 16 bits); 0 means "no instrument" (CLASSIC: the
+// track's stored parameters play as they are). Macro positions are stored as
+// 0..255 (kPosMax), position = byte / 255.
+constexpr uint16_t kNoInstrument = 0;
+constexpr int kPosMax = 255;
+uint16_t setId(int track, const char* name);
+inline float posFromByte(uint8_t b) { return float(b) * (1.0f / float(kPosMax)); }
+uint8_t posToByte(float p);                     // clamped, rounded
+inline uint8_t startByte(const Macro& m) { return uint8_t((int(m.start1000) * kPosMax + 500) / 1000); }
+
+// The mixer rule: level, pan, sends and duck (24..28) are the player's (MIX
+// view). An instrument may move the level and the two sends; they combine
+// with the player's values relative to the parameter's default:
+//   level = player * inst / default      (the instrument's level is a gain trim:
+//                                         through the cubic taper, its dB add to the player's)
+//   send  = player + (inst - default)    (the instrument adds to the player's send)
+// each rounded and clamped to 0..127. Pan and duck are the player's only. With
+// the player at the defaults the result is exactly what the instrument
+// evaluated to. out may be player. Only indices 24..28 are written.
+void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out);
+// The same with inst and def holding only the five mixer rows (level, pan, delay,
+// reverb, duck: kMixRows entries), as the engine keeps them.
+constexpr int kMixRows = 5;
+void combineMixerRows(const uint8_t* player, const uint8_t* instRows, const uint8_t* defRows, uint8_t* out);
+
+// The instrument library: the built-in sets (generated from macros/ into
+// builtin_data.cpp by host/tools/macro_builtin, in the order macros/builtin.txt
+// gives), plus whatever a host lays over them (the desktop lab: a .pgm file of
+// the same voice and name replaces the built-in one, other files are extra
+// instruments). The device has no overlay. Every function here is safe to
+// call from the audio thread as long as the overlay's are.
+class LibraryOverlay {
+ public:
+  virtual const MacroSet* find(uint16_t id) const = 0;      // a replacement or an extra, else nullptr
+  virtual int extraCount(int track) const = 0;              // extras listed after the built-ins
+  virtual const MacroSet* extra(int track, int i) const = 0;
+ protected:
+  ~LibraryOverlay() = default;
+};
+void setLibraryOverlay(const LibraryOverlay* overlay);       // nullptr = built-ins only
+int builtinCount();                                          // every voice
+const MacroSet& builtinAt(int i);                            // track order, then the list order
+const MacroSet* findBuiltin(uint16_t id);
+const MacroSet* findInstrument(uint16_t id);                 // the overlay first; nullptr if unknown (or 0)
+int instrumentCount(int track);                              // built-ins, then the overlay's extras
+const MacroSet* instrumentAt(int track, int i);              // with the overlay's replacements applied
+int instrumentIndex(int track, uint16_t id);                 // its place in that list, -1 if none
 
 // Where moving macro m (the others at `positions`) makes an enum parameter
 // change value: sampled at kJumpSteps + 1 positions; outPos[k] is the first

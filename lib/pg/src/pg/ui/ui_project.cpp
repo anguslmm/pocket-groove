@@ -132,10 +132,15 @@ void Ui::resetForProject(int sel) {
   pendPatLen_ = 0;
   std::memset(pendMute_, 0, sizeof(pendMute_));
   std::memset(pendSong_, 0, sizeof(pendSong_));
+  pendInstMask_ = 0;
+  std::memset(pendMacMask_, 0, sizeof(pendMacMask_));
+  std::memset(memo_, 0, sizeof(memo_));
+  listUntil_ = 0;
   for (int k = 0; k < kNumKeyIds; ++k)
-    if (rec_[k].act == kActStep || rec_[k].act == kActErase) rec_[k].act = kActNone;
+    if (rec_[k].act == kActStep || rec_[k].act == kActErase || rec_[k].act == kActMacro) rec_[k].act = kActNone;
+  for (MacRep& r : macRep_) r.key = -1;
   sel_ = uint8_t(sel);
-  focus_ = ValueRef{false, sel_, trackFocus_[sel_]};
+  focus_ = ValueRef{false, sel_, uint8_t(focusIndexFor(sel_))};
   view_ = View::Groove;
   pat_ = 0;
 }
@@ -240,6 +245,15 @@ void Ui::doNew() {
   eng_->suspend();
   eng_->initProject(*proj_);
   std::memset(proj_->name, 0, sizeof(proj_->name));
+  // A new project starts with the first instrument of every track at its default
+  // positions (macros/builtin.txt). The sanitiser derives their sound parameters.
+  for (int t = 0; t < kNumTracks; ++t) {
+    const macro::MacroSet* s = macro::instrumentAt(t, 0);
+    if (!s) continue;
+    setInstrumentId(proj_->tracks[t], s->id);
+    for (int m = 0; m < kTrackMacros; ++m)
+      proj_->tracks[t].macro[m] = m < s->numMacros ? macro::startByte(s->macros[m]) : 0;
+  }
   eng_->sanitizeProject(*proj_);
   eng_->resume();
   resetForProject(0);                   // selTrack 0 on a new project (2)

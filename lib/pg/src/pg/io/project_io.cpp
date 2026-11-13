@@ -221,7 +221,7 @@ Status readHeaderFrom(Reader& r, HeaderInfo& h) {
   h.scaleRoot = b[45];
   h.scaleType = b[46];
   if (h.codec != kCodecPglz) return Status::Corrupt;  // a new codec must bump compatVersion
-  if (h.projectVersion != kProjectVersion) return Status::ProjectVersion;
+  if (h.projectVersion < kProjectVersionMin || h.projectVersion > kProjectVersion) return Status::ProjectVersion;
   if (h.rawSize != kRawSize) return Status::Corrupt;
   if (h.bodySize == 0 || h.bodySize > lzMaxBody(h.rawSize)) return Status::Corrupt;
   return Status::Ok;
@@ -359,7 +359,7 @@ WriteOutcome writeStream(const Project& p, const char* stem, const EncStats& exp
 }
 
 bool projectLooksValid(const Project& p) {
-  return p.magic[0] == 'P' && p.magic[1] == 'G' && p.magic[2] == 'R' && p.magic[3] == 'V' && p.version == kProjectVersion;
+  return p.magic[0] == 'P' && p.magic[1] == 'G' && p.magic[2] == 'R' && p.magic[3] == 'V' && p.version >= kProjectVersionMin && p.version <= kProjectVersion;
 }
 
 Status verifyWithChunk(FileSystem& fs, const char* path, HeaderInfo* info, size_t chunk) {

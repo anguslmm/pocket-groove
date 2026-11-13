@@ -659,7 +659,24 @@ bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out
     if (nw == 0) continue;
     if (!ps.statement(w, nw)) return false;
   }
-  return ps.finish();
+  if (!ps.finish()) return false;
+  out->id = out->name[0] ? setId(out->track, out->name) : kNoInstrument;
+  // Canonical bytes: nothing after a string's NUL (the about line is trimmed in
+  // place), so two parses of the same text, and the built-in table, compare equal.
+  auto tail = [](char* s, size_t cap) {
+    const size_t n = std::strlen(s);
+    if (n < cap) std::memset(s + n, 0, cap - n);
+  };
+  tail(out->name, sizeof(out->name));
+  tail(out->about, sizeof(out->about));
+  for (Macro& m : out->macros) {
+    tail(m.name, sizeof(m.name));
+    tail(m.lo, sizeof(m.lo));
+    tail(m.hi, sizeof(m.hi));
+    tail(m.desc, sizeof(m.desc));
+  }
+  for (Patch& p : out->patches) tail(p.name, sizeof(p.name));
+  return true;
 }
 
 // ---- writer ------------------------------------------------------------------------------
