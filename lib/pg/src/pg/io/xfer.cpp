@@ -197,6 +197,17 @@ void Xfer::handle(char* body, const XferEnv& env, XferOut& out) {
     else doWrite(off, tok[3], env, out);
   } else if (std::strcmp(cmd, "DONE") == 0) {
     doDone(out);
+  } else if (std::strcmp(cmd, "SLS") == 0) {
+    doSampleList(out);
+  } else if (std::strcmp(cmd, "SPUT") == 0 && n == 6) {
+    abort();
+    doSamplePut(tok, env, out);
+  } else if (std::strcmp(cmd, "SGET") == 0 && n == 3) {
+    abort();
+    doSampleGet(tok[2], out);
+  } else if (std::strcmp(cmd, "SRM") == 0 && n == 3) {
+    abort();
+    doSampleRemove(tok[2], env, out);
   } else if (std::strcmp(cmd, "END") == 0) {
     abort();
     reply(out, "OK");
@@ -235,7 +246,116 @@ void Xfer::closeFile() {
 void Xfer::abort() {
   closeFile();
   if (mode_ == Mode::Put && fs_) fs_->remove(path_);
+  if (mode_ == Mode::SamplePut && samples_) samples_->cancel();   // the slot stays empty
   mode_ = Mode::None;
+}
+
+bool Xfer::sampleProgress(int* slot, uint32_t* done, uint32_t* total) const {
+  if (mode_ != Mode::SamplePut) return false;
+  *slot = slot_;
+  *done = pos_;
+  *total = size_;
+  return true;
+}
+
+namespace {
+// "1".."12" -> 0..11, else -1
+int slotFromTok(const char* t) {
+  uint32_t v = 0;
+  if (!parseU32(t, &v, 10) || v < 1 || v > uint32_t(sampler::kPoolSlots)) return -1;
+  return int(v) - 1;
+}
+}  // namespace
+
+void Xfer::doSampleList(XferOut& out) {
+  if (!samples_ || !samples_->ready()) { err(out, "NO_POOL"); return; }
+  int n = 0;
+  for (int s = 0; s < sampler::kPoolSlots; ++s) {
+    const sampler::SlotHeader* h = samples_->pool()->header(s);
+    if (!h) continue;
+    char nm[sampler::kNameLen + 1];
+    sampler::headerName(*h, nm);
+    reply(out, "SLOT %d %lu %08lX %s", s + 1, static_cast<unsigned long>(h->samples),
+          static_cast<unsigned long>(h->dataCrc), nm[0] ? nm : "-");
+    ++n;
+  }
+  reply(out, "SEND %d", n);
+}
+
+void Xfer::doSamplePut(const char* const* tok, const XferEnv& env, XferOut& out) {
+  uint32_t samples = 0, crc = 0;
+  if (!samples_ || !samples_->ready()) { err(out, "NO_POOL"); return; }
+  const int slot = slotFromTok(tok[2]);
+  if (slot < 0) { err(out, "BAD_SLOT", tok[2]); return; }
+  if (!parseU32(tok[3], &samples, 10) || !parseU32(tok[4], &crc, 16)) { err(out, "PROTO"); return; }
+  if (env.playing) { err(out, "PLAYING"); return; }
+  if (samples < sampler::kMinSamples || samples > sampler::kSlotMaxSamples) { err(out, "BAD_SIZE"); return; }
+  const sampler::SampleWriter::Result r = samples_->begin(slot, samples);
+  if (r != sampler::SampleWriter::kOk) { err(out, sampler::SampleWriter::resultName(r)); return; }
+  sampler::cleanName(std::strcmp(tok[5], "-") == 0 ? "" : tok[5], sname_);
+  sname_[sampler::kNameLen] = 0;
+  slot_ = slot;
+  size_ = samples * 2u;
+  crc_ = crc;
+  pos_ = 0;
+  runCrc_ = 0;
+  force_ = false;
+  mode_ = Mode::SamplePut;
+  ++stats_.puts;
+  reply(out, "READY %d", kChunk);
+}
+
+void Xfer::doSampleDone(XferOut& out) {
+  std::strcpy(doneId_, id_);
+  if (pos_ != size_ || runCrc_ != crc_) {
+    abort();
+    std::snprintf(doneReply_, sizeof(doneReply_), "ERR %s", pos_ != size_ ? "SHORT" : "CRC");
+    ++stats_.errors;
+    reply(out, "%s", doneReply_);
+    return;
+  }
+  const sampler::SampleWriter::Result r = samples_->commit(crc_, sname_);
+  if (r != sampler::SampleWriter::kOk) {
+    abort();
+    std::snprintf(doneReply_, sizeof(doneReply_), "ERR %s", sampler::SampleWriter::resultName(r));
+    ++stats_.errors;
+    reply(out, "%s", doneReply_);
+    return;
+  }
+  mode_ = Mode::None;
+  ++samplesChanged_;
+  std::snprintf(doneReply_, sizeof(doneReply_), "SSAVED %d %s %lu", slot_ + 1, sname_[0] ? sname_ : "-",
+                static_cast<unsigned long>(size_ / 2u));
+  reply(out, "%s", doneReply_);
+}
+
+void Xfer::doSampleGet(const char* slotTok, XferOut& out) {
+  if (!samples_ || !samples_->ready()) { err(out, "NO_POOL"); return; }
+  const int slot = slotFromTok(slotTok);
+  if (slot < 0) { err(out, "BAD_SLOT", slotTok); return; }
+  const sampler::SlotHeader* h = samples_->pool()->header(slot);
+  if (!h) { err(out, "EMPTY"); return; }
+  char nm[sampler::kNameLen + 1];
+  sampler::headerName(*h, nm);
+  slot_ = slot;
+  size_ = h->samples * 2u;
+  crc_ = h->dataCrc;
+  pos_ = 0;
+  mode_ = Mode::SampleGet;
+  ++stats_.gets;
+  reply(out, "SFILE %lu %08lX %s", static_cast<unsigned long>(size_), static_cast<unsigned long>(crc_),
+        nm[0] ? nm : "-");
+}
+
+void Xfer::doSampleRemove(const char* slotTok, const XferEnv& env, XferOut& out) {
+  if (!samples_ || !samples_->ready()) { err(out, "NO_POOL"); return; }
+  const int slot = slotFromTok(slotTok);
+  if (slot < 0) { err(out, "BAD_SLOT", slotTok); return; }
+  if (env.playing) { err(out, "PLAYING"); return; }
+  const sampler::SampleWriter::Result r = samples_->remove(slot);
+  if (r != sampler::SampleWriter::kOk) { err(out, sampler::SampleWriter::resultName(r)); return; }
+  ++samplesChanged_;
+  reply(out, "OK");
 }
 
 void Xfer::doList(XferOut& out) {
@@ -316,6 +436,16 @@ void Xfer::doGet(const char* mountT, const char* name, XferOut& out) {
 }
 
 void Xfer::doRead(uint32_t offset, XferOut& out) {
+  if (mode_ == Mode::SampleGet) {
+    if (offset >= size_) { err(out, "BAD_OFFSET"); return; }
+    uint8_t data[kChunk];
+    const uint32_t want = size_ - offset < uint32_t(kChunk) ? size_ - offset : uint32_t(kChunk);
+    if (samples_->read(slot_, offset, data, want) != sampler::SampleWriter::kOk) { abort(); err(out, "READ_FAILED"); return; }
+    char b64[(kChunk + 2) / 3 * 4 + 1];
+    base64Encode(data, want, b64, sizeof(b64));
+    reply(out, "DATA %lu %s", static_cast<unsigned long>(offset), b64);
+    return;
+  }
   if (mode_ != Mode::Get) { err(out, "NO_SESSION"); return; }
   if (offset >= size_) { err(out, "BAD_OFFSET"); return; }
   if (offset != pos_ && !reopenAt(offset)) { abort(); err(out, "READ_FAILED"); return; }
@@ -369,12 +499,19 @@ void Xfer::doPut(const char* const* tok, int n, const XferEnv& env, XferOut& out
 }
 
 void Xfer::doWrite(uint32_t offset, const char* b64, const XferEnv& env, XferOut& out) {
-  if (mode_ != Mode::Put) { err(out, "NO_SESSION"); return; }
+  if (mode_ != Mode::Put && mode_ != Mode::SamplePut) { err(out, "NO_SESSION"); return; }
   if (env.playing && !force_) { abort(); err(out, "PLAYING"); return; }
   uint8_t data[kChunk];
   const int n = base64Decode(b64, data, sizeof(data));
   if (n <= 0) { abort(); err(out, "BAD_DATA"); return; }
-  if (offset == pos_) {
+  if (mode_ == Mode::SamplePut && offset == pos_) {
+    if (pos_ + uint32_t(n) > size_) { abort(); err(out, "BAD_SIZE"); return; }
+    const sampler::SampleWriter::Result r = samples_->write(offset, data, uint32_t(n));
+    if (r != sampler::SampleWriter::kOk) { abort(); err(out, sampler::SampleWriter::resultName(r)); return; }
+    runCrc_ = crc32(runCrc_, data, size_t(n));
+    pos_ += uint32_t(n);
+    reply(out, "ACK %lu", static_cast<unsigned long>(pos_));
+  } else if (offset == pos_) {
     if (pos_ + uint32_t(n) > size_) { abort(); err(out, "BAD_SIZE"); return; }
     if (!fs_->writeSome(h_, data, size_t(n))) {
       const long fb = fs_->freeBytes(mountFor(mount_));
@@ -393,6 +530,7 @@ void Xfer::doWrite(uint32_t offset, const char* b64, const XferEnv& env, XferOut
 }
 
 void Xfer::doDone(XferOut& out) {
+  if (mode_ == Mode::SamplePut) { doSampleDone(out); return; }
   if (mode_ != Mode::Put) {
     if (doneId_[0] && std::strcmp(doneId_, id_) == 0) reply(out, "%s", doneReply_);   // resent DONE
     else err(out, "NO_SESSION");

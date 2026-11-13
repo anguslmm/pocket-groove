@@ -14,6 +14,10 @@
 //   repeats   RTRG 1/16 at 120 BPM restarts the chop every 16th while gated
 //   fine      setParamsFine then setParams plays exactly what setParams alone plays
 //   pool gen  replacing the slot under a sounding chop chokes it
+//   flash     the pool in a partition image (FlashPool / SampleWriter over RamFlash, NOR
+//             rules): an erased image is empty; begin hides the slot and erases its header
+//             first (an interrupted write leaves it empty); write / commit / read back;
+//             a wrong CRC or a stale mapping is refused; remove; the voice plays from it
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -23,6 +27,7 @@
 #include "pg/sampler/rom_samples.h"
 #include "pg/sampler/sample_format.h"
 #include "pg/sampler/sample_pool.h"
+#include "pg/sampler/flash_pool.h"
 #include "pg/sampler/sampler.h"
 
 using namespace pg;
@@ -424,6 +429,90 @@ void testFineEqualsBytes() {
   check(oa == ob, "identical");
 }
 
+void testFlash() {
+  std::printf("flash pool\n");
+  static std::vector<uint8_t> img(kPoolBytes, 0xFF);
+  RamFlash flash(img.data());
+  FlashPool pool;
+  pool.attach(img.data());
+  SampleWriter w;
+  w.attach(&flash, &pool);
+  check(w.ready(), "ready");
+  SampleRef r;
+  bool none = true;
+  for (int s = 0; s < kPoolSlots; ++s) none = none && !pool.user(s, &r);
+  check(none, "an erased partition: every slot empty");
+  std::vector<int16_t> a = sine(300.0f, 20000);
+  a.resize(20000);
+  const uint8_t* bytes = reinterpret_cast<const uint8_t*>(a.data());
+  const uint32_t crc = crc32(bytes, a.size() * 2);
+  check(w.begin(4, 20000) == SampleWriter::kOk, "begin");
+  for (uint32_t o = 0; o < 40000; o += 128)
+    check(w.write(o, bytes + o, std::min<uint32_t>(128, 40000 - o)) == SampleWriter::kOk, "write");
+  check(w.write(0, bytes, 128) != SampleWriter::kOk, "out of order refused");
+  check(w.commit(crc, "My vox") == SampleWriter::kOk, "commit");
+  check(pool.user(4, &r) && r.length == 20000 && std::strcmp(r.name, "MYVOX") == 0 &&
+            std::memcmp(r.data, a.data(), 40000) == 0, "slot 5 holds it");
+  uint8_t back[128];
+  check(w.read(4, 39936, back, 64) == SampleWriter::kOk && std::memcmp(back, bytes + 39936, 64) == 0, "read back");
+  check(w.read(4, 39990, back, 64) != SampleWriter::kOk, "read past the end refused");
+  // a new pool over the same image (a reboot) finds it
+  FlashPool pool2;
+  pool2.attach(img.data());
+  check(pool2.header(4) != nullptr && pool2.header(4)->samples == 20000, "survives a reboot");
+  // an interrupted rewrite: empty, never half
+  const uint32_t g = pool.generation();
+  check(w.begin(4, 30000) == SampleWriter::kOk && !pool.user(4, &r) && pool.generation() != g, "begin hides it");
+  w.write(0, bytes, 128);
+  w.cancel();
+  FlashPool pool3;
+  pool3.attach(img.data());
+  check(!pool.user(4, &r) && !pool3.user(4, &r), "an interrupted write leaves it empty");
+  // a wrong CRC
+  w.begin(4, 64);
+  w.write(0, bytes, 128);
+  check(w.commit(crc ^ 1u, "x") == SampleWriter::kCrc && !pool.user(4, &r), "a wrong CRC is refused");
+  // a stale mapping (the CPU sees other bytes than the flash holds)
+  static std::vector<uint8_t> stale(kPoolBytes, 0);
+  FlashPool sp;
+  sp.attach(stale.data());
+  SampleWriter ws;
+  ws.attach(&flash, &sp);
+  ws.begin(6, 64);
+  ws.write(0, bytes, 128);
+  check(ws.commit(crc32(bytes, 128), "x") == SampleWriter::kVerify, "a stale mapping is caught");
+  // NOR rules: writing over unerased bytes fails
+  const uint32_t at = kSlotBytes * 9 + kSectorBytes;   // an erased sector of slot 10
+  const uint8_t zero = 0x00, one = 0x01;
+  check(flash.write(at, &zero, 1) && img[at] == 0x00, "a write to erased flash");
+  check(!flash.write(at, &one, 1) && img[at] == 0x00, "a write cannot set bits");
+  // remove
+  w.begin(2, 64);
+  w.write(0, bytes, 128);
+  check(w.commit(crc32(bytes, 128), "B") == SampleWriter::kOk && pool.user(2, &r), "slot 3");
+  check(w.remove(2) == SampleWriter::kOk && !pool.user(2, &r), "removed");
+  // the voice plays from the flash pool
+  w.begin(0, 20000);
+  for (uint32_t o = 0; o < 40000; o += 128) w.write(o, bytes + o, std::min<uint32_t>(128, 40000 - o));
+  w.commit(crc, "SINE");
+  SamplerVoice v;
+  v.setPool(&pool);
+  v.init(kFs);
+  uint8_t p[kSoundParams] = {};
+  for (int i = 0; i < kNumParams; ++i) p[i] = paramInfo(i)->def;
+  p[kRelease] = 127;
+  v.setParams(p);
+  v.setSampleSlot(0);
+  v.noteOn(NoteEvent{60, 127, false, false, 0});
+  std::vector<float> o;
+  float L[kQuantum], R[kQuantum];
+  for (int q = 0; q < 300; ++q) {
+    v.render(L, R, kQuantum);
+    o.insert(o.end(), L, L + kQuantum);
+  }
+  check(std::fabs(freq(o, 1000, o.size()) / 300.0 - 1.0) < 0.003, "plays the flash slot at pitch", freq(o, 1000, o.size()));
+}
+
 void testGeneration() {
   std::printf("pool generation\n");
   Rig g;
@@ -451,6 +540,7 @@ int main() {
   testRepeats();
   testFineEqualsBytes();
   testGeneration();
+  testFlash();
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

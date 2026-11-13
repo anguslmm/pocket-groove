@@ -5,6 +5,9 @@
 //   xfer_sim --root DIR [--no-sd] [--playing] [--seed N] [--fault P]
 //            [--log-ms N] [--stall-after N] [--stall-ms N] [--demos]
 //
+// The sample pool (stage F1) is a RAM image of the device's app1 partition with
+// NOR flash rules (pg::sampler::RamFlash), empty at start; --no-pool leaves it out
+// (the S* requests answer ERR NO_POOL).
 // --demos first saves the factory demos the way the device saves projects
 // (pg::io): ACIDJAM to int, BASSHAUS to sd (int without a card), and
 // WAREHOUS as the autosaved session int/pg/_last.pgv.
@@ -29,11 +32,13 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "common/hostfs.h"
 #include "pg/demo/demo.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/xfer.h"
+#include "pg/sampler/flash_pool.h"
 
 namespace {
 
@@ -88,7 +93,7 @@ struct PtyOut final : pg::io::XferOut {
 
 int main(int argc, char** argv) {
   std::string root;
-  bool sd = true, playing = false, demos = false;
+  bool sd = true, playing = false, demos = false, pool = true;
   long logMs = 0, stallAfter = -1, stallMs = -1;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -105,6 +110,7 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(a, "--stall-after")) stallAfter = std::atol(next());
     else if (!std::strcmp(a, "--stall-ms")) stallMs = std::atol(next());
     else if (!std::strcmp(a, "--demos")) demos = true;
+    else if (!std::strcmp(a, "--no-pool")) pool = false;
     else { std::fprintf(stderr, "xfer_sim: unknown option %s\n", a); return 2; }
   }
   if (root.empty()) { std::fprintf(stderr, "usage: xfer_sim --root DIR [options]\n"); return 2; }
@@ -136,6 +142,16 @@ int main(int argc, char** argv) {
 
   pg::io::Xfer x;
   x.init(&fs, "sim-1.0");
+  static std::vector<uint8_t> image;
+  static pg::sampler::FlashPool flashPool;
+  static pg::sampler::SampleWriter writer;
+  if (pool) {
+    image.assign(pg::sampler::kPoolBytes, 0xFF);   // an erased partition: every slot empty
+    static pg::sampler::RamFlash flash(image.data());
+    flashPool.attach(image.data());
+    writer.attach(&flash, &flashPool);
+    x.setSamples(&writer);
+  }
   PtyOut out;
   pg::io::XferEnv env;
   env.playing = playing;

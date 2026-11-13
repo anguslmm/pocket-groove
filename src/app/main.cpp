@@ -44,6 +44,7 @@
 #include "../platform/display.h"
 #include "../platform/imu.h"
 #include "../platform/keys.h"
+#include "../platform/sample_flash.h"
 #include "../platform/storage.h"
 #include "../platform/system.h"
 #if PG_USB_AUDIO
@@ -443,6 +444,13 @@ void printReport() {
      static_cast<unsigned long>(si.sdUsedBytes >> 20));
   sp("[batt] %d%% %dmV, backlight %s\n", g_battPct, g_battMv, g_dimmed ? "dim" : "full");
   {
+    const plat::samples::Info& si = plat::samples::info();
+    int used = 0;
+    for (int i = 0; i < pg::sampler::kPoolSlots; ++i) used += plat::samples::pool().header(i) ? 1 : 0;
+    sp("[samples] %s%s, app1 0x%lx+0x%lx, %d of 12 slots hold a sample\n", si.ok ? "pool mapped" : "no pool: ",
+       si.ok ? "" : si.why, static_cast<unsigned long>(si.partAddr), static_cast<unsigned long>(si.partSize), used);
+  }
+  {
     const pg::io::Xfer::Stats& xs = g_xfer.stats();
     sp("[xfer] lines %lu, gets %lu, puts %lu, errors %lu, timeouts %lu, bad crc %lu, bad lines %lu, overflows %lu\n",
        static_cast<unsigned long>(xs.lines), static_cast<unsigned long>(xs.gets), static_cast<unsigned long>(xs.puts),
@@ -493,6 +501,21 @@ void serviceXfer() {
   g_xfer.service(env, g_xferOut);
   const pg::io::Xfer::Stats& after = g_xfer.stats();
   if (after.timeouts != before.timeouts) sp("[xfer] transfer abandoned by the host: timed out, nothing saved\n");
+  // A sample being written (tools/pg sample put): its progress on the screen, then the result.
+  static uint32_t lastToastMs = 0, lastChanged = 0;
+  int slot = 0;
+  uint32_t done = 0, total = 0;
+  if (g_xfer.sampleProgress(&slot, &done, &total) && env.nowMs - lastToastMs >= 250) {
+    lastToastMs = env.nowMs;
+    char t[32];
+    snprintf(t, sizeof(t), "SAMPLE %d: %lu%%", slot + 1, static_cast<unsigned long>(total ? done * 100u / total : 0u));
+    g_ui.notify(t);
+  }
+  if (g_xfer.samplesChanged() != lastChanged) {
+    lastChanged = g_xfer.samplesChanged();
+    g_ui.notify("SAMPLE POOL UPDATED");
+    sp("[samples] the pool changed (tools/pg sample)\n");
+  }
 }
 
 // Single-letter commands (at most 16 per frame, as before) and protocol lines
@@ -809,9 +832,18 @@ void setup() {
 #else
   g_inst.init(static_cast<float>(sampleRate()), /*monoOutput=*/true);
 #endif
+  // The sample pool in app1 (stage F1): mapped once; without it every slot plays its built-in sound.
+  if (plat::samples::begin()) {
+    g_inst.setSamplePool(&plat::samples::pool());
+    sp("[boot] samples: app1 mapped in %lu ms, %d of 12 slots hold a sample\n",
+       static_cast<unsigned long>(plat::samples::info().mapMs), plat::samples::info().slotsUsed);
+  } else {
+    sp("[boot] samples: no pool (%s): the built-in sounds only\n", plat::samples::info().why);
+  }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
   g_xfer.init(&fs, PG_VERSION);
+  g_xfer.setSamples(plat::samples::info().ok ? &plat::samples::writer() : nullptr);
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards
   g_ui.boot(sys::millis());
   sp("[boot] UI up, project \"%s\"\n", g_ui.projectName());

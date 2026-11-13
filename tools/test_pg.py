@@ -205,6 +205,100 @@ class TransferTest(unittest.TestCase):
             pg.put_file(l, "int", "ACIDJAM", new)
             self.assertEqual(s.read("int", "ACIDJAM.pgv"), new)
 
+    # ---- the sample pool (stage F1) ------------------------------------------------
+
+    @staticmethod
+    def tone(n, hz=300.0, amp=20000):
+        import math
+        return [int(amp * math.sin(2 * math.pi * hz * i / 22050.0)) for i in range(n)]
+
+    def test_samples(self):
+        s = self.sim("--log-ms", "7")
+        with self.link(s) as l:
+            self.assertEqual(pg.list_samples(l), [])          # an erased partition: all empty
+            a = self.tone(30000)
+            self.assertEqual(pg.put_sample(l, 3, a, "OHYEAH"), ["3", "OHYEAH", "30000"])
+            ents = pg.list_samples(l)
+            self.assertEqual([(e["slot"], e["samples"], e["name"]) for e in ents], [(3, 30000, "OHYEAH")])
+            got, name = pg.get_sample(l, 3)
+            self.assertEqual((got, name), (a, "OHYEAH"))
+            # replace it with a shorter one, put another into slot 12 without a name
+            b = self.tone(5000, 500)
+            pg.put_sample(l, 3, b, "SHORT")
+            pg.put_sample(l, 12, a[:1000], "")
+            self.assertEqual(pg.get_sample(l, 3)[0], b)
+            self.assertEqual([(e["slot"], e["name"]) for e in pg.list_samples(l)], [(3, "SHORT"), (12, "")])
+            pg.rm_sample(l, 3)
+            self.assertEqual([e["slot"] for e in pg.list_samples(l)], [12])
+            with self.assertRaises(pg.PgError) as e:
+                pg.get_sample(l, 3)
+            self.assertIn("empty", str(e.exception))
+            with self.assertRaises(pg.PgError):
+                pg.put_sample(l, 13, a, "X")
+            with self.assertRaises(pg.PgError):
+                pg.put_sample(l, 1, a[:10], "X")               # too short to be a sample
+
+    def test_samples_refused_while_playing(self):
+        s = self.sim("--playing")
+        with self.link(s) as l:
+            with self.assertRaises(pg.PgError) as e:
+                pg.put_sample(l, 1, self.tone(2000), "X")
+            self.assertIn("playing", str(e.exception))
+            with self.assertRaises(pg.PgError):
+                pg.rm_sample(l, 1)
+            self.assertEqual(pg.list_samples(l), [])          # listing is allowed
+
+    def test_samples_interrupted(self):
+        # The device stops answering in the middle of a put over a filled slot: the slot
+        # is EMPTY afterwards (its header was erased first), never half a sample.
+        s = self.sim("--stall-after", "40", "--stall-ms", "1500")
+        with self.link(s, timeout=0.1) as l:
+            l.retries = 3
+            pg.put_sample(l, 5, self.tone(1000), "OLD")       # 18 lines: the stall comes in the next put
+            with self.assertRaises(pg.PgError):
+                pg.put_sample(l, 5, self.tone(20000), "NEW")
+            time.sleep(1.6)
+            l.retries = 8
+            self.assertEqual(pg.list_samples(l), [])
+            pg.put_sample(l, 5, self.tone(4000), "AGAIN")      # and it works again afterwards
+            self.assertEqual(pg.list_samples(l)[0]["name"], "AGAIN")
+
+    def test_samples_faults(self):
+        s = self.sim("--fault", "0.1", "--seed", "11", "--log-ms", "5")
+        with self.link(s, timeout=0.15) as l:
+            l.retries = 30
+            a = self.tone(12000, 220)
+            pg.put_sample(l, 7, a, "FAULTY")
+            self.assertEqual(pg.get_sample(l, 7), (a, "FAULTY"))
+            self.assertGreater(l.retried, 0)
+
+    def test_samples_no_pool(self):
+        s = self.sim("--no-pool")
+        with self.link(s) as l:
+            with self.assertRaises(pg.PgError) as e:
+                pg.list_samples(l)
+            self.assertIn("no sample pool", str(e.exception))
+
+    def test_sample_cli(self):
+        import pg_sample
+        s = self.sim()
+        wav = os.path.join(self.tmp, "My Vocal.wav")
+        pg_sample.write_wav(wav, self.tone(30000, 330, 9000), rate=44100)   # converted: 22,050 Hz, -1 dBFS
+        self.assertEqual(pg.main(["--port", s.port, "sample", "put", "2", wav]), 0)
+        self.assertEqual(pg.main(["--port", s.port, "sample", "list"]), 0)
+        out = os.path.join(self.tmp, "back.wav")
+        self.assertEqual(pg.main(["--port", s.port, "sample", "get", "2", out]), 0)
+        with open(out, "rb") as f:
+            rate, ch, mono = pg_sample.parse_wav(f.read())
+        self.assertEqual((rate, ch), (22050, 1))
+        self.assertTrue(14900 < len(mono) < 15200)
+        self.assertTrue(0.88 < max(abs(x) for x in mono) < 0.90)
+        with self.link(s) as l:
+            self.assertEqual(pg.list_samples(l)[0]["name"], "MYVOCAL")
+        self.assertEqual(pg.main(["--port", s.port, "sample", "rm", "2"]), 0)
+        self.assertEqual(pg.main(["--port", s.port, "sample", "put", "13", wav]), 1)
+        self.assertEqual(pg.main(["--port", s.port, "sample", "get", "2", out]), 1)   # empty now
+
     def test_device_gone(self):
         s = self.sim()
         l = self.link(s, timeout=0.1)
