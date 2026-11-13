@@ -1,12 +1,16 @@
 // WAREHOUS: driving techno, E minor, 133 BPM, straight.
 //
-// Hard driven kick tuned to E1, its reverb send (dark, long, ducked) as the
-// rumble, a rolling bass (E2, 82 Hz) on the three 16ths after each kick whose cutoff
-// creeps with p-locks, polymetric percussion (clave on 7 steps, rim-snare on
-// 12, against 16-step hats), and an Em9 dub stab on a 12-step loop (3 against
-// 4) through a long dotted-eighth delay, its cutoff opened stab by stab.
-// Probability keeps ghost hits and hat ticks moving. Every pattern is four
-// bars (64 steps); the polymetric tracks re-align at each pattern start.
+// Hard driven kick (PUSH), its reverb send (dark, long, ducked) as the
+// rumble, a rolling bass (POLES, E2, 82 Hz) on the three 16ths after each kick
+// that moves by itself (TONE creeps open in the build and the break, TOUCH
+// hardens beat by beat in the jam patterns), polymetric percussion (a TRAIL
+// clave on 7 steps, a WOOD rim-snare on 12, against 16-step hats), and an Em9
+// dub stab (HANDS) on a 12-step loop (3 against 4) through a long
+// dotted-eighth delay, its PUSH moving stab by stab. Probability keeps ghost
+// hits and hat ticks moving. Every pattern is four bars (64 steps); the
+// polymetric tracks re-align at each pattern start. Instruments and macro
+// positions were chosen by measurement against the CLASSIC version
+// (host/tools/demo_compare, docs/STATE.md stage G).
 //
 //   P1 MAIN    + clap, dub stab (12), bass opens a little
 //   P2 SHIFT   clave on 5, rim on 10, 16th hats with ratchets, bass to G2/D2
@@ -26,8 +30,9 @@ using namespace util;
 
 constexpr int K = kTrackKick, SN = kTrackSnare, CP = kTrackClap, CH = kTrackHatClosed, OH = kTrackHatOpen,
               PC = kTrackPerc, BS = kTrackBass, LD = kTrackLead;
-constexpr int bCut = 0, bEnv = 2;
-constexpr int lCut = 0, lEnv = 2;
+// macros: bass POLES (TONE TOUCH LENGTH DIRT), lead HANDS (OPEN PUSH SHAKE HOLD)
+constexpr int kTone = 0, kTouch = 1;
+constexpr int kOpen = 0, kPush = 1;
 
 // ---- drums
 const char* kKick  = "x... x... x... x...";
@@ -37,16 +42,19 @@ const char* kHatT  = "..o. ..g: ..o. .:o.";   // off-beat ticks
 const char* kHat16 = "-g-o -g-o -g-o -gxo";
 const char* kHatO  = "..o. ..o. ..o. ..x.";
 
-// Rolling bass: the three 16ths after every kick, `param` locked per beat from
-// a to b. Arrangement patterns lock the cutoff; the jam patterns (P1-P3, P8)
-// lock ENV so the bass CUT knob and the SHIFT+[ ] sweep stay live.
-void roll(Pattern& P, int bar, int note, int cutA, int cutB, bool ghosts = true, int param = bCut) {
+// Rolling bass: the three 16ths after every kick, the notes' own value of
+// `macro` going from a to b beat by beat (the third note of a beat a little
+// further). Arrangement patterns move TONE (the CLASSIC demo's cutoff locks);
+// the jam patterns (P1-P3, P8) move TOUCH (its ENV locks), so TONE and the
+// SHIFT+[ ] sweep stay the player's.
+void roll(Pattern& P, int bar, int note, int a, int b, bool ghosts = true, int macro = kTone) {
+  const int lift = macro == kTone ? 18 : 16;
   for (int beat = 0; beat < 4; ++beat) {
-    const int c = cutA + (cutB - cutA) * beat / 3;
+    const int c = ramp(a, b, beat, 3);
     for (int k = 1; k < 4; ++k) {
       const int i = bar * 16 + beat * 4 + k;
       Step& s = put(P, BS, i, k == 1 ? 108 : (k == 2 ? 86 : 96), note, 2);
-      lock(s, param, c + (k == 3 ? 6 : 0));
+      mv(s, macro, c + (k == 3 ? lift : 0));
       if (k == 3 && beat == 3) s.addFlags(kStepAccent);
       if (ghosts && k == 2 && (beat & 1)) prob(s, 70);
     }
@@ -54,12 +62,12 @@ void roll(Pattern& P, int bar, int note, int cutA, int cutB, bool ghosts = true,
 }
 
 // Em9 dub stab (E3 G3 D4 F#4) on a 12-step loop: steps 0 and 7, so the
-// pair phases 3-against-4 over the bar. Cutoff locks per stab.
-// Locks the lead's ENV (not CUT: the lead CUT knob stays live in jam patterns).
-void stabLoop(Pattern& P, int envA, int envB) {
+// pair phases 3-against-4 over the bar. Each stab has its own PUSH (the CLASSIC
+// demo's ENV locks; not OPEN: it stays the player's in the jam patterns).
+void stabLoop(Pattern& P, int pushA, int pushB) {
   P.tracks[LD].length = 12;
-  lock(chord(put(P, LD, 0, 108, E3, 2), kChordMin9), lEnv, envA);
-  lock(chord(put(P, LD, 7, 92, E3, 2), kChordMin9), lEnv, envB);
+  mv(chord(put(P, LD, 0, 108, E3, 2), kChordMin9), kPush, pushA);
+  mv(chord(put(P, LD, 7, 92, E3, 2), kChordMin9), kPush, pushB);
 }
 
 void percPoly(Pattern& P, int pcLen, const char* pc, int snLen, const char* sn) {
@@ -85,7 +93,7 @@ void build(Pattern& P) {
     drums(P, K, b == 3 ? kKickG : kKick, b * 16);
     drums(P, CH, kHatT, b * 16);
     drums(P, OH, kHatO, b * 16, 70 + 10 * b);
-    roll(P, b, E2, 14 + 3 * b, 18 + 3 * b);
+    roll(P, b, E2, 9 + 9 * b, 21 + 9 * b);   // TONE creeps open
   }
   percPoly(P, 7, "o..g.?.", 12, "..g. .:o. ..?.");
 }
@@ -96,10 +104,10 @@ void mainP(Pattern& P) {
     drums(P, CH, kHat16, b * 16, 85);
     drums(P, OH, kHatO, b * 16);
     drums(P, CP, kClap, b * 16);
-    roll(P, b, E2, 40 + 2 * b, 46 + 2 * b, true, bEnv);
+    roll(P, b, E2, 151 + 6 * b, 167 + 6 * b, true, kTouch);   // TOUCH hardens beat by beat
   }
   percPoly(P, 7, "o..g.?.", 12, "..g. .:o. ..?.");
-  stabLoop(P, 40, 50);
+  stabLoop(P, 207, 217);
 }
 
 void shift(Pattern& P) {
@@ -108,12 +116,12 @@ void shift(Pattern& P) {
     drums(P, CH, kHat16, b * 16);
     drums(P, OH, kHatO, b * 16);
     drums(P, CP, kClap, b * 16);
-    roll(P, b, b < 2 ? E2 : (b == 2 ? G2 : D2), 48, 56, true, bEnv);
+    roll(P, b, b < 2 ? E2 : (b == 2 ? G2 : D2), 163, 187, true, kTouch);
   }
   ratchet(at(P, CH, 31), 2);
   ratchet(at(P, CH, 63), 3);
   percPoly(P, 5, "o.g.?", 10, "..o. :.g. .?");
-  stabLoop(P, 56, 66);
+  stabLoop(P, 224, 234);
 }
 
 void breakdown(Pattern& P) {
@@ -122,11 +130,11 @@ void breakdown(Pattern& P) {
   drums(P, OH, "..o. ..o. ..x. ..x.", 48);
   percPoly(P, 7, "o..g.?.", 12, "..g. .:o. ..?.");
   // the rolling bass carries on, filter closed, opening in bar 4
-  for (int b = 0; b < 4; ++b) roll(P, b, E2, b < 3 ? 12 : 16, b < 3 ? 16 : 30);
-  // stab sweep: a 16-step track here, one stab per beat-and-a-half, cutoff rising
+  for (int b = 0; b < 4; ++b) roll(P, b, E2, b < 3 ? 3 : 15, b < 3 ? 15 : 57);
+  // stab sweep: a 64-step track here, one stab per beat-and-a-half, OPEN rising
   P.tracks[LD].length = 64;
   const int st[] = {0, 7, 12, 19, 24, 31, 36, 43, 48, 55, 60};
-  for (int i = 0; i < 11; ++i) lock(chord(put(P, LD, st[i], 104 + 2 * i, E3, 2), kChordMin9), lCut, 30 + 4 * i);
+  for (int i = 0; i < 11; ++i) mv(chord(put(P, LD, st[i], 104 + 2 * i, E3, 2), kChordMin9), kOpen, 1 + 12 * i);
   // snare build into the drop
   drums(P, CP, "x... x... x.x. xxxx", 48, 80);
   ratchet(at(P, CP, 63), 3);
@@ -138,11 +146,11 @@ void peak(Pattern& P) {
     drums(P, CH, kHat16, b * 16);
     drums(P, OH, kHatO, b * 16);
     drums(P, CP, kClap, b * 16);
-    roll(P, b, E2, 56 + 3 * b, 62 + 3 * b, false, bEnv);
+    roll(P, b, E2, 167 + 8 * b, 191 + 8 * b, false, kTouch);
   }
   at(P, K, 0).addFlags(kStepAccent);
   percPoly(P, 7, "o..o.g?", 12, "..g. .oo. ..?g");
-  stabLoop(P, 74, 86);
+  stabLoop(P, 242, 255);
   ratchet(at(P, CH, 47), 2);
   ratchet(put(P, CP, 62, 90), 2);
   ratchet(put(P, CP, 63, 100), 4);
@@ -154,13 +162,13 @@ void outro(Pattern& P) {
     drums(P, CH, kHatT, b * 16, 100 - 10 * b);
   }
   percPoly(P, 7, "o..g.?.", 0, "");
-  lock(chord(put(P, LD, 2, 100, E3, 2), kChordMin9), kMixDelaySend, 127);
+  chord(put(P, LD, 2, 100, E3, 2), kChordMin9);   // one last stab
 }
 
 void tool(Pattern& P) {
   for (int b = 0; b < 4; ++b) {
     drums(P, K, kKick, b * 16);
-    roll(P, b, E2, 40, 46, true, bEnv);
+    roll(P, b, E2, 151, 167, true, kTouch);
   }
 }
 
@@ -189,31 +197,26 @@ void buildWarehous(const Engine& engine, Project& p) {
   p.globals[kGScaleRoot] = 4;       // E
   p.globals[kGScaleType] = 2;       // minor
 
-  // ---- sounds
-  // Hard techno kick (~48 Hz, G1: the minor third), held and heavily driven.
-  params(p, K, {{0, 54}, {1, 46}, {2, 94}, {3, 66}, {4, 84}, {5, 84}, {6, 84}, {7, 40}, {8, 60}, {9, 80}});
-  // Short rim-snare for the 12-step layer.
-  params(p, SN, {{0, 100}, {1, 14}, {2, 40}, {3, 100}, {4, 18}, {5, 20}, {6, 110}, {7, 80}, {8, 60}});
-  params(p, CP, {{0, 64}, {1, 50}, {2, 70}, {3, 76}, {5, 60}, {6, 50}, {7, 50}});
-  params(p, CH, {{0, 74}, {1, 30}, {2, 92}, {3, 100}, {5, 60}});
-  params(p, OH, {{0, 70}, {1, 46}, {2, 84}});
-  // Low woodblock clave for the 7-step loop.
-  params(p, PC, {{0, 3}, {1, 22}, {2, 50}, {3, 96}, {5, 40}});
-  // Rolling sub bass: saw + strong sub, short amp decay, low cutoff.
-  params(p, BS, {{bCut, 32}, {1, 44}, {2, 40}, {3, 30}, {4, 70}, {5, 64}, {7, 2}, {9, 84},
-                 {15, 1}, {17, 30}, {18, 20}, {20, 30}});
-  // Dub stab: two detuned saws, resonant low-pass, plucky.
-  params(p, LD, {{0, 40}, {1, 64}, {2, 44}, {3, 38}, {6, 44}, {7, 50}, {10, 0}, {11, 50}, {15, 30}});
+  // ---- instruments (base macro positions, 0..255)
+  instrument(p, K, "PUSH", 159, 119, 7);          // PUSH 62 %, HOLD 47 %: hard and held
+  instrument(p, SN, "WOOD", 7, 0, 120);           // wood, piccolo, loose: the 12-step rim knock
+  instrument(p, CP, "HYPE", 95, 0);
+  instrument(p, CH, "TICK", 159, 47, 135);
+  instrument(p, OH, "BLAST", 143, 47);
+  instrument(p, PC, "TRAIL", 191, 7, 39);         // TRAIL 75 %: the low clave
+  instrument(p, BS, "POLES", 63, 159, 63, 207);   // dark, hard, short, dirty: the rolling sub
+  instrument(p, LD, "HANDS", 31, 231, 0, 71);     // nearly closed, pushed short, a little held: the dub stab
 
   // ---- mix: level, pan, delay, reverb, duck
-  mix(p, K, 106, 64, 0, 30, 0);
-  mix(p, SN, 84, 50, 10, 30, 0);
-  mix(p, CP, 104, 64, 16, 56, 20);
-  mix(p, CH, 112, 60, 0, 10, 0);
-  mix(p, OH, 94, 70, 0, 24, 30);
-  mix(p, PC, 96, 80, 30, 30, 20);
-  mix(p, BS, 100, 64, 0, 0, 110);
-  mix(p, LD, 110, 64, 96, 50, 70);
+  // (levels set so each track measures within 1.5 dB of the CLASSIC demo)
+  mix(p, K, 122, 64, 0, 30, 0);
+  mix(p, SN, 102, 50, 10, 30, 0);
+  mix(p, CP, 118, 64, 16, 56, 20);
+  mix(p, CH, 107, 60, 0, 10, 0);
+  mix(p, OH, 87, 70, 0, 9, 30);
+  mix(p, PC, 74, 80, 30, 30, 20);
+  mix(p, BS, 103, 64, 0, 0, 110);
+  mix(p, LD, 89, 64, 96, 50, 70);
 
   // ---- patterns (P1 = the main groove: what plays when a new user presses play)
   Pattern* P = p.patterns;
@@ -230,6 +233,7 @@ void buildWarehous(const Engine& engine, Project& p) {
   // ---- song: 72 bars, about 2:10 at 133 BPM
   song(p, {{5, 2}, {4, 2}, {0, 3}, {1, 3}, {3, 2}, {2, 4}, {6, 2}});
   p.songMode = 0;   // boots in loop mode on P1 (the main groove); SONG view plays the chain
+  engine.sanitizeProject(p);   // derives the instruments' sound parameters
 }
 
 }  // namespace pg::demo

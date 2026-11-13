@@ -1,19 +1,24 @@
 // BASSHAUS: bass house, F minor, 126 BPM, 56 % swing.
 //
-// The star is a two-bar growl riff (saw + FM pair through the wavefolder and
-// the diode ladder, drive, a note-synced sine LFO "wow" on the cutoff and the
-// timbre) that steps off the kick. Almost every riff note carries a p-lock
-// that changes the timbre for that note only: fold, FM depth, FM mix, LFO
-// rate, LFO>timbre, cutoff. Tight punchy kick, clap layered with a short rim
-// snare, shuffled hats, heavy ducking, sparse M1-style organ stabs.
-// Every pattern is four bars (64 steps); the riff is two bars.
+// The star is a two-bar growl riff on ROAD (between its HOLLOW and GROWL
+// stations: square and FM pair, a tempo-synced LFO "wow" on the cutoff and
+// the timbre from MOVE) that steps off the kick. Almost every riff note
+// carries its own DIRT and MOVE, so the timbre changes from note to note
+// (the CLASSIC demo's per-note locks of fold, FM, LFO rate and LFO>timbre)
+// and glides between them; ROAD itself stays the player's in the jam
+// patterns and moves only in the intro, build and outro. Tight punchy kick
+// (BOOM), clap (HYPE) layered with a short wood snare (WOOD), shuffled hats,
+// heavy ducking, sparse M1-style organ stabs (KEYS).
+// Every pattern is four bars (64 steps); the riff is two bars. Instruments
+// and macro positions were chosen by measurement against the CLASSIC version
+// (host/tools/demo_compare, docs/STATE.md stage G).
 //
-//   P1 DROP     the full riff with timbre locks, organ stabs
+//   P1 DROP     the full riff, every note its own colour, organ stabs
 //   P2 SWITCH   riff B (higher, jumpier), organ answer, hat ratchets
 //   P3 DROP 2   riff A/B alternating, extra perc, more organ
 //   P4 BREAK    no kick: held organ chords, one long LFO growl per bar, clap build
 //   P5 BUILD    + clap/snare, open hats; the riff opens; snare roll in bar 4
-//   P6 INTRO    kick, hats, shaker; the riff low-passed (cutoff locks)
+//   P6 INTRO    kick, hats, a ticking perc; the riff plain, ROAD opening
 //   P7 OUTRO    kick, hats and the riff closing down
 //   P8 TOOL     drums only (jam over it)
 #include "demo_songs.h"
@@ -26,42 +31,64 @@ using namespace util;
 
 constexpr int K = kTrackKick, SN = kTrackSnare, CP = kTrackClap, CH = kTrackHatClosed, OH = kTrackHatOpen,
               PC = kTrackPerc, BS = kTrackBass, LD = kTrackLead;
-// bass sound params
-constexpr int bCut = 0, bEnv = 2, bLfoRate = 7, bFmMix = 10, bFm = 11, bFold = 13, bLfoTimbre = 21;
-constexpr int lSus = 10;
+// macros: bass ROAD (ROAD DIRT MOVE)
+constexpr int kRoad = 0, kDirt = 1, kMove = 2;
+constexpr int kRoadBase = 140, kDirtBase = 40, kMoveBase = 120;   // the instrument page's positions
+
+// A riff note's colour: its own DIRT and MOVE. MOVE past 70 % switches the
+// LFO to 1/8T, past 90 % to 1/16 (ROAD's rate steps).
+enum Tone { kPlain = 0, kGrit, kFold, kSnap, kFm, kTrip, kSixt, kWow };
+struct Colour { uint8_t dirt, move; };
+const Colour kColour[] = {
+    {kDirtBase, kMoveBase},   // plain
+    {130, kMoveBase},         // grit: driven (was a light fold lock)
+    {220, kMoveBase},         // fold: driven hard (a heavy fold lock)
+    {100, kMoveBase},         // snap: more envelope and drive (an ENV lock)
+    {60, 170},                // fm: the LFO deeper into the FM index and fold (FM depth / mix locks)
+    {kDirtBase, 191},         // trip: LFO at 1/8T (an LFO rate lock)
+    {kDirtBase, 235},         // sixt: LFO at 1/16
+    {80, 180},                // wow: the LFO deep into the timbre (an LFO>timbre lock)
+};
 
 const uint8_t A = kStepAccent, S = kStepSlide;
 // Riff A (two bars). F minor: F1 43.7 Hz .. F2 87.3 Hz, Eb2 77.8 Hz.
-// The downbeats are left to the kick; each note's lock gives it its own colour.
+// The downbeats are left to the kick; each note's tone gives it its own colour.
 const N kRiffA[] = {
-    {2, F1, 112, A, 3, bFold, 96},         {3, F1, 90, 0, 1, bEnv, 60},
-    {5, F2, 104, S, 2, bFm, 110},          {6, Eb2, 100, 0, 2, -1, 0},
-    {7, F1, 108, A, 2, bLfoRate, 9},       {10, F1, 112, 0, 6, bLfoTimbre, 120},
-    {13, Ab1, 104, A | S, 2, bFold, 60},   {14, C2, 100, 0, 2, bFmMix, 127},
-    {15, F1, 88, 0, 1, bEnv, 52},
-    {18, F1, 112, A, 3, bFold, 96},        {19, F1, 90, 0, 1, bEnv, 60},
-    {21, F2, 104, S, 2, bFm, 110},         {22, Eb2, 100, 0, 2, -1, 0},
-    {23, C2, 108, A, 2, bLfoRate, 9},      {26, Ab1, 112, 0, 4, bLfoRate, 10},
-    {28, Bb1, 100, S, 2, bFold, 120},      {29, C2, 104, 0, 2, bFm, 127},
-    {30, Eb2, 108, A, 2, bFold, 127},      {31, F2, 96, 0, 1, bFmMix, 127},
+    {2, F1, 112, A, 3, kFold},         {3, F1, 90, 0, 1, kSnap},
+    {5, F2, 104, S, 2, kFm},           {6, Eb2, 100, 0, 2, kPlain},
+    {7, F1, 108, A, 2, kTrip},         {10, F1, 112, 0, 6, kWow},
+    {13, Ab1, 104, A | S, 2, kGrit},   {14, C2, 100, 0, 2, kFm},
+    {15, F1, 88, 0, 1, kSnap},
+    {18, F1, 112, A, 3, kFold},        {19, F1, 90, 0, 1, kSnap},
+    {21, F2, 104, S, 2, kFm},          {22, Eb2, 100, 0, 2, kPlain},
+    {23, C2, 108, A, 2, kTrip},        {26, Ab1, 112, 0, 4, kSixt},
+    {28, Bb1, 100, S, 2, kFold},       {29, C2, 104, 0, 2, kFm},
+    {30, Eb2, 108, A, 2, kFold},       {31, F2, 96, 0, 1, kFm},
 };
 // Riff B: jumpier, more octave work, LFO at 1/16 on the long notes.
 const N kRiffB[] = {
-    {2, F2, 112, A, 2, bFm, 120},          {3, F1, 96, 0, 2, bFold, 110},
-    {6, F1, 104, 0, 2, bLfoRate, 9},       {7, F2, 104, A | S, 2, bFold, 80},
-    {8, Eb2, 96, 0, 2, -1, 0},             {10, C2, 112, A, 4, bLfoRate, 10},
-    {13, F1, 100, S, 2, bFmMix, 127},      {14, F2, 108, 0, 2, bFm, 127},
-    {18, F2, 112, A, 2, bFm, 120},         {19, F1, 96, 0, 2, bFold, 110},
-    {22, Ab1, 104, 0, 2, bLfoRate, 9},     {23, Ab1, 104, A | S, 2, bFold, 80},
-    {24, Bb1, 96, 0, 2, -1, 0},            {26, C2, 112, A, 6, bLfoTimbre, 127},
-    {29, Eb2, 104, S, 2, bFold, 127},      {30, F2, 108, A, 2, bFm, 127},
+    {2, F2, 112, A, 2, kFm},           {3, F1, 96, 0, 2, kFold},
+    {6, F1, 104, 0, 2, kTrip},         {7, F2, 104, A | S, 2, kGrit},
+    {8, Eb2, 96, 0, 2, kPlain},        {10, C2, 112, A, 4, kSixt},
+    {13, F1, 100, S, 2, kFm},          {14, F2, 108, 0, 2, kFm},
+    {18, F2, 112, A, 2, kFm},          {19, F1, 96, 0, 2, kFold},
+    {22, Ab1, 104, 0, 2, kTrip},       {23, Ab1, 104, A | S, 2, kGrit},
+    {24, Bb1, 96, 0, 2, kPlain},       {26, C2, 112, A, 6, kWow},
+    {29, Eb2, 104, S, 2, kFold},       {30, F2, 108, A, 2, kFm},
 };
 
+// colours: every note takes its tone's DIRT and MOVE. road >= 0: every note's
+// own ROAD (the arrangement's opening and closing; the CLASSIC demo's cutoff
+// locks, which also replaced the colours there).
 template <int K2>
-void riff(Pattern& P, const N (&r)[K2], int offset, int cutLock = -1) {
+void riff(Pattern& P, const N (&r)[K2], int offset, bool colours, int road = -1) {
   for (const N& n : r) {
     Step& s = noteStep(P, BS, n, offset);
-    if (cutLock >= 0) lock(s, bCut, cutLock);
+    if (colours) {
+      mv(s, kDirt, kColour[n.tone].dirt);
+      mv(s, kMove, kColour[n.tone].move);
+    }
+    if (road >= 0) mv(s, kRoad, road);
   }
 }
 
@@ -99,16 +126,16 @@ void intro(Pattern& P) {
     drums(P, CH, kHatC, b * 16, 85);
     drums(P, PC, kShkr, b * 16);
   }
-  riff(P, kRiffA, 0, 30);
-  riff(P, kRiffA, 32, 40);
+  riff(P, kRiffA, 0, false, 128);   // a little darker, plain
+  riff(P, kRiffA, 32, false, 158);  // opening
   drums(P, OH, "..o. ..o. ..x. ..x.", 48);
 }
 
 void build(Pattern& P) {
   drumsFull(P);
   for (int b = 0; b < 4; ++b) drums(P, PC, kShkr, b * 16);
-  riff(P, kRiffA, 0, 50);
-  riff(P, kRiffA, 32);
+  riff(P, kRiffA, 0, false, 188);           // open and plain ...
+  riff(P, kRiffA, 32, true, kRoadBase);     // ... then the colours arrive
   // snare roll, bar 4
   drums(P, SN, "o.o. o.o. xxxx 2233", 48);
   drums(P, CP, "...X", 60);
@@ -117,8 +144,8 @@ void build(Pattern& P) {
 void drop(Pattern& P) {
   drumsFull(P);
   for (int b = 0; b < 4; ++b) drums(P, PC, kPerc, b * 16);
-  riff(P, kRiffA, 0);
-  riff(P, kRiffA, 32);
+  riff(P, kRiffA, 0, true);
+  riff(P, kRiffA, 32, true);
   organ(P, 11, 100);
   organ(P, 43, 100);
   organ(P, 59, 92, true);
@@ -127,8 +154,8 @@ void drop(Pattern& P) {
 void sw(Pattern& P) {
   drumsFull(P);
   for (int b = 0; b < 4; ++b) drums(P, PC, kPerc, b * 16);
-  riff(P, kRiffB, 0);
-  riff(P, kRiffB, 32);
+  riff(P, kRiffB, 0, true);
+  riff(P, kRiffB, 32, true);
   organ(P, 4, 96);
   organ(P, 7, 104);
   organ(P, 36, 96, true);
@@ -139,15 +166,16 @@ void sw(Pattern& P) {
 }
 
 void breakdown(Pattern& P) {
-  // held organ chords, sustain locked high
-  lock(chord(put(P, LD, 0, 96, F3, 56), kChordMin7), lSus, 110);
-  lock(chord(put(P, LD, 16, 88, Db4, 56), kChordMaj7), lSus, 110);
-  lock(chord(put(P, LD, 32, 96, F3, 56), kChordMin7), lSus, 110);
-  lock(chord(put(P, LD, 48, 92, Eb4, 40), kChordDom7), lSus, 110);   // Eb7 pulls back to Fm
-  // one long growl per bar
+  // held organ chords (KEYS' organ holds by itself)
+  chord(put(P, LD, 0, 96, F3, 56), kChordMin7);
+  chord(put(P, LD, 16, 88, Db4, 56), kChordMaj7);
+  chord(put(P, LD, 32, 96, F3, 56), kChordMin7);
+  chord(put(P, LD, 48, 92, Eb4, 40), kChordDom7);   // Eb7 pulls back to Fm
+  // one long growl per bar, the last at 1/8T (played hard: ROAD lets a long note decay
+  // where the CLASSIC growl held, and the harder start keeps the bar as loud)
   for (int b = 0; b < 4; ++b) {
     const int notes[4] = {F1, Db2, F1, Eb2};
-    lock(put(P, BS, b * 16 + 2, 100, notes[b], 40), bLfoRate, b < 3 ? 7 : 9);
+    mv(put(P, BS, b * 16 + 2, 114, notes[b], 40), kMove, b < 3 ? kMoveBase : kColour[kTrip].move);
   }
   for (int b = 0; b < 4; ++b) drums(P, CH, "..-. ..-. ..-. ..-:", b * 16);
   drums(P, CP, "x... x... x... x...", 32, 70);
@@ -159,8 +187,8 @@ void drop2(Pattern& P) {
   for (int b = 0; b < 4; ++b) {
     drums(P, PC, kPerc, b * 16);
   }
-  riff(P, kRiffA, 0);
-  riff(P, kRiffB, 32);
+  riff(P, kRiffA, 0, true);
+  riff(P, kRiffB, 32, true);
   organ(P, 11, 100);
   organ(P, 27, 96, true);
   organ(P, 43, 100);
@@ -175,9 +203,9 @@ void outro(Pattern& P) {
     drums(P, CH, kHatC, b * 16, 90);
     drums(P, PC, kShkr, b * 16);
   }
-  riff(P, kRiffA, 0, 46);
-  riff(P, kRiffA, 32, 30);
-  lock(chord(put(P, LD, 59, 96, F3, 3), kChordMin7), kMixDelaySend, 120);
+  riff(P, kRiffA, 0, false, 176);   // closing down
+  riff(P, kRiffA, 32, false, 128);
+  chord(put(P, LD, 59, 96, F3, 3), kChordMin7);
 }
 
 void tool(Pattern& P) {
@@ -209,34 +237,26 @@ void buildBassHaus(const Engine& engine, Project& p) {
   p.globals[kGScaleRoot] = 5;       // F
   p.globals[kGScaleType] = 2;       // minor
 
-  // ---- sounds
-  // Tight, clicky, driven kick (~50 Hz).
-  params(p, K, {{0, 62}, {1, 40}, {2, 86}, {3, 48}, {4, 88}, {5, 56}, {6, 108}, {7, 26}, {8, 44}, {9, 60}});
-  // Short rimmy snare: layered under the clap for snap.
-  params(p, SN, {{0, 96}, {1, 22}, {2, 52}, {3, 96}, {4, 28}, {5, 30}, {6, 100}, {7, 76}, {8, 70}});
-  params(p, CP, {{0, 72}, {1, 34}, {2, 44}, {3, 60}, {4, 3}, {6, 60}, {7, 64}});
-  params(p, CH, {{1, 36}, {2, 88}, {5, 56}});
-  params(p, OH, {{1, 40}, {2, 80}});
-  params(p, PC, {{0, 4}});          // shaker
-  // Growl: saw/pulse + FM pair (ratio 1) through the folder and ladder.
-  // Drive 60 / sub 70 (not 85 / 90) so the CUT knob audibly sweeps it;
-  // heavy drive, note-synced sine LFO on cutoff and timbre, big clean sub.
-  params(p, BS, {{bCut, 34}, {1, 70}, {2, 30}, {3, 70}, {4, 60}, {5, 60}, {6, 62}, {bLfoRate, 7},
-                 {8, 20}, {9, 70}, {bFmMix, 70}, {bFm, 70}, {12, 1}, {bFold, 60}, {14, 20}, {15, 1},
-                 {17, 127}, {18, 40}, {20, 70}, {bLfoTimbre, 70}});
-  // M1-style organ.
-  params(p, LD, {{0, 104}, {1, 0}, {2, 24}, {3, 30}, {4, 7}, {5, 64}, {7, 60}, {lSus, 100}, {11, 16}, {18, 0},
-                 {9, 90}});
+  // ---- instruments (base macro positions, 0..255)
+  instrument(p, K, "BOOM", 87, 159, 215, 0);      // small-ish, loose skin, toward metal, near: clicky, driven, dry
+  instrument(p, SN, "WOOD", 79, 0, 63);           // wood, piccolo: a short knock under the clap
+  instrument(p, CP, "HYPE", 135, 0);              // MORE 53 %
+  instrument(p, CH, "TICK", 151, 63, 111);
+  instrument(p, OH, "BLAST", 127, 23);
+  instrument(p, PC, "TRAIL", 230, 0, 255);        // the zap end, high and dirty: a ticking texture (was a shaker)
+  instrument(p, BS, "ROAD", kRoadBase, kDirtBase, kMoveBase);   // ROAD 55 %: past HOLLOW toward GROWL
+  instrument(p, LD, "KEYS", 0, 0);                // the organ
 
   // ---- mix: level, pan, delay, reverb, duck
-  mix(p, K, 108, 64, 0, 0, 0);
-  mix(p, SN, 76, 64, 0, 16, 0);
-  mix(p, CP, 112, 64, 0, 36, 10);
-  mix(p, CH, 100, 58, 0, 6, 0);
-  mix(p, OH, 92, 70, 0, 16, 40);
-  mix(p, PC, 90, 76, 12, 20, 30);
-  mix(p, BS, 102, 64, 0, 0, 120);
-  mix(p, LD, 122, 64, 40, 40, 96);
+  // (levels set so each track measures within 1.5 dB of the CLASSIC demo)
+  mix(p, K, 119, 64, 0, 0, 0);
+  mix(p, SN, 99, 64, 0, 16, 0);
+  mix(p, CP, 115, 64, 0, 36, 10);
+  mix(p, CH, 96, 58, 0, 6, 0);
+  mix(p, OH, 84, 70, 0, 9, 40);
+  mix(p, PC, 42, 76, 12, 20, 30);
+  mix(p, BS, 104, 64, 0, 0, 120);
+  mix(p, LD, 117, 64, 40, 40, 96);
 
   // ---- patterns (P1 = the main groove: what plays when a new user presses play)
   Pattern* P = p.patterns;
@@ -253,6 +273,7 @@ void buildBassHaus(const Engine& engine, Project& p) {
   // ---- song: 72 bars, about 2:17 at 126 BPM
   song(p, {{5, 2}, {4, 2}, {0, 4}, {1, 2}, {3, 2}, {2, 4}, {6, 2}});
   p.songMode = 0;   // boots in loop mode on P1 (the main groove); SONG view plays the chain
+  engine.sanitizeProject(p);   // derives the instruments' sound parameters
 }
 
 }  // namespace pg::demo

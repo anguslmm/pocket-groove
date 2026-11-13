@@ -58,7 +58,7 @@ PERC HARM | Tom, rim, clave: ratio of the two modes; cowbell: interval of its tw
 PERC NOIS | Tom: stick noise; rim, clave: click; cowbell: breath; shaker: dry noise; zap: noise.
 PERC DRV | Saturation.
 
-BASS CUT | Filter cutoff, 40 Hz to 8.6 kHz (exponential). The main acid knob, and the target of SHIFT+`[` `]`. A CUT p-lock on a step overrides it (the factory demos lock it on most bass steps).
+BASS CUT | Filter cutoff, 40 Hz to 8.6 kHz (exponential). The main acid knob, and the target of SHIFT+`[` `]`. A CUT p-lock on a step overrides it.
 BASS RES | Resonance of the 303-style diode ladder. About 123 is the edge of self-oscillation; 127 sings. 100-115 = squelch.
 BASS ENV | Filter envelope depth, 0 to +6 octaves: how far each note opens the filter. With RES this is the "wow".
 BASS DCY | Filter envelope decay, 20 ms to 2.5 s. Short = plucky blips, long = vowel-like sweeps.

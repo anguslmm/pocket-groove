@@ -290,9 +290,46 @@ Order of work (owner, updated 2026-11-12):
    inside the dead zone), the 65-90 ms feel against the spike's, the 150 ms tap threshold
    against the double tap, and the minimum-ever heap (about 1 KB more static RAM + IRAM, 3.4 KB
    of task stack and control block from the heap).
-   LATER STAGES (not built, not designed out):
-   (E) a polished, reactive picture on the instrument page (enum jump ticks, end labels as
-   pictures); (F) a sampler instrument; (G) converting the demos from CLASSIC to instruments.
+   STAGE G DONE (2026-11-13, branch of the demos worktree): THE DEMOS USE INSTRUMENTS. Every
+   track of ACIDJAM, BASSHAUS and WAREHOUS plays a built-in instrument (no CLASSIC track left
+   in the firmware), chosen from the whole table by measurement, not by ear: host/tools/
+   demo_compare (--fit ranks every instrument of a track over a grid of macro positions, first
+   by the derived parameters, then by rendering the track's stem against the CLASSIC one:
+   10 octave bands and the 10 ms envelope, level-normalised, then refines the best of each
+   instrument; --compare renders every pattern and the song before / after through the stem
+   tap and prints per track RMS, peak, centroid, low/mid/high balance, plus clipping, faults
+   and the ducker; --inverse maps a CLASSIC lock value to a macro position). Mixer levels set
+   so every track of every pattern and song measures within 1.5 dB of the CLASSIC demo (the
+   widest: 1.4 dB); reverb sends lowered where an instrument adds reverb. No clipping, no faults,
+   ducker unchanged (lowest and mean gain equal within 0.01). The CLASSIC per-step locks became the
+   notes' own macro values (motion): ACIDJAM's cutoff ramps -> ACID OPEN (intro, build, break,
+   outro), its ENV ramps -> BITE (jam patterns P1-P3), the stabs' cutoff -> HANDS OPEN, the
+   break's held chords -> HOLD; BASSHAUS's per-note fold / FM / LFO-rate / LFO>timbre locks ->
+   a colour per riff note on ROAD's DIRT and MOVE, its intro / build / outro cutoff -> ROAD;
+   WAREHOUS's roll cutoff -> POLES TONE, its ENV -> TOUCH (jam), the stab ENV -> HANDS PUSH,
+   the break's stab cutoff -> OPEN. Rule (itest_demo): in the jam patterns (P1-P3, P8) the
+   bass's and lead's macro 1 carries no motion, so its keys and SHIFT+[ ] are always heard.
+   Lost in the conversion: the delay throws (mixer locks on single lead stabs; instrument
+   tracks have no locks): the delay return of the outros is 4.5-18 dB lower. Power-on: BASS
+   selected, focus its macro 1 (ACID OPEN; boot no longer forces param 0, which on an
+   instrument bass was the bare CUT), GROOVE; P1 moves BITE, so SOUND shows a slider moving by
+   itself at first power-on (docs/ux/first-*.png, host/ui_scripts/firstboot.txt; UX.md 14, 15).
+   Gaps (no instrument covers them; macros/ untouched): BASSHAUS's shaker (no perc instrument
+   reaches above 5 kHz: TRAIL at its zap end, centroid 7.9 kHz -> 1.6 kHz); the rim snares of
+   BASSHAUS and WAREHOUS (WOOD, the closest); BASSHAUS's organ is brighter above 2 kHz (KEYS)
+   and its growl decays on long notes (ROAD's amp decay; the break's growls are played harder
+   to keep the level). Tests: itest_golden keeps every CLASSIC hash, rendering a frozen copy of
+   the old demos (host/itests/classic_demos.inc), and pins the new demos (7 new cases);
+   itest_demo (instruments, the jam rule, motion at power-on), itest_ui_files (first boot:
+   focus OPEN, BITE moving); tools/pg.py's LS retries as often as the link retries a line
+   (test_pg_client's 10 %-fault case failed on half the seeds once the demo files changed).
+   Manual screenshots regenerated (docs/manual/shots.txt now runs with developer mode off, as
+   on the device). Firmware (both envs warning-free, clean builds; USB / jack): flash 1117223
+   -> 1116679 / 1054619 -> 1054043 (the demo builders 9754 -> 9581 bytes: the note tables
+   became bytes), static RAM unchanged (199580 / 199036), IRAM placement unchanged (checks OK).
+   Host: 73/73. Before / after WAVs: build/stageg/wav/ (demo_compare --wav). NOT LISTENED TO.
+   LATER STAGES (not built): (F) a sampler instrument, in progress as F1 (playback and import
+   from the Mac) and F2 (microphone recording).
    STANDING RULE (owner, 2026-11-13): development does not wait for macro assessment. The owner
    will request macro changes continually and there will be no single final assessment; a
    retuned .pgm is regenerated into the table and committed like any other change.

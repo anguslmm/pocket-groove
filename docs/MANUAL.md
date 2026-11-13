@@ -33,11 +33,11 @@ Headphones first: the jack is driven straight from the codec and the firmware ca
 ![Power-on: the banner over the GROOVE view](manual/m-boot.png)
 
 1. Plug in headphones (off your ears) and slide the power switch on the side. The first boot formats the internal flash, which takes up to 30 s; later boots take a few seconds. The factory song **ACIDJAM** is loaded and stopped, with the banner `SPACE PLAY`.
-2. Press `space`. Pattern 1 plays: kick, hats, an acid line, chord stabs, and the bass and stabs pumping against the kick.
+2. Press `space`. Pattern 1 plays: kick, hats, an acid line, chord stabs, and the bass and stabs pumping against the kick. Every track plays an *instrument*, and the acid line moves one of its own controls by itself: each bar it growls a little harder.
 3. Set the volume: hold the **G0** button (the small button on the top edge) and tap `=` until the level is comfortable; `-` turns it down. Each tap is 2 dB.
 4. Mute tracks: hold `fn`. A strip appears with the eight tracks. Tap `d` to mute the clap, `f` for the closed hats, tap again to bring them back. Release `fn`.
 5. Twist the filter: hold `]` and the whole mix thins out (high-pass); hold `[` and it closes (low-pass). Press `[` and `]` together to switch the filter off.
-6. Make the acid squelch: press `9` (SOUND view of the bass), press `x` (resonance) or `c` (envelope), then hold `=` or `-`. Press `` ` `` to go back home.
+6. Make the acid squelch: hold `=` (the bass's OPEN is what `-` `=` move at power-on; the status bar says `BASS OPEN`), then `-` to close it again. Press `9` to see the bass's instrument, ACID: hold `x` to open and `z` to close; the BITE slider under it moves by itself with the notes (its amber `~`: the notes carry it). Press `` ` `` to go back home.
 7. Change pattern: hold `opt` and tap `2`. The status bar shows `P01>02`; pattern 2 starts when pattern 1 ends. The factory patterns are four bars long, so the switch can take up to about 8 s.
 8. Press `space` to stop.
 
@@ -61,7 +61,7 @@ Pressing a pad plays the track and *selects* it. The selected track is the curso
 
 **Notes.** The bottom row `z` `x` `c` `v` `b` `n` `m` `,` plays eight notes of the project scale on the selected synth track (default A minor in the demos, C minor in a new project), so you can't play a wrong note. On a drum track the same keys play the drum at eight velocities.
 
-**Instruments.** Every track plays an *instrument*: a character with up to four *macros*, the controls that shape it (OPEN, BITE, DARK-BRIGHT ...). SOUND (`9`) is where you choose the track's instrument and move its macros (4.4). A new project starts with an instrument on every track; the demos and projects from before instruments play their *classic* sound until you pick one.
+**Instruments.** Every track plays an *instrument*: a character with up to four *macros*, the controls that shape it (OPEN, BITE, DARK-BRIGHT ...). SOUND (`9`) is where you choose the track's instrument and move its macros (4.4). A new project and the factory demos have an instrument on every track; projects from before instruments play their *classic* sound until you pick one.
 
 **One focused value.** `-` and `=` always change one value, the *focus*, shown in the status-bar chip (for example `BASS OPEN 42%`). You choose it in SOUND, MIX or FX; it stays on `-`/`=` when you go back home. Tap = one step, hold = sweep (it speeds up), `shift` = 8 steps at a time, `-` and `=` together = back to the default.
 
@@ -223,7 +223,7 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | `del` held + a macro key | Clear that macro's motion: its values leave every note of this track in this pattern (`ctrl`+`z` brings them back). |
 | `'` | Which 16 steps the strip shows. |
 
-A track with no instrument shows **CLASSIC**: it plays its classic sound (the demos, older projects), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
+A track with no instrument shows **CLASSIC**: it plays its classic sound (projects from before instruments), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
 #### Motion
 
@@ -545,7 +545,7 @@ The bass drops about 16 dB at each kick and swells back over half a beat. To pus
 
 ## 9. Sound design recipes
 
-These recipes set the bare sound parameters. Since instruments, the device shows instruments and their macros instead (4.4); the parameters themselves can still be set in the desktop app's developer mode (`--dev`), on a CLASSIC track, and the demos are built from them. Values are as shown on screen; a raw value in brackets where the screen shows something else (`-`/`=` move the raw value). Anything not listed stays at its default (chapter 19). Page numbers are the developer mode's SOUND pages.
+These recipes set the bare sound parameters. Since instruments, the device shows instruments and their macros instead (4.4); the parameters themselves can still be set in the desktop app's developer mode (`--dev`), on a CLASSIC track. Where a recipe names a demo (ACIDJAM, BASSHAUS, WAREHOUS), it gives that demo's classic voicing: the demos themselves now play instruments (chapter 14). Values are as shown on screen; a raw value in brackets where the screen shows something else (`-`/`=` move the raw value). Anything not listed stays at its default (chapter 19). Page numbers are the developer mode's SOUND pages.
 
 ### Bass
 
@@ -557,7 +557,7 @@ These recipes set the bare sound parameters. Since instruments, the device shows
 | 2 | SUB 34 |
 | 3 | SLID 58, ADCY 96, KTRK 50 |
 
-The bass designer's own "acid" preset is brighter and wetter: CUT 30, RES 112, ENV 95, DCY 50, DRV 50, SUB 25. Program accents on 3-4 steps a bar, slides on 2-3, octave jumps (`z` and `,`). Ride RES (`x`) and ENV (`c`) live. In ACIDJAM the cutoff is p-locked on every bass step (it opens bar by bar), so CUT and `shift`+`[` `]` change nothing there; to take the cutoff back, clear the locks (hold each step, `del`) or write a new line.
+The bass designer's own "acid" preset is brighter and wetter: CUT 30, RES 112, ENV 95, DCY 50, DRV 50, SUB 25. Program accents on 3-4 steps a bar, slides on 2-3, octave jumps (`z` and `,`). Ride RES (`x`) and ENV (`c`) live.
 
 **Bass-house growl** (BASSHAUS, the designer's "growl")
 
@@ -666,7 +666,7 @@ Globals (everything in FX except the DUCK amounts) can't be locked. A bass note 
 
 ![DJ filter: high-pass at 30](manual/m-djfilter.png)
 
-**Bass sweep.** `shift`+`[`/`]` sweeps the bass's macro 1 the same way (OPEN on ACID, the instrument a new project starts with), from any view; `shift`+both returns it to where you started. On a CLASSIC bass (the factory demos) it sweeps the cutoff, as before instruments; steps with a CUT lock ignore it (in the demos most bass steps have one: see chapter 9). While the playing pattern gives macro 1 notes their own values, the sweep moves only its base.
+**Bass sweep.** `shift`+`[`/`]` sweeps the bass's macro 1 the same way (OPEN on ACID, the instrument a new project starts with), from any view; `shift`+both returns it to where you started. On a CLASSIC bass (an older project) it sweeps the cutoff, as before instruments; steps with a CUT lock ignore it. While the playing pattern gives macro 1 notes their own values, the sweep moves only its base; the factory demos' jam patterns (P1-P3, P8) never do, so there it is always heard.
 
 **Tilt.** Hold G0 and tilt: the selected track's two tilt macros move with your hand and glide back when you let go, from any view (4.4, "Tilt"). With REC on it records into the notes like moving the macro keys.
 
@@ -745,14 +745,14 @@ but only if something changed, and **never while playing**. At power-on the last
 | Demo | Style | Key, tempo |
 |---|---|---|
 | ACIDJAM | acid house, 909 kit, 303 line, Am9/Dm9 stabs | A minor, 124 BPM, 54 % swing |
-| BASSHAUS | bass house, growl riff with per-note timbre locks, organ stabs, hard ducking | F minor, 126 BPM, 56 % swing |
+| BASSHAUS | bass house, growl riff with a timbre per note, organ stabs, hard ducking | F minor, 126 BPM, 56 % swing |
 | WAREHOUS | driving techno, rolling bass, polymetric percussion, 12-step dub stab | E minor, 133 BPM, straight |
 
 Each has eight patterns of four bars (64 steps):
 
 | | ACIDJAM | BASSHAUS | WAREHOUS |
 |---|---|---|---|
-| P1 | GROOVE: the full groove | DROP: riff with timbre locks, organ | MAIN: clap, dub stab, bass opens |
+| P1 | GROOVE: the full groove | DROP: riff, a colour per note, organ | MAIN: clap, dub stab, bass opens |
 | P2 | JACK: second acid line, push stabs, snare fill | SWITCH: higher riff, organ answer | SHIFT: clave on 5, rim on 10, hat ratchets |
 | P3 | PEAK: acid wide open, everything in | DROP 2: riffs alternate, more perc | PEAK: stab open, ghost kicks, fills |
 | P4 | BREAK: no kick, held chords, snare build | BREAK: no kick, held organ, clap build | BREAK: no kick, stab sweep, bass rolls on |
@@ -760,6 +760,21 @@ Each has eight patterns of four bars (64 steps):
 | P6 | INTRO: kick, hats, rim, filtered acid | INTRO: kick, hats, shaker, riff low-passed | INTRO: kick and rumble, clave, ticks |
 | P7 | OUTRO: acid closing | OUTRO: riff closing | OUTRO: kick, rumble, clave, hats |
 | P8 | TOOL: kick and acid only | TOOL: drums only | TOOL: kick, rumble, rolling bass |
+
+Every track of every demo plays a built-in instrument (SOUND, `9`, shows which; `;` `.` try the others):
+
+| | ACIDJAM | BASSHAUS | WAREHOUS |
+|---|---|---|---|
+| KICK | TRIO (909) | BOOM | PUSH |
+| SNARE | BITE | WOOD | WOOD |
+| CLAP | HYPE | HYPE | HYPE |
+| CHH | TICK | TICK | TICK |
+| OHH | SWISH | BLAST | BLAST |
+| PERC | TRAIL (rim) | TRAIL (zap) | TRAIL (clave) |
+| BASS | ACID | ROAD | POLES |
+| LEAD | HANDS | KEYS (organ) | HANDS |
+
+The bass and lead lines carry motion (4.4): their notes have their own macro values, so the sliders move while the demo plays. ACIDJAM's acid line opens OPEN bar by bar in the intro, build, break and outro, and swells BITE through each bar in P1-P3; BASSHAUS gives every riff note its own DIRT and MOVE (the growl changes colour from note to note) and opens ROAD in the intro and build; WAREHOUS's rolling bass opens TONE in the build and break and hardens TOUCH beat by beat in the jam patterns, and its dub stab moves PUSH stab by stab. In P1-P3 and P8 the bass's and lead's first macro carries no motion, so it is yours to play (and `shift`+`[` `]` on the bass). To hear a line without its motion, hold `del` + the macro's key in SOUND (`ctrl`+`z` brings it back).
 
 They load in loop mode on P1, with a song chain ready (about 2 minutes 10-20 s): press `p`, put the cursor on slot 1, `enter`, `space`. In the breakdowns (P4) the kick is gone, so the KICK ducker stops pumping; try DSRC `BEAT` there.
 
@@ -916,7 +931,6 @@ A second firmware, `cardputer-adv-usb`, makes the Cardputer a USB audio interfac
 - The DJ filter, swing, ducker, delay and reverb are global and can't be locked.
 - The PROJECT list reads at most 24 files per storage (INT, SD); more files are on the card but not listed.
 - No WAV export or recording on the device. Projects can be bounced to stems on a computer (chapter 15), as programmed: live moves are not recorded.
-- In the factory demos most bass steps carry a cutoff lock, so the bass CUT value and the `shift`+`[` `]` sweep have no audible effect on them.
 - The swing display moves in 1 % steps, so every other `tab`+`;` press changes the sound without changing the number.
 
 ---
@@ -1061,7 +1075,7 @@ Key = SOUND page and column key (`9` cycles pages; `;` `.` also page). Ranges an
 
 | Key | Param | Range | Default | What it does |
 |---|---|---|---|---|
-| 1 `z` | `CUT` Cutoff | 0 .. 127 | 46 | Filter cutoff, 40 Hz to 8.6 kHz (exponential). The main acid knob, and the target of SHIFT+`[` `]`. A CUT p-lock on a step overrides it (the factory demos lock it on most bass steps). |
+| 1 `z` | `CUT` Cutoff | 0 .. 127 | 46 | Filter cutoff, 40 Hz to 8.6 kHz (exponential). The main acid knob, and the target of SHIFT+`[` `]`. A CUT p-lock on a step overrides it. |
 | 1 `x` | `RES` Resonance | 0 .. 127 | 78 | Resonance of the 303-style diode ladder. About 123 is the edge of self-oscillation; 127 sings. 100-115 = squelch. |
 | 1 `c` | `ENV` Env Mod | 0 .. 127 | 70 | Filter envelope depth, 0 to +6 octaves: how far each note opens the filter. With RES this is the "wow". |
 | 1 `v` | `DCY` Decay | 0 .. 127 | 44 | Filter envelope decay, 20 ms to 2.5 s. Short = plucky blips, long = vowel-like sweeps. |
