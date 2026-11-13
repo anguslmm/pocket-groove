@@ -158,13 +158,18 @@ std::vector<int16_t> synth(const Phrase& p, uint32_t seed) {
     y[size_t(i)] *= g;
     y[size_t(n - 1 - i)] *= g;
   }
-  double peak = 1e-9;
-  for (double s : y) peak = std::max(peak, std::fabs(s));
-  const double gain = 0.891 * 32767.0 / peak;
+  // Level: the 99.9th percentile of |y| to 0.8, and the few peaks above it rounded
+  // off toward -1 dBFS (tanh), so an onset spike does not set the whole phrase's level.
+  std::vector<double> mag(y.size());
+  for (size_t i = 0; i < y.size(); ++i) mag[i] = std::fabs(y[i]);
+  std::sort(mag.begin(), mag.end());
+  const double p999 = std::max(1e-9, mag[size_t(double(mag.size() - 1) * 0.999)]);
+  const double g = 0.8 / p999, ceil = 0.891;
   std::vector<int16_t> out(static_cast<size_t>(n));
   for (int i = 0; i < n; ++i) {
     const double d = 0.5 * (rng.next() + rng.next());     // TPDF, +-1 LSB
-    double s = std::floor(y[size_t(i)] * gain + d + 0.5);
+    const double v = ceil * std::tanh(g * y[size_t(i)] / ceil);
+    double s = std::floor(v * 32767.0 + d + 0.5);
     if (s > 32767) s = 32767;
     if (s < -32768) s = -32768;
     out[size_t(i)] = int16_t(s);
@@ -175,17 +180,17 @@ std::vector<int16_t> synth(const Phrase& p, uint32_t seed) {
 std::vector<Phrase> phrases() {
   std::vector<Phrase> v;
   v.push_back({"OHYEAH", 1.15,
-               {{0.00, kO, 170, 0.0, 0.3, 0}, {0.05, kO, 178, 1.0, 0.05, 0}, {0.28, kO, 196, 1.0, 0.03, 0},
+               {{0.00, kO, 170, 0.0, 0.12, 0}, {0.05, kO, 178, 1.0, 0.05, 0}, {0.28, kO, 196, 1.0, 0.03, 0},
                 {0.38, kI, 214, 0.85, 0.04, 0}, {0.47, kE, 226, 1.0, 0.03, 0}, {0.68, kAe, 205, 1.0, 0.03, 0.1},
-                {0.92, kA, 172, 0.9, 0.04, 0.25}, {1.10, kA, 150, 0.2, 0.08, 0.3}, {1.15, kA, 145, 0.0, 0.0, 0.3}}});
+                {0.92, kA, 172, 0.9, 0.04, 0.25}, {1.10, kA, 150, 0.6, 0.06, 0.3}, {1.15, kA, 145, 0.0, 0.0, 0.3}}});
   v.push_back({"HEY", 0.75,
-               {{0.00, kE, 230, 0.0, 0.0, 0}, {0.02, kE, 230, 0.0, 0.9, 0}, {0.09, kE, 232, 0.4, 0.5, 0},
+               {{0.00, kE, 230, 0.0, 0.0, 0}, {0.02, kE, 230, 0.0, 0.25, 0}, {0.09, kE, 232, 0.4, 0.15, 0},
                 {0.14, kE, 236, 1.0, 0.08, 0}, {0.36, kE, 246, 1.0, 0.04, 0}, {0.56, kI, 290, 0.9, 0.04, 0},
-                {0.70, kI, 300, 0.25, 0.08, 0}, {0.75, kI, 300, 0.0, 0.0, 0}}});
+                {0.70, kI, 300, 0.6, 0.06, 0}, {0.75, kI, 300, 0.0, 0.0, 0}}});
   v.push_back({"AHOO", 1.20,
-               {{0.00, kA, 216, 0.0, 0.2, 0.0}, {0.05, kA, 220, 1.0, 0.04, 0.0}, {0.30, kA, 220, 1.0, 0.03, 0.35},
+               {{0.00, kA, 216, 0.0, 0.1, 0.0}, {0.05, kA, 220, 1.0, 0.04, 0.0}, {0.30, kA, 220, 1.0, 0.03, 0.35},
                 {0.58, kA, 220, 1.0, 0.03, 0.45}, {0.74, kU, 166, 1.0, 0.03, 0.1}, {1.00, kU, 165, 0.9, 0.03, 0.4},
-                {1.17, kU, 163, 0.15, 0.05, 0.4}, {1.20, kU, 163, 0.0, 0.0, 0.4}}});
+                {1.17, kU, 163, 0.6, 0.05, 0.4}, {1.20, kU, 163, 0.0, 0.0, 0.4}}});
   return v;
 }
 

@@ -284,6 +284,8 @@ struct State {
   void fireMasterStep();
   void fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, int32_t dur);
   void hit(int t, NoteEvent ev, int32_t offCd, bool armSlide);
+  void primeNote(int t, const Step& st);
+  const Step* primeSt = nullptr;      // the step whose note hit() is about to start (primeNote)
   void boundary();
   uint8_t decideNext(bool commit);
   int64_t swingOffFP(int idx) const { return (idx & 1) ? int64_t(stepLenFP * uint64_t(swing) / 100u) : 0; }
@@ -1870,6 +1872,22 @@ void State::afterNoteOn(int t) {
   if (t == kTrackKick && duckSrc == kDuckKick) duck.trigger();
 }
 
+// A hosted voice's note with macro values of its own: the voice gets the instrument
+// evaluated where the macros are heard now, with the note's values in place of theirs,
+// so what it latches at the note-on (the sampler's slice) is the note's. The engine's
+// own parameters follow at the next quantum (paramsSent = 0; while a macro moves, at
+// the next fractional feed). One evaluation per such note.
+void State::primeNote(int t, const Step& st) {
+  TrackRt& r = tr[t];
+  uint8_t pos[kTrackMacros];
+  for (int m = 0; m < kTrackMacros; ++m)
+    pos[m] = st.hasMacro(m) ? st.macroValue(m) : uint8_t(macroPos(r, m, qCount) + 0.5f);
+  uint8_t out[kParamsPerTrack];
+  deriveInto(*r.inst, voice[t], t, pos, out);
+  voice[t]->setParams(out);
+  r.paramsSent = 0;
+}
+
 // One sequenced note-on (a step, or one ratchet hit of a step).
 // DECISION (slide, TB-303 semantics): a sounding note from a step with
 // kStepSlide stays gated at least until the track's next step is evaluated.
@@ -1915,6 +1933,7 @@ void State::hit(int t, NoteEvent ev, int32_t offCd, bool armSlide) {
     vOff(t, r.pend[slot].note);
   }
   ensureParams(t);
+  if (primeSt) primeNote(t, *primeSt);
   vOn(t, ev);
   PendNote& p = r.pend[slot];
   p.note = ev.note;
@@ -1972,7 +1991,13 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
   ev.chord = (t == kTrackLead && st.chord() < kChordNum) ? st.chord() : 0;
   const bool slide = isSynthTrack(t) && (st.flags() & kStepSlide);
 
+  // VOICE KINDS: a hosted voice (the sampler) latches parameters at its note-on, and
+  // the note's own macro values only reach the motion after the note has started
+  // (motionStep runs after the step fires). primeNote hands it the parameters at the
+  // note's own values first. Native voices are never primed (bit-identical).
+  primeSt = (voice[t] != nativeV[t] && r.inst && st.hasExt()) ? &st : nullptr;
   hit(t, ev, frac + gate, slide && ratchets == 1);
+  primeSt = nullptr;
   if (ratchets > 1) {
     // Remaining hits are evenly spaced over the step's real (swung) duration;
     // only the LAST hit carries the slide into the next step.

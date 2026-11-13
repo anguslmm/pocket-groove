@@ -232,7 +232,7 @@ void testSlicesReverse() {
   g.run(200, o);
   bool falling = true;
   for (size_t i = 200; i < 3000; ++i) falling = falling && o[i] <= o[i - 1] + 1e-6f;
-  check(falling && o[200] > 0.3f, "reverse falls from the top", o[200]);
+  check(falling && o[200] > 0.5f * SamplerVoice::kLevel, "reverse falls from the top", o[200]);
 }
 
 void testGateLoop() {
@@ -355,6 +355,28 @@ void testBounds() {
   check(clean, "never reads outside the sample", runs);
 }
 
+// ATTACK and RELEASE read their own parameters: attack 64 = 1 ms x 400^0.504 ~ 20.4 ms
+// (half way at ~10 ms), release 64 = 5 ms x 400^0.504 ~ 102 ms time constant.
+void testEnvelopeTimes() {
+  std::printf("envelope times\n");
+  Rig g;
+  std::vector<int16_t> s(kSlotMaxSamples, 16384);
+  g.pool.set(0, s.data(), kSlotMaxSamples, "dc");
+  g.set(kAttack, 64);
+  g.set(kRelease, 64);
+  g.on();
+  std::vector<float> o;
+  g.run(int(0.2f * kFs / kQuantum), o);
+  const float full = 0.5f * SamplerVoice::kLevel;
+  const float half = o[size_t(0.0102f * kFs)] / full;
+  check(half > 0.45f && half < 0.55f, "attack half way at 10 ms", half);
+  g.v.noteOff(60);
+  const size_t at = o.size();
+  g.run(int(0.2f * kFs / kQuantum), o);
+  const float e1 = o[at + size_t(0.102f * kFs)] / full;   // one time constant: 1/e
+  check(e1 > 0.33f && e1 < 0.41f, "release time constant", e1);
+}
+
 void testRepeats() {
   std::printf("repeats\n");
   Rig g;
@@ -370,6 +392,15 @@ void testRepeats() {
   for (size_t i = 1; i < o.size(); ++i)
     if (o[i] > 0.2f && o[i - 1] <= 0.2f) ++hits;
   check(hits == 8, "one restart per 16th", hits);
+  // after the gate the repeats go on, quieter, while the release lasts, then stop
+  g.set(kRelease, 70);   // tau ~ 0.1 s
+  g.v.noteOff(60);
+  std::vector<float> o2;
+  g.run(int(2 * 44100 / kQuantum), o2);
+  int after = 0;
+  for (size_t i = 1; i < o2.size(); ++i)
+    if (std::fabs(o2[i]) > 0.01f && std::fabs(o2[i - 1]) <= 0.01f) ++after;
+  check(after >= 2 && after <= 6 && !g.v.active(), "repeats die away with the release", after);
 }
 
 void testFineEqualsBytes() {
@@ -416,6 +447,7 @@ int main() {
   testGateLoop();
   testClicks();
   testBounds();
+  testEnvelopeTimes();
   testRepeats();
   testFineEqualsBytes();
   testGeneration();

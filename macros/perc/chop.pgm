@@ -1,0 +1,36 @@
+# CHOP -- family: GESTURE (sampler).
+# Idea: the sample cut into sixteen equal slices, one played per note. SLICE
+# is a step curve over the sixteen, so holding a step and pressing z / x gives
+# that note its own slice (the note's own macro value); a pattern of notes
+# becomes a re-sequenced phrase.
+#   SLICE  which of the sixteen slices (1 .. 16)
+#   PITCH  two octaves down .. two octaves up, in semitones
+#   TONE   DARK: a closing low-pass .. open in the middle .. THIN: a high-pass
+#          with a little bite (the filter type switches at 0.5)
+#   LENGTH a clipped blip .. the whole slice with a longer tail
+# Feel if it works: tap a row of steps, give each its own SLICE, and the
+# sample talks back in a new order.
+# Try: SLICE per note, PITCH on X, TONE on Y.
+voice perc sampler
+name CHOP
+about "Sixteen slices; each note picks one."
+tilt x PITCH
+tilt y TONE
+base slices=16 attack=0 release=56 length=110
+
+macro SLICE 0 "1" "16" "which of sixteen slices plays"
+  slice    0:0 0.063:1 0.125:2 0.188:3 0.25:4 0.313:5 0.375:6 0.438:7 0.5:8 0.563:9 0.625:10 0.688:11 0.75:12 0.813:13 0.875:14 0.938:15 step
+
+macro PITCH 0.5 "LOW" "HIGH" "two octaves down .. two octaves up"
+  pitch    0:40 0.5:64 1:88
+
+macro TONE 0.5 "DARK" "THIN" "low-pass .. open .. high-pass"
+  filter   0:lp 0.5:hp
+  cutoff   0:52 0.499:127 0.5:0 1:78
+  reso     0:30 0.5:10 1:32
+  bits     0:0 0.75:0 1:40
+  lvl      0:108 0.5:100 1:96
+
+macro LENGTH 0.6 "BLIP" "LONG" "a clipped blip .. the whole slice"
+  length   0:6 1:127
+  release  0:20 1:84

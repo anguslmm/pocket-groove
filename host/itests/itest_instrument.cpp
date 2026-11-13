@@ -70,7 +70,14 @@ void setInstrument(int t, const pm::MacroSet* s, const uint8_t* pos = nullptr) {
 void derived(const pm::MacroSet& s, const uint8_t* pos, uint8_t* out) {
   float f[4];
   for (int m = 0; m < 4; ++m) f[m] = pm::posFromByte(pos[m]);
-  pm::evaluate(s, g_pt, f, g_def[s.track], out);
+  // the values under the set: its voice kind's defaults (VOICE KINDS: a sampler set on perc)
+  uint8_t under[kParamsPerTrack];
+  std::memcpy(under, g_def[s.track], sizeof(under));
+  const ParamInfo* scratch[kParamsPerTrack];
+  const pm::TrackParams kp = pm::paramsFor(s, g_pt, scratch);
+  if (s.voice != kVoiceNative)
+    for (int p = 0; p < kSoundParams; ++p) under[p] = kp[p] ? kp[p]->def : 0;
+  pm::evaluate(s, g_pt, f, under, out);
 }
 
 const pm::MacroSet* byName(int track, const char* name) {

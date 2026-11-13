@@ -514,18 +514,25 @@ void testBuiltins() {
       }
       float pos[4];
       for (int m = 0; m < 4; ++m) pos[m] = m < s.numMacros ? s.macros[m].start() : 0.0f;
+      // the list the set is evaluated against: its voice kind's (`voice perc sampler`)
+      const ParamInfo* kindScratch[kParamsPerTrack];
+      const pm::TrackParams kp = pm::paramsFor(s, g_pt, kindScratch);
+      uint8_t under[kParamsPerTrack];
+      for (int p = 0; p < kParamsPerTrack; ++p)
+        under[p] = p < kSoundParams ? (kp[p] ? kp[p]->def : 0) : g_def[s.track][p];
+      if (s.voice == kVoiceNative) std::memcpy(under, g_def[s.track], sizeof(under));
       float jp[8];
       uint8_t jq[8];
-      const int jumps = pm::enumJumps(s, g_pt, ta.macro, pos, g_def[s.track], jp, jq, 8);
+      const int jumps = pm::enumJumps(s, g_pt, ta.macro, pos, under, jp, jq, 8);
       // a continuous parameter it moves: compare the evaluation at both ends
       uint8_t lo[kParamsPerTrack], hi[kParamsPerTrack];
       pos[ta.macro] = 0.0f;
-      pm::evaluate(s, g_pt, pos, g_def[s.track], lo);
+      pm::evaluate(s, g_pt, pos, under, lo);
       pos[ta.macro] = 1.0f;
-      pm::evaluate(s, g_pt, pos, g_def[s.track], hi);
+      pm::evaluate(s, g_pt, pos, under, hi);
       int cont = 0;
       for (int p = 0; p < kParamsPerTrack; ++p)
-        if (g_pt.info[s.track][p] && g_pt.info[s.track][p]->fmt != ParamFormat::Enum && lo[p] != hi[p]) ++cont;
+        if (kp[p] && kp[p]->fmt != ParamFormat::Enum && lo[p] != hi[p]) ++cont;
       it::check(cont > 0, "%s %s: tilt %c moves %s, which changes a continuous parameter", pm::trackName(s.track), s.name,
                 a ? 'Y' : 'X', s.macros[ta.macro].name);
       it::check(jumps <= 4, "%s %s: tilt %c's %s jumps %d times", pm::trackName(s.track), s.name, a ? 'Y' : 'X',

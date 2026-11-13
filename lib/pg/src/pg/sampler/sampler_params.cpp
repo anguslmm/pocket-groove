@@ -23,7 +23,7 @@ constexpr ParamInfo kTable[sampler::kNumParams] = {
     {"PTCH", "Pitch", 16, 112, 64, ParamFormat::Semitones, nullptr},
     {"FINE", "Fine", 0, 127, 64, ParamFormat::Bipolar, nullptr},
     {"SPED", "Speed", 0, 127, 96, ParamFormat::Number, nullptr},
-    {"REV", "Reverse", 0, 1, 0, ParamFormat::OnOff, nullptr},
+    {"RVRS", "Reverse", 0, 1, 0, ParamFormat::OnOff, nullptr},
     {"ATK", "Attack", 0, 127, 0, ParamFormat::Number, nullptr},
     {"REL", "Release", 0, 127, 24, ParamFormat::Number, nullptr},
     {"CUT", "Cutoff", 0, 127, 127, ParamFormat::Number, nullptr},

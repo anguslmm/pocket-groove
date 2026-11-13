@@ -1,0 +1,35 @@
+# TAPE -- family: MOVEMENT (sampler).
+# Idea: the whole sample as a piece of tape. SPEED runs from fast backwards
+# through stopped (the tape slows, falls in pitch and fades) to normal and on
+# to double speed; moved while a note sounds it is a tape stop or a spin-back.
+#   SPEED  x1.5 backwards .. stopped (~0.5) .. x1 (0.75, the start) .. ~x1.9
+#   START  where on the tape the note starts: the head .. near the tail
+#   WORN   clean .. a worn, crushed, darker copy
+#   ECHO   dry .. sent to the delay and the reverb
+# The stopped stretch is short and never exactly zero at the audit's points.
+# audit: allow-jump SPEED
+# Feel if it works: tilt SPEED down while a long note plays and the tape stops.
+# Try: long gates, SPEED on X, WORN on Y.
+voice perc sampler
+name TAPE
+about "The whole sample as tape."
+tilt x SPEED
+tilt y WORN
+base slices=1 attack=0 release=88 length=127
+
+macro SPEED 0.75 "BACK" "FAST" "backwards .. stopped .. x1 .. x2"
+  speed    0:16 0.35:52 0.5:62 0.6:66 0.75:96 1:124
+  lvl      0:96 0.5:110 0.75:100 1:96
+
+macro START 0 "HEAD" "TAIL" "where on the tape a note starts"
+  start    0:0 1:112
+
+macro WORN 0 "CLEAN" "WORN" "a clean copy .. crushed and dark"
+  bits     0:0 0.3:20 1:84
+  down     0:0 0.3:18 1:70
+  cutoff   0:127 0.2:110 1:62
+  drive    0:0 1:24
+
+macro ECHO 0 "DRY" "ECHO" "dry .. delay and reverb"
+  dly      0:0 1:84
+  rev      0:6 1:56

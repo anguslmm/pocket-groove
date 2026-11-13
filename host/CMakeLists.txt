@@ -113,6 +113,11 @@ endif()
 if(TARGET macro_audit)
   add_test(NAME macro_audit COMMAND macro_audit --hard macros WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(macro_audit PROPERTIES TIMEOUT 600)
+  # The sampler sets (voice perc sampler) again, on a test sample in pool slot 1 instead
+  # of the built-in sound an empty slot plays (macro_audit --test-sample).
+  add_test(NAME macro_audit_test_sample COMMAND macro_audit --hard --test-sample macros/perc
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(macro_audit_test_sample PROPERTIES TIMEOUT 600)
   set(why_silent "HARD  silent at GONE=0.00")
   set(why_clips "HARD  clips .stem peak above 0 dBFS. at HOT=1.00")
   set(why_typo "typo.pgm:5: unknown parameter 'cutx' for bass")

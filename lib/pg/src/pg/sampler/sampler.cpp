@@ -73,7 +73,7 @@ void SamplerVoice::init(float sampleRate) {
   residStep_ = 1.0f / (kCutMs * 0.001f * fs_);
   stepSamples_ = fs_ * 15.0f / 120.0f;
   active_ = false;
-  stage_ = kOff;
+  stage_ = sOff;
   choking_ = false;
   chokeGain_ = 1.0f;
   resid_ = residRamp_ = lastOut_ = 0.0f;
@@ -200,8 +200,12 @@ void SamplerVoice::startChop(bool repeat) {
   } else {
     rtLeft_ = 0;
   }
-  stage_ = kAttack;
-  env_ = 0.0f;
+  if (repeat && !gate_) {
+    stage_ = sRelease;   // a repeat after the gate keeps the release going: the repeats die away with it
+  } else {
+    stage_ = sAttack;
+    env_ = 0.0f;
+  }
   choking_ = false;
   chokeGain_ = 1.0f;
   residRamp_ = -1.0f;   // flag: the first sample takes the jump (resid = lastOut - y)
@@ -218,7 +222,7 @@ void SamplerVoice::noteOn(const NoteEvent& e) {
 
 void SamplerVoice::noteOff(uint8_t) {
   gate_ = false;
-  if (stage_ == kAttack || stage_ == kHold) stage_ = kRelease;
+  if (stage_ == sAttack || stage_ == sHold) stage_ = sRelease;
 }
 
 void SamplerVoice::choke() {
@@ -229,8 +233,10 @@ void SamplerVoice::choke() {
   gate_ = false;
 }
 
-void SamplerVoice::endChop() {
-  stage_ = kOff;
+// The chop's region ended (or its release faded: final). With repeats running it
+// waits, silent, for the next one (its envelope keeps releasing meanwhile).
+void SamplerVoice::endChop(bool final) {
+  stage_ = (!final && rtLeft_ > 0) ? sWait : sOff;
   residRamp_ = -1.0f;   // the end is de-clicked like a cut
 }
 
@@ -238,7 +244,7 @@ void SamplerVoice::endChop() {
 bool SamplerVoice::edge() {
   const int32_t span = b_ - 1 - a_;
   if (!loop_ || span < 1) {
-    endChop();
+    endChop(false);
     return false;
   }
   const int64_t spanF = int64_t(span) << 32, base = int64_t(a_) << 32;
@@ -250,9 +256,9 @@ bool SamplerVoice::edge() {
 }
 
 void SamplerVoice::render(float* outL, float* outR, int frames) {
-  if (stage_ != kOff) {
+  if (stage_ != sOff) {
     if (!ref_.builtin && pool_ && pool_->generation() != gen_) choke();   // the slot changed under the chop
-    if (gate_ && rtLeft_ > 0) {
+    if (rtLeft_ > 0) {   // repeats: while the chop sounds or waits, gated or releasing
       rtLeft_ -= frames;
       if (rtLeft_ <= 0) startChop(true);
     }
@@ -264,7 +270,12 @@ void SamplerVoice::render(float* outL, float* outR, int frames) {
   float peak = 0.0f;
   for (int n = 0; n < frames; ++n) {
     float x = 0.0f;
-    if (stage_ != kOff) {
+    if (stage_ == sWait) {
+      if (!gate_) {
+        env_ *= relCoef_;
+        if (env_ < kSilent) stage_ = sOff;
+      }
+    } else if (stage_ != sOff) {
       int32_t i = int32_t(pos_ >> 32);
       bool ok = true;
       if (i < a_ || i > b_ - 2) {
@@ -276,19 +287,19 @@ void SamplerVoice::render(float* outL, float* outR, int frames) {
         const float s0 = float(data[i]), s1 = float(data[i + 1]);
         x = (s0 + (s1 - s0) * fr) * kInv32768;
         pos_ += inc_;
-        if (stage_ == kAttack) {
+        if (stage_ == sAttack) {
           env_ += attackInc_;
           if (env_ >= 1.0f) {
             env_ = 1.0f;
-            stage_ = gate_ ? kHold : kRelease;
+            stage_ = gate_ ? sHold : sRelease;
           }
-        } else if (stage_ == kRelease) {
+        } else if (stage_ == sRelease) {
           env_ *= relCoef_;
-          if (env_ < kSilent) endChop();
+          if (env_ < kSilent) endChop(true);
         }
         x *= env_ * gain;
-      } else if (stage_ != kOff) {
-        endChop();
+      } else if (stage_ != sOff && stage_ != sWait) {
+        endChop(false);
       }
     }
     if (down_) {
@@ -329,17 +340,17 @@ void SamplerVoice::render(float* outL, float* outR, int frames) {
   for (int n = 0; n < frames; ++n) outR[n] = outL[n];
   if (choking_ && chokeGain_ <= 0.0f) {
     choking_ = false;
-    stage_ = kOff;
+    stage_ = sOff;
     residRamp_ = 0.0f;
     peak = 0.0f;
   }
-  if (stage_ == kOff && residRamp_ <= 0.0f && peak < kSilent) {
+  if (stage_ == sOff && residRamp_ <= 0.0f && peak < kSilent) {
     active_ = false;
     lastOut_ = 0.0f;
     s1_ = s2_ = 0.0f;
     holdVal_ = 0.0f;
   }
-  playhead_.store(stage_ != kOff ? int32_t(pos_ >> 32) : -1, std::memory_order_relaxed);
+  playhead_.store(stage_ != sOff && stage_ != sWait ? int32_t(pos_ >> 32) : -1, std::memory_order_relaxed);
 }
 
 }  // namespace sampler

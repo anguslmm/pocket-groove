@@ -48,7 +48,7 @@ enum Param : uint8_t {
   kBits,         // 0..127: 0 = clean, 127 = 2 bits (a bit-depth crush)
   kDown,         // 0..127: 0 = off, else a sample-and-hold rate from ~22 kHz down to ~700 Hz
   kDrive,        // 0..127: soft saturation, level-compensated
-  kRetrig,       // OFF 1/2 1/4 1/8 1/8T 1/16 1/16T 1/32 (steps of the tempo): the chop restarts at this rate while gated
+  kRetrig,       // OFF 1/2 1/4 1/8 1/8T 1/16 1/16T 1/32 (steps of the tempo): the chop restarts at this rate while it sounds (gated or releasing)
   kRepPitch,     // 0..127, 64 = 0: each restart is this much higher (above 64) or lower, +-12 semitones per repeat at the ends
   kRepFade,      // 0..127: each restart is quieter by this much (0 = all equal, 127 = -6 dB per repeat)
   kLoop,         // off / on: the region loops while the gate is held

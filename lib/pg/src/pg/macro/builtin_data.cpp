@@ -9,7 +9,7 @@ namespace pg {
 namespace macro {
 namespace detail {
 
-extern const int kBuiltinCount = 24;
+extern const int kBuiltinCount = 27;
 
 extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
@@ -297,6 +297,69 @@ extern const MacroSet kBuiltin[] = {
       0x030d42eeu, 0x0445c3e8u, 0x030d4000u, 0x0445c0fau, 0x03a981f4u, 0x048442eeu, 0x04e203e8u, 0x057e4000u,
       0x067840fau, 0x077241f4u, 0x0733c2eeu, 0x0639c3e8u, 0x00000000u, 0x075303e8u, 0x00000000u, 0x00fa03e8u,
       0x00000000u, 0xfec783e8u, 0x00fa0000u, 0x06b6c3e8u, 0x00000000u, 0x027103e8u, 0x00000000u, 0xffa243e8u}},
+    // perc/chop.pgm
+    {5, 4, 9, 38, 0, 0, 0, 0,
+     {0x91, 0x92},   // tilt x, y
+     0x6741, "CHOP",
+     "family: GESTURE (sampler).",
+     "Sixteen slices; each note picks one.", 1,   // voice kind
+     0x00000309u, {16, 0, 0, 110, 0, 0, 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"SLICE", "1", "16", "which of sixteen slices plays", 0, 0, 1},
+      {"PITCH", "LOW", "HIGH", "two octaves down .. two octaves up", 500, 1, 1},
+      {"TONE", "DARK", "THIN", "low-pass .. open .. high-pass", 500, 2, 5},
+      {"LENGTH", "BLIP", "LONG", "a clipped blip .. the whole slice", 600, 7, 2}},
+     {},
+     {},
+     {},
+     {{1, 120, 0, 16}, {4, 112, 16, 3}, {12, 120, 19, 2}, {10, 112, 21, 4}, {11, 112, 25, 3}, {13, 112, 28, 3}, {24, 112, 31, 3}, {3, 112, 34, 2},
+      {9, 112, 36, 2}},
+     {},
+     {0x00000000u, 0x000fa03fu, 0x001f407du, 0x002ee0bcu, 0x003e80fau, 0x004e2139u, 0x005dc177u, 0x006d61b6u,
+      0x007d01f4u, 0x008ca233u, 0x009c4271u, 0x00abe2b0u, 0x00bb82eeu, 0x00cb232du, 0x00dac36bu, 0x00ea63aau,
+      0x02710000u, 0x03e801f4u, 0x055f03e8u, 0x00000000u, 0x001f41f4u, 0x032c8000u, 0x07c061f3u, 0x000001f4u,
+      0x04c2c3e8u, 0x01d4c000u, 0x009c41f4u, 0x01f403e8u, 0x00000000u, 0x000002eeu, 0x027103e8u, 0x06978000u,
+      0x061a81f4u, 0x05dc03e8u, 0x005dc000u, 0x07c063e8u, 0x01388000u, 0x052083e8u}},
+    // perc/tape.pgm
+    {5, 4, 9, 27, 0, 0, 0, 0,
+     {0x90, 0x92},   // tilt x, y
+     0x4f7d, "TAPE",
+     "family: MOVEMENT (sampler).",
+     "The whole sample as tape.", 1,   // voice kind
+     0x00000309u, {1, 0, 0, 127, 0, 0, 0, 0, 0, 88, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"SPEED", "BACK", "FAST", "backwards .. stopped .. x1 .. x2", 750, 0, 2},
+      {"START", "HEAD", "TAIL", "where on the tape a note starts", 0, 2, 1},
+      {"WORN", "CLEAN", "WORN", "a clean copy .. crushed and dark", 0, 3, 4},
+      {"ECHO", "DRY", "ECHO", "dry .. delay and reverb", 0, 7, 2}},
+     {},
+     {},
+     {},
+     {{6, 112, 0, 6}, {24, 112, 6, 4}, {2, 112, 10, 2}, {13, 112, 12, 3}, {14, 112, 15, 3}, {10, 112, 18, 3}, {15, 112, 21, 2}, {26, 112, 23, 2},
+      {27, 112, 25, 2}},
+     {},
+     {0x00fa0000u, 0x032c815eu, 0x03c8c1f4u, 0x04074258u, 0x05dc02eeu, 0x079183e8u, 0x05dc0000u, 0x06b6c1f4u,
+      0x061a82eeu, 0x05dc03e8u, 0x00000000u, 0x06d603e8u, 0x00000000u, 0x0138812cu, 0x052083e8u, 0x00000000u,
+      0x0119412cu, 0x0445c3e8u, 0x07c06000u, 0x06b6c0c8u, 0x03c8c3e8u, 0x00000000u, 0x017703e8u, 0x00000000u,
+      0x052083e8u, 0x005dc000u, 0x036b03e8u}},
+    // perc/stutter.pgm
+    {5, 4, 8, 25, 0, 0, 0, 0,
+     {0x92, 0x91},   // tilt x, y
+     0x5570, "STUTTER",
+     "family: ENERGY (sampler).",
+     "One chop, repeated in time.", 1,   // voice kind
+     0x0104030bu, {8, 2, 0, 40, 0, 0, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 118, 0, 0, 0, 0, 0, 0, 0},
+     {{"RATE", "SLOW", "FAST", "repeats from 1/4 to 1/32", 500, 0, 1},
+      {"RISE", "FALL", "RISE", "each repeat lower .. higher", 500, 1, 1},
+      {"TONE", "DARK", "THIN", "low-pass .. open .. high-pass", 500, 2, 4},
+      {"LENGTH", "TIGHT", "OPEN", "a blip per repeat .. the whole slice", 450, 6, 2}},
+     {},
+     {},
+     {},
+     {{16, 120, 0, 5}, {17, 112, 5, 4}, {12, 120, 9, 2}, {10, 112, 11, 4}, {11, 112, 15, 3}, {13, 112, 18, 3}, {3, 112, 21, 2}, {9, 112, 23, 2}},
+     {},
+     {0x001f4000u, 0x002ee0fau, 0x004e21f4u, 0x005dc2eeu, 0x006d6384u, 0x02af8000u, 0x03e801c2u, 0x03e80226u,
+      0x052083e8u, 0x00000000u, 0x001f41f4u, 0x02ee0000u, 0x07c061f3u, 0x000001f4u, 0x04a383e8u, 0x02328000u,
+      0x007d01f4u, 0x027103e8u, 0x00000000u, 0x000002bcu, 0x02ee03e8u, 0x003e8000u, 0x07c063e8u, 0x0445c000u,
+      0x067843e8u}},
     // bass/acid.pgm
     {6, 4, 19, 43, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y

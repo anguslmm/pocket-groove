@@ -6,6 +6,9 @@
 // One chop at a time (monophonic per track). A note-on latches the slot, the
 // slice and the region and starts the chop at its first sample (its last with
 // REVERSE, or with the tape running backwards); the gate's end starts the release.
+// REPEATS (RTRG): the chop restarts at that rate for as long as it sounds, gated
+// or releasing (a chop shorter than the period waits silent for the next one), so
+// a short step's repeats die away with the release, a held one's go on.
 // A new note while one sounds: the old one's last output value becomes an offset
 // that fades out over kCutMs (the same de-click the drums use, drums.h), so the
 // cut is continuous; the new chop starts from silence with at least a 1 ms attack.
@@ -71,7 +74,7 @@ class SamplerVoice final : public Voice {
 
   static constexpr int kMinRegion = 64;
   static constexpr float kCutMs = 3.0f;
-  static constexpr float kLevel = 0.7f;   // output at a full-scale sample peak (before velocity)
+  static constexpr float kLevel = 0.45f;   // output at a full-scale sample peak (before velocity)
 
  private:
   void startChop(bool repeat);
@@ -79,7 +82,7 @@ class SamplerVoice final : public Voice {
   void updateRate();
   void updateTone();
   bool edge();             // the read index left the region: wrap (loop) or end; false = ended
-  void endChop();
+  void endChop(bool final);
 
   const SamplePool* pool_ = nullptr;
   float fs_ = 44100.0f;
@@ -106,8 +109,8 @@ class SamplerVoice final : public Voice {
   float tapeGain_ = 1.0f;          // fades the tape out as it stops
 
   // envelope
-  enum Stage : uint8_t { kOff, kAttack, kHold, kRelease };
-  Stage stage_ = kOff;
+  enum Stage : uint8_t { sOff, sAttack, sHold, sRelease, sWait };   // sWait: between repeats, silent
+  Stage stage_ = sOff;
   float env_ = 0.0f, attackInc_ = 1.0f, relCoef_ = 0.999f;
   bool gate_ = false;
   bool choking_ = false;

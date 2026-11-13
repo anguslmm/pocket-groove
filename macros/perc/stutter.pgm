@@ -1,0 +1,32 @@
+# STUTTER -- family: ENERGY (sampler).
+# Idea: a chop that repeats itself at a tempo-synced rate while it sounds and
+# dies away with its release; every repeat can climb or fall in pitch.
+#   RATE    repeats every 1/4 .. 1/8 .. 1/16 .. 1/16T .. 1/32 of the tempo
+#   RISE    FALL: each repeat lower .. none (0.5) .. RISE: each repeat higher
+#   TONE    DARK: low-pass .. open .. THIN: high-pass with a little crush
+#   LENGTH  a tight blip per repeat .. the whole slice, with a long tail
+# (it plays one of eight slices: CHOP picks slices, STUTTER repeats them)
+# Feel if it works: a single step becomes a roll that tumbles down or climbs.
+# Try: TONE on X, RISE on Y, gates of a step or two; RATE by hand.
+voice perc sampler
+name STUTTER
+about "One chop, repeated in time."
+tilt x TONE
+tilt y RISE
+base slices=8 slice=2 attack=0 release=92 rfad=34 length=40 lvl=118
+
+macro RATE 0.5 "SLOW" "FAST" "repeats from 1/4 to 1/32"
+  retrig   0:1/4 0.25:1/8 0.5:1/16 0.75:1/16t 0.9:1/32
+
+macro RISE 0.5 "FALL" "RISE" "each repeat lower .. higher"
+  rpit     0:44 0.45:64 0.55:64 1:84
+
+macro TONE 0.5 "DARK" "THIN" "low-pass .. open .. high-pass"
+  filter   0:lp 0.5:hp
+  cutoff   0:48 0.499:127 0.5:0 1:76
+  reso     0:36 0.5:8 1:40
+  bits     0:0 0.7:0 1:48
+
+macro LENGTH 0.45 "TIGHT" "OPEN" "a blip per repeat .. the whole slice"
+  length   0:4 1:127
+  release  0:70 1:106
