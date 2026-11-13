@@ -81,12 +81,13 @@ Case g_cases[] = {
     {"classic acidjam song mono 44k, v1 file", 0, -1, true, 44100.0f, 0x17a76a05b8e3e21bull, true, true},
     {"classic basshaus song mono 44k, v1 file", 1, -1, true, 44100.0f, 0xd59fda34bfb95bd7ull, true, true},
     {"classic warehous song stereo 44k, v1 file", 2, -1, false, 44100.0f, 0x2a552b7e908ced43ull, true, true},
-    // the firmware's demos with instruments and motion, taken at stage G (host build, GCC x86-64)
+    // the firmware's demos with instruments and motion, taken at stage G (host build, GCC x86-64);
+    // BASSHAUS's retaken when its PERC track moved from TRAIL to SHAKE (the shaker instrument)
     {"acidjam song mono 44k", 0, -1, true, 44100.0f, 0xa0d490e0860a3f1bull, false, false},
     {"acidjam p1 stereo 44k", 0, 0, false, 44100.0f, 0xc920f317890377bcull, false, false},
     {"acidjam p2 stereo 32k", 0, 1, false, 32000.0f, 0x5faae11e6319a8afull, false, false},
-    {"basshaus p1 stereo 44k", 1, 0, false, 44100.0f, 0x9fc86c9cb7c057d7ull, false, false},
-    {"basshaus song mono 44k", 1, -1, true, 44100.0f, 0xeb60eaa487e66483ull, false, false},
+    {"basshaus p1 stereo 44k", 1, 0, false, 44100.0f, 0x2002406a5733af88ull, false, false},
+    {"basshaus song mono 44k", 1, -1, true, 44100.0f, 0xbf179c3eb8d15c6full, false, false},
     {"warehous p1 mono 32k", 2, 0, true, 32000.0f, 0x767d8ad60152258full, false, false},
     {"warehous song stereo 44k", 2, -1, false, 44100.0f, 0x5269019f71438c47ull, false, false},
 };

@@ -12,6 +12,6 @@ snare  snare/crack.pgm snare/wood.pgm snare/bite.pgm
 clap   clap/hype.pgm clap/swarm.pgm
 chh    chh/tick.pgm chh/alloy.pgm
 ohh    ohh/blast.pgm ohh/swish.pgm
-perc   perc/tap.pgm perc/trail.pgm perc/chop.pgm perc/tape.pgm perc/stutter.pgm
+perc   perc/tap.pgm perc/trail.pgm perc/shake.pgm perc/chop.pgm perc/tape.pgm perc/stutter.pgm
 bass   bass/acid.pgm bass/poles.pgm bass/surge.pgm bass/road.pgm bass/dice.pgm
 lead   lead/hands.pgm lead/keys.pgm lead/drift.pgm lead/voyage.pgm lead/swap.pgm

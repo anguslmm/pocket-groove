@@ -19,11 +19,13 @@ steppost 5 6 1 67 100
 steppost 5 10 1 60 100
 steppost 5 12 1 55 100
 
-# PERC selected silently, SOUND: `empty` leaves it CLASSIC; `.` = TAP, TRAIL, CHOP
+# PERC selected silently, SOUND: `empty` leaves it CLASSIC; `.` = TAP, TRAIL, SHAKE, CHOP
 down shift
 tap h
 up shift
 tap 9
+tap .
+wait 300
 tap .
 wait 300
 tap .

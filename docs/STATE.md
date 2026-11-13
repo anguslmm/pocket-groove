@@ -290,6 +290,27 @@ Order of work (owner, updated 2026-11-12):
    inside the dead zone), the 65-90 ms feel against the spike's, the 150 ms tap threshold
    against the double tap, and the minimum-ever heap (about 1 KB more static RAM + IRAM, 3.4 KB
    of task stack and control block from the heap).
+   SHAKE (2026-11-13, branch of the shaker worktree): A SHAKER INSTRUMENT FOR PERC, closing stage
+   G's shaker gap. macros/perc/shake.pgm on the voice's SHKR model (the model was always there;
+   no instrument used it), in builtin.txt after TAP and TRAIL. Four Opposites macros, each
+   centred on the model's default values (the CLASSIC BASSHAUS shaker): TONE DARK..BRIGHT (band
+   2.5 -> 11 kHz, resonance and dry hiss with it), LENGTH TIGHT..LONG (8 -> 250 ms), GRAIN
+   SAND..BEADS (dense wide-band grains -> sparse grains through a narrow ringing band),
+   STROKE SOFT..HARD (slow swell, darker -> instant attack, brighter, driven, dry noise); base
+   lvl 108 (+5.9 dB over the perc default, a shaker otherwise sits ~15 dB under TAP); tilt X
+   TONE, Y GRAIN. macro_audit: loudness -30.7..-23.0 dB (range 7.7), peak max -6.8 dBFS, no hot
+   point, no dead travel, no enum jump, travel TONE 15 LENGTH 33 GRAIN 15 STROKE 18, centroid
+   4.2..13.2 kHz. BASSHAUS's PERC is SHAKE with every macro at 127 (fitted with demo_compare:
+   sound distance 0.00, the derived parameters equal the CLASSIC ones) and level 72 (x 108/86 =
+   the CLASSIC 90): its stem is bit-identical to the CLASSIC demo's in every pattern and the song
+   (16-bit WAVs); against stage G's TRAIL: centroid 1.6 -> 7.9 kHz, level within 0.5 dB, the
+   mix within 0.1 dB. itest_golden: the two BASSHAUS instrument hashes retaken (CLASSIC hashes
+   unchanged). demo_compare --wav-track T also writes a track's stem. Sampler screenshots retaken
+   (CHOP is 4/6 in PERC's list; ui_scripts/sampler.txt steps one further). Not done: no metal
+   (a tambourine's jingles ring at fixed partials; the SHKR model is filtered noise, so BEADS is a
+   rattle, not a jingle); every perc parameter latches at the next hit, so a tilt is heard hit by
+   hit. Firmware (cardputer-adv-usb, warning-free): flash 1288151 -> 1290079 (+1928: one set),
+   static RAM unchanged (200892). Host: 84/84. NOT LISTENED TO.
    STAGE G DONE (2026-11-13, branch of the demos worktree): THE DEMOS USE INSTRUMENTS. Every
    track of ACIDJAM, BASSHAUS and WAREHOUS plays a built-in instrument (no CLASSIC track left
    in the firmware), chosen from the whole table by measurement, not by ear: host/tools/
@@ -315,7 +336,8 @@ Order of work (owner, updated 2026-11-12):
    instrument bass was the bare CUT), GROOVE; P1 moves BITE, so SOUND shows a slider moving by
    itself at first power-on (docs/ux/first-*.png, host/ui_scripts/firstboot.txt; UX.md 14, 15).
    Gaps (no instrument covers them; macros/ untouched): BASSHAUS's shaker (no perc instrument
-   reaches above 5 kHz: TRAIL at its zap end, centroid 7.9 kHz -> 1.6 kHz); the rim snares of
+   reached above 5 kHz: TRAIL at its zap end, centroid 7.9 kHz -> 1.6 kHz; CLOSED since by the
+   perc instrument SHAKE, see "SHAKE" below: the track is now the CLASSIC shaker exactly); the rim snares of
    BASSHAUS and WAREHOUS (WOOD, the closest); BASSHAUS's organ is brighter above 2 kHz (KEYS)
    and its growl decays on long notes (ROAD's amp decay; the break's growls are played harder
    to keep the level). Tests: itest_golden keeps every CLASSIC hash, rendering a frozen copy of
