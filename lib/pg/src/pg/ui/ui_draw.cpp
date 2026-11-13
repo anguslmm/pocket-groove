@@ -496,7 +496,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
   Gfx g(fb);
   const int t = heldTrack_;
   const uint8_t col = tc(t);
-  const bool drum = !isSynth(t);
+  const bool drum = !pitched(t);              // a sampler instrument's note keys set the chop's pitch
   const Step s = stepAt(t, heldStep_);
   g.rect(0, 12, W, 74, PANEL);
   g.rect(0, 12, W, 1, col);
@@ -519,7 +519,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
     noteName(s.note, buf);
     g.text(4, 28, buf, WHITE, 2);
     for (int k = 0; k < 8; ++k) {
-      cells[k] = noteFor(t, k);
+      cells[k] = isSynth(t) ? noteFor(t, k) : samplerNote(k);
       if (cells[k] == s.note && cur < 0) cur = k;
     }
   }
@@ -699,10 +699,10 @@ void Ui::refreshJumps() {
     macro::ParamTable pt;
     std::memset(&pt, 0, sizeof(pt));
     uint8_t under[kParamsPerTrack];
-    for (int i = 0; i < kParamsPerTrack; ++i) {
-      pt.info[s->track][i] = eng_->trackParamInfo(s->track, i);
-      under[i] = pt.info[s->track][i] ? pt.info[s->track][i]->def : 0;
-    }
+    for (int i = 0; i < kParamsPerTrack; ++i) pt.info[s->track][i] = eng_->trackParamInfo(s->track, i);
+    const ParamInfo* kindScratch[kParamsPerTrack];
+    const macro::TrackParams kp = macro::paramsFor(*s, pt, kindScratch);   // the set's voice kind's list
+    for (int i = 0; i < kParamsPerTrack; ++i) under[i] = kp[i] ? kp[i]->def : 0;
     float fpos[kTrackMacros], at[16];
     uint8_t par[16];
     for (int o = 0; o < kTrackMacros; ++o) fpos[o] = macro::posFromByte(pos[o]);
@@ -724,6 +724,7 @@ void Ui::refreshJumps() {
 // The picture: the box, a centre line, the trace filled toward the centre (track
 // dim) with its edge in the track colour. Silence: the calm centre line.
 void Ui::drawScope(Framebuffer& fb) {
+  if (samplerOn(sel_)) { drawWave(fb); return; }   // a sampler instrument: its sample instead
   Gfx g(fb);
   const int t = sel_;
   const int x0 = kScopeX0, y0 = kScopeY0, h = kScopeY1 - kScopeY0 + 1, w = Scope::kCols;
@@ -751,6 +752,66 @@ void Ui::drawScope(Framebuffer& fb) {
     g.rect(x0 + c, a, 1, b - a + 1, edge);
     prev = yy;
   }
+}
+
+// The sampler's picture (UX.md 10.3 "Sampler instruments"), in the scope's box: the
+// slot's waveform overview (the header's 232 min / max columns, one per pixel column),
+// the region the next note will play on a raised band and in the track colour, the
+// rest dim; the slice boundaries as dotted lines (the chosen slice's in the track's
+// mid shade); a white playhead while a chop of this slot sounds; the slot number and
+// the sample's name (or BUILT-IN) in the top left corner, its length on the right.
+static_assert(sampler::kOverviewCols == Scope::kCols, "one overview column per pixel column of the box");
+void Ui::drawWave(Framebuffer& fb) {
+  Gfx g(fb);
+  const int t = sel_;
+  const int x0 = kScopeX0, y0 = kScopeY0, h = kScopeY1 - kScopeY0 + 1, w = Scope::kCols;
+  const int slot = sampleSlotOf(t);
+  sampler::SampleRef r;
+  sampler::resolve(sampler_ ? sampler_->pool() : nullptr, slot, &r);
+  uint8_t p[kSoundParams];
+  for (int i = 0; i < kSoundParams; ++i) p[i] = uint8_t(paramValue(t, i));
+  int32_t a = 0, b = 0;
+  sampler::SamplerVoice::region(p, r.length, r.rate, &a, &b);
+  const int64_t L = r.length ? int64_t(r.length) : 1;
+  const int ca = int(int64_t(a) * w / L), cb = int((int64_t(b) * w + L - 1) / L);   // the region's columns
+  const bool muted = this->muted(t);
+  g.rect(x0 - 4, y0, w + 8, h, BG);
+  g.rrect(x0, y0, w, h, PANEL);
+  g.rect(x0 + ca, y0 + 1, (cb > ca ? cb - ca : 1), h - 2, RAISED);
+  // slices
+  const int n = p[sampler::kSlices] < 1 ? 1 : (p[sampler::kSlices] > 16 ? 16 : p[sampler::kSlices]);
+  const int pick = p[sampler::kSlice] % n;
+  for (int k = 1; k < n; ++k) {
+    const int sx = x0 + k * w / n;
+    const uint8_t c = (k == pick || k == pick + 1) ? tc(t, kMid) : uint8_t(LINE);
+    for (int yy = y0 + 2; yy < y0 + h - 2; yy += 2) g.pixel(sx, yy, c);
+  }
+  // the waveform
+  const int cy = y0 + h / 2;
+  const int half = (h / 2 - 2) * 7 / 8;
+  const uint8_t in = muted ? tc(t, kMid) : tc(t), out = muted ? uint8_t(LINE) : tc(t, kDim);
+  for (int c = 0; c < w; ++c) {
+    int lo = r.overview ? r.overview[c][0] : 0, hi = r.overview ? r.overview[c][1] : 0;
+    int yt = cy - (hi * half) / 128, yb = cy - (lo * half) / 128;
+    if (yb < yt) { const int s = yt; yt = yb; yb = s; }
+    g.rect(x0 + c, yt, 1, yb - yt + 1, c >= ca && c < cb ? in : out);
+  }
+  // the playhead: a chop of this slot sounding on this track
+  int32_t ph = -1;
+  if (sampler_ && sampler_->playingSlot() == slot) ph = sampler_->playhead();
+  if (ph >= 0 && ph < int32_t(L)) g.rect(x0 + int(int64_t(ph) * w / L), y0 + 1, 1, h - 2, WHITE);
+  wavePlayhead_ = ph;
+  // the slot and the sample's name; its length
+  char buf[24];
+  catInt(buf, slot + 1);
+  int lx = g.chip(x0 + 2, y0 + 2, buf, tc(t), BG);
+  const char* nm = r.builtin ? "BUILT-IN" : r.name;
+  g.rect(lx + 1, y0 + 1, tw(nm) + 4, 10, PANEL);
+  g.text(lx + 3, y0 + 3, nm, r.builtin ? uint8_t(DIM) : uint8_t(WHITE));
+  const int tenths = int((int64_t(r.length) * 10 + int64_t(r.rate) / 2) / int64_t(r.rate ? r.rate : 1));
+  cat(catInt(cat(catInt(buf, tenths / 10), "."), tenths % 10), "S");
+  g.rect(x0 + w - 4 - tw(buf), y0 + 1, tw(buf) + 3, 10, PANEL);
+  g.textR(x0 + w - 3, y0 + 3, buf, DIM);
 }
 
 void Ui::drawInstrument(Framebuffer& fb) {
@@ -885,7 +946,16 @@ void Ui::drawInstrument(Framebuffer& fb) {
     g.rrect(hx - 2, sy, 5, 9, hc);
   }
   miniStrip(g, *this, 114, t, shownPage_, playStep(t), held ? heldStep_ : -1);
-  if (!held) {
+  if (!held && samplerOn(t)) {   // a sampler: SHIFT+; / . steps the sample slot
+    x = g.text(4, 127, ";", WHITE);
+    x = g.text(x, 127, "/", DIM);
+    x = g.text(x, 127, ".", WHITE);
+    x = g.text(x, 127, " INSTRUMENT  SFT+", DIM);
+    x = g.text(x, 127, ";", WHITE);
+    x = g.text(x, 127, "/", DIM);
+    x = g.text(x, 127, ".", WHITE);
+    g.text(x, 127, " SLOT", DIM);
+  } else if (!held) {
     x = g.text(4, 127, ";", WHITE);
     x = g.text(x, 127, "/", DIM);
     x = g.text(x, 127, ".", WHITE);

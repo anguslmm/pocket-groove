@@ -43,6 +43,7 @@ constexpr int kSuspendFadeQuanta = 8;           // ~3 ms fade to silence on susp
 constexpr uint8_t kNoPattern = 0xFF;
 constexpr int kMacroSlots = 2 * kTrackMacros;   // a base and a tilt offset per macro
 constexpr int kOffSlot = kTrackMacros;          // slot of macro m's offset: kOffSlot + m
+constexpr int kMaxAltVoices = 1;                // tracks x kinds hosted besides the native voices (PERC's sampler)
 
 inline bool isSynthTrack(int t) { return t >= kNumDrumTracks; }
 inline int sanitizeLength(int len) { return len == 0 ? 16 : (len > kMaxSteps ? kMaxSteps : len); }
@@ -135,7 +136,12 @@ struct TrackRt {
 struct State {
   // ---- setup ----
   Project* proj;
-  Voice* voice[kNumTracks];
+  Voice* voice[kNumTracks];           // what renders each track now: its native voice or a hosted kind (VOICE KINDS)
+  Voice* nativeV[kNumTracks];         // setVoice: each track's own voice
+  struct AltVoice { Voice* v; uint8_t track, kind; };
+  AltVoice alt[kMaxAltVoices];        // setAltVoice: other kinds a track hosts
+  Voice* fadeV;                       // the voice a switch left, rendered on fadeTrack until its choke has faded
+  uint8_t fadeTrack;
   float sr;
   bool inited;
 
@@ -249,9 +255,22 @@ struct State {
   bool sanitizeTrack(Project& p, int t) const;
   void paramRange(int track, int idx, int& lo, int& hi) const;
   void cacheVoiceRanges(int t);
+  void cacheSoundRanges(int t);
+  // VOICE KINDS (voice.h): the voice of `kind` on track t (nullptr: the track hosts none).
+  Voice* kindVoice(int t, int kind) const {
+    if (kind == kVoiceNative) return nativeV[t];
+    for (const AltVoice& a : alt)
+      if (a.v && a.track == t && a.kind == kind) return a.v;
+    return nullptr;
+  }
+  // Whether parameter idx of voice v (on track t) exists, and its range (no voice: every
+  // sound slot exists with 0..255, as cacheVoiceRanges has it).
+  bool voiceRange(const Voice* v, int t, int idx, int& lo, int& hi) const;
+  void switchVoice(int t, Voice* want);
 
   void quantum(int16_t* out);
   void render(int16_t* out);
+  void renderFading(Voice* v, float* L, float* R);
   void publishStatus();
   void drainCommands();
   void discardCommands(uint32_t upTo);
@@ -265,6 +284,8 @@ struct State {
   void fireMasterStep();
   void fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, int32_t dur);
   void hit(int t, NoteEvent ev, int32_t offCd, bool armSlide);
+  void primeNote(int t, const Step& st);
+  const Step* primeSt = nullptr;      // the step whose note hit() is about to start (primeNote)
   void boundary();
   uint8_t decideNext(bool commit);
   int64_t swingOffFP(int idx) const { return (idx & 1) ? int64_t(stepLenFP * uint64_t(swing) / 100u) : 0; }
@@ -282,8 +303,8 @@ struct State {
   void buildEff(int t);
   void ensureParams(int t);
   // instruments
-  void trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const;
-  void deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const;
+  void trackInfo(const Voice* v, int t, const ParamInfo** info, uint8_t* defaults) const;
+  void deriveInto(const macro::MacroSet& set, const Voice* v, int t, const uint8_t* positions, uint8_t* out) const;
   void evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out);
   void refreshInstrument(int t, bool rebind);
   void updateStand(int t);
@@ -325,7 +346,11 @@ struct State {
     return x;
   }
   void vOn(int t, const NoteEvent& e) {
-    if (voice[t]) voice[t]->noteOn(e);
+    if (voice[t]) {
+      // VOICE KINDS: a hosted kind (the sampler) learns the track's pool slot at each note.
+      if (voice[t] != nativeV[t]) voice[t]->setSampleSlot(proj->tracks[t].sampleSlot);
+      voice[t]->noteOn(e);
+    }
     lastNote[t].store(e.note, std::memory_order_relaxed);   // the scope's time window for synths
     if (t == scopeTrack) {   // the scope's trigger: drums draw from here, synths from the attack
       scopeMark.store(scopeWr, std::memory_order_relaxed);
@@ -365,6 +390,9 @@ void State::init(float sampleRate, Project* p) {
   scopeCfgA.store(0);
   scopeTrack = 0xFF;
   scopeDecim = 1;
+  for (int t = 0; t < kNumTracks; ++t) voice[t] = nativeV[t];   // a new start plays the native voices until bound
+  fadeV = nullptr;
+  fadeTrack = 0xFF;
 #if PG_STEM_TAP
   seqHeld = false;
   endedAt = -1;
@@ -446,6 +474,7 @@ void State::resetRuntime() {
     for (int m = 0; m < kMacroSlots; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;
   }
   fineTracks = 0;
+  fadeV = nullptr;
   motDirty = 0;
   motStart = false;
   boundaryNow = false;
@@ -469,7 +498,8 @@ void State::resetFx() {
   fxRunning = false;
 }
 
-void State::cacheVoiceRanges(int t) {
+// The current voice's (voice[t]) parameter ranges, masks and defaults.
+void State::cacheSoundRanges(int t) {
   TrackRt& r = tr[t];
   r.pHas = voice[t] ? 0u : 0xFFFFFFFFu;
   r.fEnum = r.fStep = 0;
@@ -484,6 +514,18 @@ void State::cacheVoiceRanges(int t) {
     if (info && info->fmt == ParamFormat::Enum) r.fEnum |= 1u << i;
     if (info && (info->fmt == ParamFormat::Enum || info->fmt == ParamFormat::Semitones)) r.fStep |= 1u << i;
   }
+}
+
+bool State::voiceRange(const Voice* v, int t, int idx, int& lo, int& hi) const {
+  lo = 0; hi = 255;
+  const ParamInfo* info = idx < kSoundParams ? (v ? v->paramInfo(idx) : nullptr) : mixParamInfo(t, idx);
+  if (info) { lo = info->min; hi = info->max; return true; }
+  return idx < kSoundParams && !v;   // no voice: every sound slot, 0..255
+}
+
+void State::cacheVoiceRanges(int t) {
+  TrackRt& r = tr[t];
+  cacheSoundRanges(t);
   for (int i = 0; i < macro::kMixRows; ++i) {
     const ParamInfo* info = mixParamInfo(t, kMixLevel + i);
     r.dMix[i] = info ? info->def : 0;
@@ -519,13 +561,12 @@ bool State::sanitizeStep(int track, bool inst, Step& s) const {
     if (lp == 0 || lp > kParamsPerTrack) {
       s.clearExt();
     } else {
+      // (a CLASSIC track plays its native voice: the lock is that voice's parameter)
       const int idx = lp - 1;
-      const bool exists = idx < kSoundParams ? (tr[track].pHas >> idx) & 1u : mixParamInfo(track, idx) != nullptr;
-      if (!exists) {
+      int lo, hi;
+      if (!voiceRange(nativeV[track], track, idx, lo, hi)) {
         s.clearExt();
       } else {
-        int lo, hi;
-        paramRange(track, idx, lo, hi);
         s.setLock(lp, clampi(s.lockValue(), lo, hi));
       }
     }
@@ -537,25 +578,30 @@ bool State::sanitizeStep(int track, bool inst, Step& s) const {
 bool State::sanitizeTrack(Project& p, int t) const {
   bool changed = false;
   TrackSettings& ts = p.tracks[t];
+  // VOICE KINDS: the parameters are those of the voice the track's instrument plays
+  // (an instrument of a kind the track does not host is as unknown: the native voice).
+  const macro::MacroSet* set = macro::findInstrument(instrumentId(ts));
+  if (set && (set->track != t || !kindVoice(t, set->voice))) set = nullptr;
+  const Voice* v = set ? kindVoice(t, set->voice) : nativeV[t];
+  uint32_t has = 0;
   for (int i = 0; i < kParamsPerTrack; ++i) {
-    const bool exists = i < kSoundParams ? (tr[t].pHas >> i) & 1u : mixParamInfo(t, i) != nullptr;
     int lo, hi;
-    paramRange(t, i, lo, hi);
-    const uint8_t v = exists ? uint8_t(clampi(ts.params[i], lo, hi)) : 0;
-    if (v != ts.params[i]) { ts.params[i] = v; changed = true; }
+    const bool exists = voiceRange(v, t, i, lo, hi);
+    if (exists && i < kSoundParams) has |= 1u << i;
+    const uint8_t val = exists ? uint8_t(clampi(ts.params[i], lo, hi)) : 0;
+    if (val != ts.params[i]) { ts.params[i] = val; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
+  if (ts.sampleSlot >= kSampleSlots) { ts.sampleSlot = 0; changed = true; }
   const bool inst = instrumentId(ts) != 0;
   // DECISION: an instrument track's sound parameters are derived values, so the
   // sanitiser derives them (a project saved with an older version of a set comes
   // back with what the set gives now; the engine then finds nothing to change).
-  if (const macro::MacroSet* set = macro::findInstrument(instrumentId(ts))) {
-    if (set->track == t) {
-      uint8_t out[kParamsPerTrack];
-      deriveInto(*set, t, ts.macro, out);
-      for (int i = 0; i < kSoundParams; ++i)
-        if (((tr[t].pHas >> i) & 1u) && ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
-    }
+  if (set) {
+    uint8_t out[kParamsPerTrack];
+    deriveInto(*set, v, t, ts.macro, out);
+    for (int i = 0; i < kSoundParams; ++i)
+      if (((has >> i) & 1u) && ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
   }
   for (int pt = 0; pt < kNumPatterns; ++pt) {
     TrackPattern& tp = p.patterns[pt].tracks[t];
@@ -583,7 +629,7 @@ bool State::sanitizeAll(Project& p) const {
       if (!v2) {
         std::memset(ts.instrument, 0, sizeof(ts.instrument));
         std::memset(ts.macro, 0, sizeof(ts.macro));
-        std::memset(ts.reserved, 0, sizeof(ts.reserved));
+        ts.sampleSlot = 0;
       }
       const bool inst = instrumentId(ts) != 0;
       for (int pt = 0; pt < kNumPatterns; ++pt) {
@@ -660,9 +706,11 @@ void State::refreshGlobals() {
     stepLenFP = ((srQ8 * 15u) << 24) / uint64_t(bpm);
     stepTicks = int32_t(stepLenFP >> 24);
     for (int t = 0; t < kNumTracks; ++t) {
-      if (voice[t]) voice[t]->setTempo(float(bpm));
+      if (nativeV[t]) nativeV[t]->setTempo(float(bpm));
       if (tr[t].rollC) tr[t].rollInt = int64_t((stepLenFP * 2u) / tr[t].rollC);
     }
+    for (const AltVoice& a : alt)
+      if (a.v) a.v->setTempo(float(bpm));
   }
   if (gValid && v[kGSwing] != swing) motDirty = 0xFF;   // the notes' times moved: motion re-aims
   swing = v[kGSwing];
@@ -806,6 +854,12 @@ void State::apply(const Command& c) {
     case CmdType::SetMute:
       if (c.a >= kNumTracks) break;
       proj->tracks[c.a].mute = c.c ? 1 : 0;
+      bump();
+      break;
+    case CmdType::SetSampleSlot:
+      // takes effect at the track's next note (the sampler latches its slot there)
+      if (c.a >= kNumTracks || c.c >= kSampleSlots) break;
+      proj->tracks[c.a].sampleSlot = c.c;
       bump();
       break;
     case CmdType::NoteOn:
@@ -1231,9 +1285,9 @@ void State::buildEff(int t) {
 // ---------------------------------------------------------- instruments ----
 
 // The track's parameter metadata and its defaults (the values under a set).
-void State::trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const {
+void State::trackInfo(const Voice* v, int t, const ParamInfo** info, uint8_t* defaults) const {
   for (int i = 0; i < kParamsPerTrack; ++i) {
-    info[i] = i < kSoundParams ? (voice[t] ? voice[t]->paramInfo(i) : nullptr) : mixParamInfo(t, i);
+    info[i] = i < kSoundParams ? (v ? v->paramInfo(i) : nullptr) : mixParamInfo(t, i);
     defaults[i] = info[i] ? info[i]->def : 0;
   }
 }
@@ -1243,10 +1297,11 @@ void State::trackInfo(int t, const ParamInfo** info, uint8_t* defaults) const {
 // the engine) and at a step whose macro lock differs from the one in scope. The
 // values under the set are the voice's defaults, so an instrument sounds the
 // same whatever the track held before. Not on the per-sample or per-quantum path.
-void State::deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const {
+void State::deriveInto(const macro::MacroSet& set, const Voice* v, int t, const uint8_t* positions,
+                       uint8_t* out) const {
   const ParamInfo* info[kParamsPerTrack];
   uint8_t under[kParamsPerTrack];
-  trackInfo(t, info, under);
+  trackInfo(v, t, info, under);
   float pos[kTrackMacros];
   for (int m = 0; m < kTrackMacros; ++m) pos[m] = macro::posFromByte(positions[m]);
   macro::evaluate(set, info, pos, under, out);
@@ -1256,7 +1311,27 @@ void State::evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out) 
   uint8_t pos[kTrackMacros];
   std::memcpy(pos, proj->tracks[t].macro, kTrackMacros);
   if (lockMacro >= 0 && lockMacro < kTrackMacros) pos[lockMacro] = lockPos;
-  deriveInto(*tr[t].inst, t, pos, out);
+  deriveInto(*tr[t].inst, voice[t], t, pos, out);
+}
+
+// DECISION (the switch): at the quantum edge where the instrument changes kind, the
+// notes the old voice holds are released, the old voice is choked (its ~2 ms fade)
+// and keeps rendering on the track until it has faded (fadeV), and the new voice
+// renders from this quantum on with the parameters derived for it. The parameter
+// caches follow the voice that renders.
+void State::switchVoice(int t, Voice* want) {
+  releaseNotes(t);                                // note-offs to the voice that held them
+  Voice* old = voice[t];
+  if (old && old != want && old->active()) {
+    old->choke();
+    fadeV = old;
+    fadeTrack = uint8_t(t);
+  }
+  if (fadeV == want) fadeV = nullptr;             // switched straight back: it plays on as the track's voice
+  voice[t] = want;
+  if (want && gValid) want->setTempo(float(bpm));
+  cacheSoundRanges(t);
+  tr[t].paramsSent = 0;
 }
 
 void State::refreshInstrument(int t, bool rebind) {
@@ -1266,9 +1341,26 @@ void State::refreshInstrument(int t, bool rebind) {
   if (rebind || !r.bindValid || id != r.boundId) {
     const macro::MacroSet* s = macro::findInstrument(id);
     r.inst = (s && s->track == t) ? s : nullptr;   // a set for another voice is as unknown
+    if (r.inst && !kindVoice(t, r.inst->voice)) r.inst = nullptr;   // so is a kind this track does not host
     r.boundId = id;
     r.bindValid = 1;
     resetMotion(t);                                // a new instrument jumps: nothing moves
+    // VOICE KINDS: the instrument's kind renders the track from this quantum on.
+    Voice* want = kindVoice(t, r.inst ? int(r.inst->voice) : int(kVoiceNative));
+    if (want != voice[t]) {
+      const bool fromOther = voice[t] != nativeV[t];
+      switchVoice(t, want);
+      // Back on the native voice without an instrument (CLASSIC, unknown): the stored
+      // sound parameters were the other kind's; the native voice starts from its defaults.
+      if (fromOther && !r.inst) {
+        bool changed = false;
+        for (int i = 0; i < kSoundParams; ++i) {
+          const uint8_t d = ((r.pHas >> i) & 1u) ? r.dDef[i] : 0;
+          if (ts.params[i] != d) { ts.params[i] = d; changed = true; }
+        }
+        if (changed) bump();
+      }
+    }
   } else {
     // Positions changed under the engine by another route than SetMacro: they jump
     // (not a macro the playing pattern's motion owns: that one only has a new base).
@@ -1283,8 +1375,9 @@ void State::refreshInstrument(int t, bool rebind) {
   evalInstrument(t, -1, 0, out);
   bool changed = false;
   for (int i = 0; i < kSoundParams; ++i) {
-    if (!((r.pHas >> i) & 1u)) continue;           // unused voice slots stay 0 (sanitised)
-    if (ts.params[i] != out[i]) { ts.params[i] = out[i]; changed = true; }
+    // unused voice slots are 0 (sanitised; after a switch of voice kind they may hold the other kind's)
+    const uint8_t v = ((r.pHas >> i) & 1u) ? out[i] : 0;
+    if (ts.params[i] != v) { ts.params[i] = v; changed = true; }
   }
   for (int i = 0; i < macro::kMixRows; ++i) r.iMix[i] = out[kMixLevel + i];
   if (changed) bump();
@@ -1311,7 +1404,7 @@ void State::updateStand(int t) {
   if (r.standOn && std::memcmp(want, r.stand, kTrackMacros) == 0) return;
   std::memcpy(r.stand, want, kTrackMacros);
   uint8_t out[kParamsPerTrack];
-  deriveInto(*r.inst, t, want, out);
+  deriveInto(*r.inst, voice[t], t, want, out);
   for (int i = 0; i < kSoundParams; ++i) r.lkSound[i] = ((r.pHas >> i) & 1u) ? out[i] : 0;
   for (int i = 0; i < macro::kMixRows; ++i) r.lkMix[i] = out[kMixLevel + i];
   r.standOn = 1;
@@ -1779,6 +1872,22 @@ void State::afterNoteOn(int t) {
   if (t == kTrackKick && duckSrc == kDuckKick) duck.trigger();
 }
 
+// A hosted voice's note with macro values of its own: the voice gets the instrument
+// evaluated where the macros are heard now, with the note's values in place of theirs,
+// so what it latches at the note-on (the sampler's slice) is the note's. The engine's
+// own parameters follow at the next quantum (paramsSent = 0; while a macro moves, at
+// the next fractional feed). One evaluation per such note.
+void State::primeNote(int t, const Step& st) {
+  TrackRt& r = tr[t];
+  uint8_t pos[kTrackMacros];
+  for (int m = 0; m < kTrackMacros; ++m)
+    pos[m] = st.hasMacro(m) ? st.macroValue(m) : uint8_t(macroPos(r, m, qCount) + 0.5f);
+  uint8_t out[kParamsPerTrack];
+  deriveInto(*r.inst, voice[t], t, pos, out);
+  voice[t]->setParams(out);
+  r.paramsSent = 0;
+}
+
 // One sequenced note-on (a step, or one ratchet hit of a step).
 // DECISION (slide, TB-303 semantics): a sounding note from a step with
 // kStepSlide stays gated at least until the track's next step is evaluated.
@@ -1824,6 +1933,7 @@ void State::hit(int t, NoteEvent ev, int32_t offCd, bool armSlide) {
     vOff(t, r.pend[slot].note);
   }
   ensureParams(t);
+  if (primeSt) primeNote(t, *primeSt);
   vOn(t, ev);
   PendNote& p = r.pend[slot];
   p.note = ev.note;
@@ -1881,7 +1991,13 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
   ev.chord = (t == kTrackLead && st.chord() < kChordNum) ? st.chord() : 0;
   const bool slide = isSynthTrack(t) && (st.flags() & kStepSlide);
 
+  // VOICE KINDS: a hosted voice (the sampler) latches parameters at its note-on, and
+  // the note's own macro values only reach the motion after the note has started
+  // (motionStep runs after the step fires). primeNote hands it the parameters at the
+  // note's own values first. Native voices are never primed (bit-identical).
+  primeSt = (voice[t] != nativeV[t] && r.inst && st.hasExt()) ? &st : nullptr;
   hit(t, ev, frac + gate, slide && ratchets == 1);
+  primeSt = nullptr;
   if (ratchets > 1) {
     // Remaining hits are evenly spaced over the step's real (swung) duration;
     // only the LAST hit carries the slide into the next step.
@@ -2188,6 +2304,27 @@ void tapZero(float* const (&buf)[2], long pos) {
 }  // namespace
 #endif
 
+// A track with a voice fading out after a switch (VOICE KINDS): the track's voice (if it
+// sounds) plus the fading one, in stereo. Clears fadeV once it has faded.
+__attribute__((noinline)) void State::renderFading(Voice* v, float* L, float* R) {
+  float L2[kQuantum], R2[kQuantum];
+  for (int i = 0; i < kQuantum; ++i) L[i] = R[i] = 0.0f;
+  if (v && v->active()) {
+    v->render(L, R, kQuantum);
+    if (v->mono())
+      for (int i = 0; i < kQuantum; ++i) R[i] = L[i];
+  }
+  if (fadeV && fadeV->active()) {
+    fadeV->render(L2, R2, kQuantum);
+    const bool m = fadeV->mono();
+    for (int i = 0; i < kQuantum; ++i) {
+      L[i] += L2[i];
+      R[i] += m ? L2[i] : R2[i];
+    }
+  }
+  if (fadeV && !fadeV->active()) fadeV = nullptr;
+}
+
 void State::render(int16_t* out) {
   float busL[kQuantum], busR[kQuantum], sD[kQuantum], sR[kQuantum];
   const bool mono = monoOut;
@@ -2218,6 +2355,7 @@ void State::render(int16_t* out) {
     scopeCfgA.store(scReq, std::memory_order_release);
   }
   const int scT = scopeTrack;
+  const int fadeT = fadeV ? int(fadeTrack) : -1;
   const float duckEnd = duck.tick();
   const float invN = 1.0f / float(kQuantum);
   bool dSend = false, rSend = false;
@@ -2304,9 +2442,15 @@ void State::render(int16_t* out) {
 #endif
 
     Voice* v = voice[t];
-    if (v && v->active()) {
+    const bool fadeHere = t == fadeT;
+    if ((v && v->active()) || fadeHere) {
       float L[kQuantum], R[kQuantum];
-      v->render(L, R, kQuantum);
+      if (fadeHere) {
+        // VOICE KINDS: a switch left the old voice fading out on this track: both render.
+        renderFading(v, L, R);
+      } else {
+        v->render(L, R, kQuantum);
+      }
       if (t == scT) {
         // Scope tap: the voice's left channel averaged over scopeDecim samples (a box
         // filter: a decimated bright wave keeps a steady shape) into the ring.
@@ -2327,14 +2471,14 @@ void State::render(int16_t* out) {
         scopeWr = w;
         scopeEnd.store(w, std::memory_order_release);
       }
-      // Mono voices write L == R: read only L.
-      const bool vMono = v->mono();
+      // Mono voices write L == R: read only L. (renderFading writes both.)
+      const bool vMono = !fadeHere && v->mono();
       const float* Rp = vMono ? L : R;
       // A voice that went non-finite (or absurdly large) is silenced and
       // choked instead of poisoning the buses and FX states.
       if (!(absf(L[kQuantum - 1]) < 64.0f) || !(absf(Rp[kQuantum - 1]) < 64.0f) ||
           !(absf(L[0]) < 64.0f) || !(absf(Rp[0]) < 64.0f)) {
-        v->choke();
+        if (v) v->choke();
         ++faults;
       } else if (mono) {
         // One bus. Centred gain (endL == endR here); a stereo voice
@@ -2660,10 +2804,36 @@ void Engine::setVoice(int track, Voice* voice) {
   if (track < 0 || track >= kNumTracks) return;
   engine_detail::State& s = *impl_;
   s.voice[track] = voice;
+  s.nativeV[track] = voice;
   s.cacheVoiceRanges(track);
   if (voice) voice->setMonoOutput(s.monoOut);
   if (voice && s.gValid) voice->setTempo(float(s.bpm));
   if (s.inited && s.proj) s.sanitizeTrackSound(track);
+  s.tr[track].paramsSent = 0;
+}
+
+// VOICE KINDS: the same rules as setVoice. A second voice of the same track and kind
+// replaces the first; nullptr removes it. The track rebinds at the next quantum (so an
+// instrument of that kind already on the track switches to it there).
+void Engine::setAltVoice(int track, int kind, Voice* voice) {
+  if (track < 0 || track >= kNumTracks || kind <= kVoiceNative || kind >= kNumVoiceKinds) return;
+  engine_detail::State& s = *impl_;
+  engine_detail::State::AltVoice* slot = nullptr;
+  for (engine_detail::State::AltVoice& a : s.alt)
+    if (a.v && a.track == track && a.kind == kind) slot = &a;
+  if (!slot)
+    for (engine_detail::State::AltVoice& a : s.alt)
+      if (!a.v && !slot) slot = &a;
+  if (!slot) return;   // kMaxAltVoices in use
+  if (s.voice[track] == slot->v && slot->v) s.voice[track] = s.nativeV[track];
+  if (s.fadeV == slot->v) s.fadeV = nullptr;
+  slot->v = voice;
+  slot->track = uint8_t(track);
+  slot->kind = uint8_t(kind);
+  if (voice) voice->setMonoOutput(s.monoOut);
+  if (voice && s.gValid) voice->setTempo(float(s.bpm));
+  s.cacheSoundRanges(track);
+  s.tr[track].bindValid = 0;
   s.tr[track].paramsSent = 0;
 }
 
@@ -2674,7 +2844,9 @@ void Engine::setMonoOutput(bool mono) {
   engine_detail::State& s = *impl_;
   s.monoOut = mono;
   for (int t = 0; t < kNumTracks; ++t)
-    if (s.voice[t]) s.voice[t]->setMonoOutput(mono);
+    if (s.nativeV[t]) s.nativeV[t]->setMonoOutput(mono);
+  for (const engine_detail::State::AltVoice& a : s.alt)
+    if (a.v) a.v->setMonoOutput(mono);
   s.delay.setMono(mono);   // mono: always the plain (D-long) delay line
   s.resetFx();
   s.gValid = false;        // re-derive the delay time / mode for the new layout
@@ -2709,8 +2881,19 @@ void Engine::initProject(Project& p) const {
 
 const ParamInfo* Engine::trackParamInfo(int track, int index) const {
   if (track < 0 || track >= kNumTracks || index < 0 || index >= kParamsPerTrack) return nullptr;
-  if (index < kSoundParams) return impl_->voice[track] ? impl_->voice[track]->paramInfo(index) : nullptr;
+  if (index < kSoundParams) return impl_->nativeV[track] ? impl_->nativeV[track]->paramInfo(index) : nullptr;
   return engine_detail::mixParamInfo(track, index);
+}
+
+const ParamInfo* Engine::trackParamInfo(int track, int kind, int index) const {
+  if (track < 0 || track >= kNumTracks || index < 0 || index >= kParamsPerTrack) return nullptr;
+  if (index >= kSoundParams) return engine_detail::mixParamInfo(track, index);
+  const Voice* v = impl_->kindVoice(track, kind);
+  return v ? v->paramInfo(index) : nullptr;
+}
+
+bool Engine::hostsKind(int track, int kind) const {
+  return track >= 0 && track < kNumTracks && kind >= 0 && kind < kNumVoiceKinds && impl_->kindVoice(track, kind);
 }
 
 void Engine::process(int16_t* out, int frames) {

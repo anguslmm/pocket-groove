@@ -8,6 +8,10 @@ Run it through the launcher, from the repository root:
     tools/pg bounce MYSONG            # pull, then render stems to ./bounces/MYSONG/
     tools/pg bounce path/to/file.pgv  # render a file already on disk
     tools/pg push path/to/file.pgv    # copy a project to the device (--name, --sd, --force)
+    tools/pg sample list              # the sample pool's slots on the device
+    tools/pg sample put 3 vocal.wav   # convert a file and put it into slot 3 (1-12)
+    tools/pg sample get 3 out.wav     # slot 3's audio as a WAV (mono, 22,050 Hz)
+    tools/pg sample rm 3              # empty slot 3 (it plays its built-in sound again)
 
 --json (before the command) is for programs (the desktop app's Stems list):
 stdout carries one JSON object per line and nothing else, human messages go
@@ -45,6 +49,7 @@ import os
 import random
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -76,7 +81,13 @@ ERRORS = {
     "BAD_NAME": "invalid project name (1-8 characters: A-Z 0-9 - _)",
     "BAD_SIZE": "that file is too small or too big to be a Pocket Groove project",
     "NO_STORAGE": "the device has no storage",
+    "NO_POOL": "the device has no sample pool (its flash layout is not the stock one)",
+    "BAD_SLOT": "sample slots are 1-12",
+    "EMPTY": "that slot is empty (it plays a built-in sound)",
+    "VERIFY": "the sample did not read back correctly from the device's flash: try again, restart it if it repeats",
+    "FLASH": "writing the device's flash failed",
 }
+SAMPLE_PLAYING = "the device is playing. Stop the sequencer first (writing samples to flash interrupts the audio)"
 
 
 class PgError(Exception):
@@ -305,6 +316,149 @@ def get_file(link, mount, name, progress=None):
     if len(data) != size or zlib.crc32(bytes(data)) & 0xFFFFFFFF != crc:
         raise PgError("transfer of %s failed its CRC check: try again" % name)
     return bytes(data)
+
+
+# ---- the sample pool (stage F1; pg/io/xfer.h "SAMPLE POOL") ---------------------
+
+def _check_sample(reply, what):
+    if reply.startswith("ERR UNKNOWN"):
+        raise PgError("the firmware on the device has no sample pool yet: update it")
+    if reply.startswith("ERR PLAYING"):
+        raise PgError(SAMPLE_PLAYING)
+    return check(reply, what)
+
+
+def list_samples(link):
+    """[{slot, samples, crc, name}] of the slots that hold a sample."""
+    for _ in range(max(2, link.retries)):
+        rep = link.request("SLS", until=lambda b: b.startswith("SEND ") or b.startswith("ERR "))
+        e = _check_sample(rep[-1], "sample list").split()
+        ents = []
+        for p in (b.split() for b in rep[:-1]):
+            if len(p) == 5 and p[0] == "SLOT":
+                ents.append({"slot": int(p[1]), "samples": int(p[2]), "crc": int(p[3], 16),
+                             "name": "" if p[4] == "-" else p[4]})
+        if len(e) >= 2 and int(e[1]) == len(ents):
+            return ents
+    raise PgError("the sample list keeps arriving incomplete (bad cable?)")
+
+
+def put_sample(link, slot, samples, name, progress=None):
+    """Writes a slot: samples = int16 values (mono, 22,050 Hz). Returns the reply's fields."""
+    data = struct.pack("<%dh" % len(samples), *samples)
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    r = _check_sample(link.one("SPUT %d %d %08X %s" % (slot, len(samples), crc, name or "-")), "sample put")
+    p = r.split()
+    if p[0] != "READY":
+        raise PgError("unexpected answer: %s" % r)
+    chunk = min(CHUNK, int(p[1]))
+    off = 0
+    while off < len(data):
+        piece = data[off:off + chunk]
+        a = _check_sample(link.one("WR %d %s" % (off, base64.b64encode(piece).decode("ascii"))), "sample put")
+        q = a.split()
+        if q[0] in ("ACK", "NAK"):
+            off = int(q[1])
+        else:
+            raise PgError("unexpected answer: %s" % a)
+        if progress:
+            progress(off, len(data))
+    d = _check_sample(link.one("DONE"), "sample put")
+    if not d.startswith("SSAVED "):
+        raise PgError("unexpected answer: %s" % d)
+    return d.split()[1:]
+
+
+def get_sample(link, slot, progress=None):
+    """(int16 list, name) of a slot."""
+    r = _check_sample(link.one("SGET %d" % slot), "sample get")
+    p = r.split()
+    if p[0] != "SFILE" or len(p) < 4:
+        raise PgError("unexpected answer: %s" % r)
+    size, crc, name = int(p[1]), int(p[2], 16), ("" if p[3] == "-" else p[3])
+    data = bytearray()
+    while len(data) < size:
+        d = check(link.one("RD %d" % len(data)), "sample get")
+        q = d.split()
+        if len(q) != 3 or q[0] != "DATA" or int(q[1]) != len(data):
+            continue
+        data += base64.b64decode(q[2], validate=True)
+        if progress:
+            progress(len(data), size)
+    link.one("END")
+    if len(data) != size or zlib.crc32(bytes(data)) & 0xFFFFFFFF != crc:
+        raise PgError("the sample failed its CRC check: try again")
+    return list(struct.unpack("<%dh" % (size // 2), bytes(data))), name
+
+
+def rm_sample(link, slot):
+    _check_sample(link.one("SRM %d" % slot), "sample rm")
+
+
+def slot_arg(s):
+    try:
+        v = int(s)
+    except ValueError:
+        v = 0
+    if not 1 <= v <= 12:
+        raise PgError("sample slots are 1-12 (got %s)" % s)
+    return v
+
+
+def cmd_sample(args):
+    import pg_sample
+    if args.action == "list":
+        link, info = open_link(args)
+        with link:
+            ents = list_samples(link)
+        by = {e["slot"]: e for e in ents}
+        if JSON:
+            emit({"type": "samples", "slots": ents})
+            return 0
+        print("Pocket Groove sample pool (firmware %s)" % info["firmware"])
+        for s in range(1, 13):
+            e = by.get(s)
+            if e:
+                print("  %2d  %-8s %6.2f s" % (s, e["name"] or "-", e["samples"] / pg_sample.RATE))
+            else:
+                print("  %2d  (empty: plays a built-in sound)" % s)
+        return 0
+    slot = slot_arg(args.slot)
+    if args.action == "put":
+        if not args.file:
+            raise PgError("sample put needs a slot and a file")
+        try:
+            samples, name = pg_sample.convert_file(args.file)
+        except pg_sample.ConvertError as e:
+            raise PgError("%s: %s" % (args.file, e))
+        if args.name:
+            name = pg_sample.clean_name(args.name)
+        link, info = open_link(args)
+        with link:
+            if info["playing"]:
+                raise PgError(SAMPLE_PLAYING)
+            put_sample(link, slot, samples, name, progress=bar)
+        print("put %s -> slot %d %s (%.2f s); a sampler instrument plays it from its next note" %
+              (args.file, slot, name or "-", len(samples) / pg_sample.RATE))
+        return 0
+    if args.action == "get":
+        if not args.file:
+            raise PgError("sample get needs a slot and an output file")
+        link, _ = open_link(args)
+        with link:
+            samples, name = get_sample(link, slot, progress=bar)
+        pg_sample.write_wav(args.file, samples)
+        print("slot %d %s (%.2f s) -> %s" % (slot, name or "-", len(samples) / pg_sample.RATE, args.file))
+        return 0
+    if args.action == "rm":
+        link, info = open_link(args)
+        with link:
+            if info["playing"]:
+                raise PgError(SAMPLE_PLAYING)
+            rm_sample(link, slot)
+        print("slot %d is empty (it plays a built-in sound)" % slot)
+        return 0
+    raise PgError("sample: list, put SLOT FILE, get SLOT FILE or rm SLOT")
 
 
 # ---- .pgv files --------------------------------------------------------------
@@ -607,11 +761,17 @@ def main(argv=None):
     g = p.add_mutually_exclusive_group()
     g.add_argument("--sd", action="store_true", help=argparse.SUPPRESS)
     g.add_argument("--int", action="store_true", help=argparse.SUPPRESS)
+    p = sub.add_parser("sample", help="the sample pool: list | put SLOT FILE | get SLOT FILE | rm SLOT")
+    p.add_argument("action", choices=("list", "put", "get", "rm"))
+    p.add_argument("slot", nargs="?", help="1-12")
+    p.add_argument("file", nargs="?", help="put: any WAV (or, on macOS, anything afconvert reads); get: a .wav")
+    p.add_argument("--name", help="put: the name the device shows (default: from the file name)")
     args = ap.parse_args(argv)
     global JSON
     JSON = args.json
     try:
-        return {"ls": cmd_ls, "pull": cmd_pull, "push": cmd_push, "bounce": cmd_bounce}[args.cmd](args)
+        return {"ls": cmd_ls, "pull": cmd_pull, "push": cmd_push, "bounce": cmd_bounce,
+                "sample": cmd_sample}[args.cmd](args)
     except PgError as e:
         print("pg: %s" % e, file=sys.stderr)
         if JSON:

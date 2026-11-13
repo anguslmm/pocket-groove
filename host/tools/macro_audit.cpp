@@ -73,8 +73,51 @@ pg::Instrument g_inst;
 ParamTable g_pt;
 uint8_t g_defaults[kNumTracks][kParamsPerTrack];
 
+// VOICE KINDS: a set of another kind than the track's native voice (`voice perc
+// sampler`) is played as the instrument it is (the engine switches the track to that
+// voice), through this overlay, at its macro positions as bytes; the values under it
+// are that kind's defaults. A native set plays its evaluated parameters (CLASSIC).
+struct AuditOverlay final : LibraryOverlay {
+  const MacroSet* set = nullptr;
+  const MacroSet* find(uint16_t id) const override { return set && id == set->id ? set : nullptr; }
+  int extraCount(int) const override { return 0; }
+  const MacroSet* extra(int, int) const override { return nullptr; }
+};
+AuditOverlay g_overlay;
+
+// --test-sample: pool slot 1 holds a test sample instead of the built-in sound.
+pg::sampler::MemoryPool g_pool;
+std::vector<int16_t> g_testSample;
+
+// A test sample unlike the built-in voices: 2.5 s of a detuned saw chord under a
+// tremolo, with a noise hit every 0.3 s and a falling sine sweep (22,050 Hz, no silence).
+void makeTestSample() {
+  const int n = int(2.5f * 22050.0f);
+  g_testSample.assign(pg::sampler::kSlotMaxSamples, 0);
+  uint32_t r = 12345u;
+  float ph[3] = {0, 0, 0}, sw = 0.0f;
+  const float f[3] = {130.8f, 196.0f, 311.1f};
+  for (int i = 0; i < n; ++i) {
+    const float t = float(i) / 22050.0f;
+    float x = 0.0f;
+    for (int k = 0; k < 3; ++k) {
+      ph[k] += f[k] / 22050.0f;
+      if (ph[k] >= 1.0f) ph[k] -= 1.0f;
+      x += 0.18f * (2.0f * ph[k] - 1.0f);
+    }
+    x *= 0.6f + 0.4f * std::sin(6.2831853f * 3.0f * t);
+    r = r * 1664525u + 1013904223u;
+    const float tn = std::fmod(t, 0.3f);
+    x += 0.5f * std::exp(-tn * 30.0f) * (float(int32_t(r)) / 2147483648.0f);
+    sw += (1200.0f * std::exp(-t)) / 22050.0f;
+    x += 0.2f * std::sin(6.2831853f * sw);
+    g_testSample[size_t(i)] = int16_t(std::lrint(std::max(-1.0f, std::min(1.0f, x)) * 26000.0f));
+  }
+  g_pool.set(0, g_testSample.data(), uint32_t(n), "TEST");
+}
+
 struct Opts {
-  bool hard = false, points = false;
+  bool hard = false, points = false, testSample = false;
   std::string wavDir;
   float jumpDb = 6.0f, deadDb = 0.5f;
 } g_o;
@@ -172,13 +215,19 @@ struct Point {
 
 float db(double x) { return float(10.0 * std::log10(x + 1e-20)); }
 
-bool render(int track, Point& pt) {
+bool render(int track, Point& pt, const MacroSet* kindSet) {
   static Project proj;
   g_inst.engine().initProject(proj);
   proj.globals[kGTempo] = kBpm;
   proj.globals[kGSwing] = 0;
   for (int t = 0; t < kNumTracks; ++t) proj.tracks[t].mute = t == track ? 0 : 1;
   std::memcpy(proj.tracks[track].params, pt.params, kParamsPerTrack);
+  if (kindSet) {
+    setInstrumentId(proj.tracks[track], kindSet->id);
+    for (int m = 0; m < kindSet->numMacros; ++m)
+      proj.tracks[track].macro[m] = uint8_t(std::lrint(pt.pos[m] * float(kPosMax)));
+    proj.tracks[track].sampleSlot = 0;
+  }
   int dFrom = 0, dTo = 4;
   writePhrase(proj, track, &dFrom, &dTo);
 
@@ -453,6 +502,15 @@ int auditFile(const std::string& path) {
   sm.voice = trackName(s.track);
   const int track = s.track;
   const int nm = s.numMacros;
+  // the values under the set: its voice kind's defaults (VOICE KINDS), the track's mixer
+  uint8_t under[kParamsPerTrack];
+  const ParamInfo* kindScratch[kParamsPerTrack];
+  const TrackParams kp = paramsFor(s, g_pt, kindScratch);
+  for (int i = 0; i < kParamsPerTrack; ++i)
+    under[i] = i < kSoundParams ? (kp[i] ? kp[i]->def : 0) : g_defaults[track][i];
+  const MacroSet* kindSet = s.voice != kVoiceNative ? &s : nullptr;
+  if (kindSet) sm.voice += "/" + std::string(voiceKindName(s.voice));
+  g_overlay.set = kindSet;
 
   // the grid
   std::vector<Point> pts;
@@ -463,7 +521,7 @@ int auditFile(const std::string& path) {
     p.label = posLabel(s, pos);
     auto it = index.find(p.label);
     if (it != index.end()) return it->second;
-    evaluate(s, g_pt, p.pos, g_defaults[track], p.params);
+    evaluate(s, g_pt, p.pos, under, p.params);
     // as an instrument plays it: the mixer rows are the player's (here at their defaults),
     // combined with the set's level and sends by the mixer rule (docs/MACROLAB.md)
     combineMixer(g_defaults[track], p.params, g_defaults[track], p.params);
@@ -499,7 +557,7 @@ int auditFile(const std::string& path) {
       }
   }
   for (Point& p : pts) {
-    if (!render(track, p)) {
+    if (!render(track, p, kindSet)) {
       sm.hard++;
       continue;
     }
@@ -665,12 +723,12 @@ int auditFile(const std::string& path) {
       // where an enum parameter jumps along this line (the others at their start)
       float jp[24];
       uint8_t jparam[24];
-      const int nj = enumJumps(s, g_pt, m, start, g_defaults[track], jp, jparam, 24);
+      const int nj = enumJumps(s, g_pt, m, start, under, jp, jparam, 24);
       if (nj) {
         std::string j = "    enum jumps:";
         for (int k = 0; k < nj; ++k) {
           char t[48];
-          std::snprintf(t, sizeof(t), " %s@%.3f", g_pt.info[track][jparam[k]]->name, double(jp[k]));
+          std::snprintf(t, sizeof(t), " %s@%.3f", kp[jparam[k]]->name, double(jp[k]));
           j += t;
         }
         std::printf("%s\n", j.c_str());
@@ -742,9 +800,10 @@ int main(int argc, char** argv) {
     else if (a == "--wav" && i + 1 < argc) g_o.wavDir = argv[++i];
     else if (a == "--jump" && i + 1 < argc) g_o.jumpDb = float(std::atof(argv[++i]));
     else if (a == "--dead" && i + 1 < argc) g_o.deadDb = float(std::atof(argv[++i]));
+    else if (a == "--test-sample") g_o.testSample = true;
     else if (a == "-h" || a == "--help" || a[0] == '-') {
       std::fprintf(stderr,
-                   "usage: macro_audit [--hard] [--points] [--wav DIR] [--jump DB] [--dead DB] PATH...\n"
+                   "usage: macro_audit [--hard] [--points] [--wav DIR] [--jump DB] [--dead DB] [--test-sample] PATH...\n"
                    "  PATH: a .pgm file or a folder of them (any depth). See docs/MACROLAB.md.\n");
       return 2;
     } else paths.push_back(a);
@@ -753,6 +812,11 @@ int main(int argc, char** argv) {
   if (!g_o.wavDir.empty()) mkdir(g_o.wavDir.c_str(), 0755);
 
   g_inst.init(kSr, false);
+  if (g_o.testSample) {
+    makeTestSample();
+    g_inst.setSamplePool(&g_pool);
+  }
+  setLibraryOverlay(&g_overlay);
   for (int t = 0; t < kNumTracks; ++t)
     for (int p = 0; p < kParamsPerTrack; ++p) {
       g_pt.info[t][p] = g_inst.engine().trackParamInfo(t, p);

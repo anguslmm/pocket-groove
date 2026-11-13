@@ -482,6 +482,7 @@ void Ui::prunePending() {
       pendTrackLen_[t] = 0;
     if (pendMute_[t] && ((proj_->tracks[t].mute != 0) == (pendMute_[t] == 2) || stale(pendMuteFrame_[t])))
       pendMute_[t] = 0;
+    if (pendSlot_[t] && (proj_->tracks[t].sampleSlot == pendSlot_[t] - 1 || stale(pendSlotFrame_[t]))) pendSlot_[t] = 0;
     if (((pendInstMask_ >> t) & 1) &&
         (instrumentId(proj_->tracks[t]) == pendInst_[t] || stale(pendInstFrame_[t])))
       pendInstMask_ &= uint8_t(~(1u << t));
@@ -605,6 +606,61 @@ void Ui::noteOn(int t, int note, int vel, uint8_t flags, uint8_t chord) {
 void Ui::noteOff(int t, int note) { send(cmd(CmdType::NoteOff, t, clampi(note, 0, 127))); }
 
 // ============================================================== helpers ====
+
+// ---- the sampler (stage F1, UX.md 10.3 "Sampler instruments") ----------------------
+
+bool Ui::samplerOn(int t) const {
+  const macro::MacroSet* s = instrumentOf(t);
+  return s && s->voice == kVoiceSampler && eng_->hostsKind(t & 7, kVoiceSampler);
+}
+
+int Ui::sampleSlotOf(int t) const {
+  t &= 7;
+  if (pendSlot_[t]) return pendSlot_[t] - 1;
+  return proj_->tracks[t].sampleSlot < kSampleSlots ? proj_->tracks[t].sampleSlot : 0;
+}
+
+void Ui::setSampleSlot(int t, int slot) {
+  t &= 7;
+  slot = ((slot % kSampleSlots) + kSampleSlots) % kSampleSlots;
+  if (slot == sampleSlotOf(t)) return;
+  pendSlot_[t] = uint8_t(slot + 1);
+  pendSlotFrame_[t] = frame_;
+  send(cmd(CmdType::SetSampleSlot, t, 0, slot));
+  ++serial_;
+}
+
+// The chop's pitch for note key `degree`: the scale's degree above 60 (the sample's
+// own key is unknown, so the scale's root is not added: z is the chop as recorded).
+int Ui::samplerNote(int degree) const { return degreeNote(0, globalValue(kGScaleType), 4, degree); }
+
+// SHIFT+; / . on a sampler instrument's page: the previous / next pool slot (wraps).
+// A run of steps (each within 2 s of the last) is one undo unit.
+bool Ui::stepSampleSlot(int dir) {
+  if (view_ != View::Sound || !instrumentPage() || heldStep_ >= 0 || !samplerOn(sel_)) return false;
+  const int t = sel_;
+  if (!(undoValid_ && undoKind_ == 2 && undoTrack_ == t && !undoIsRedo_ && !after(now_, slotUndoMs_ + 2000))) {
+    undoKind_ = 2;
+    undoTrack_ = uint8_t(t);
+    undoSlot_ = uint8_t(sampleSlotOf(t));
+    undoValid_ = true;
+    undoIsRedo_ = false;
+    undoGest_ = undoEvt_ = 0;
+    undoQueued_ = false;
+    undoLabel_[0] = 0;
+    cat(cat(undoLabel_, kTrackNames[t & 7]), " SLOT");
+  }
+  slotUndoMs_ = now_;
+  setSampleSlot(t, sampleSlotOf(t) + dir);
+  sampler::SampleRef r;
+  sampler::resolve(sampler_ ? sampler_->pool() : nullptr, sampleSlotOf(t), &r);
+  char buf[40];
+  char* o = cat(catInt(cat(buf, "SLOT "), sampleSlotOf(t) + 1), " ");
+  cat(o, r.builtin ? "BUILT-IN" : r.name);
+  toast(buf, 1);
+  listUntil_ = 0;
+  return true;
+}
 
 int Ui::noteFor(int t, int degree) const {
   return degreeNote(globalValue(kGScaleRoot) % 12, globalValue(kGScaleType), octave_[t & 7], degree);
@@ -798,8 +854,8 @@ void Ui::keyDown(int k, bool shift) {
   if (pad >= 0) { padDown(k, pad, shift); return; }
   if (note >= 0) { noteDown(k, note, shift); return; }
   switch (k) {
-    case kKSemicolon: semicolonDot(1, false); return;
-    case kKDot: semicolonDot(-1, false); return;
+    case kKSemicolon: if (shift && stepSampleSlot(-1)) return; semicolonDot(1, false); return;
+    case kKDot: if (shift && stepSampleSlot(1)) return; semicolonDot(-1, false); return;
     case kKQuote: pageKey(shift); return;
     case kKL: chordKey(shift); return;
     case kKEnter: recToggle(); return;
@@ -1045,6 +1101,8 @@ void Ui::playNote(int k, int n, bool shift) {
     // Legato = slide: another note key is still held (4.4).
     for (int o = 0; o < 8; ++o)
       if (kKNote0 + o != k && isHeld(kKNote0 + o) && rec_[kKNote0 + o].act == kActNote) flags |= kStepSlide;
+  } else if (samplerOn(t)) {
+    note = samplerNote(n);   // a sampler instrument: the note keys play the chop's pitch
   } else {
     vel = kVelRow[n];
   }
@@ -1059,6 +1117,8 @@ void Ui::stepEditNote(int k, int n) {
   if (isSynth(t)) {
     s.note = uint8_t(noteFor(t, n));
     if (t == kTrackLead) s.setChord(chordForDegree(n));
+  } else if (samplerOn(t)) {
+    s.note = uint8_t(samplerNote(n));   // a sampler instrument: the note keys set the chop's pitch
   } else {
     s.vel = kVelRow[n];
   }
@@ -1092,6 +1152,9 @@ void Ui::stepWriteNote(int k, int n, bool shift) {
     s.vel = 100;
     s.gate = 2;
     if (t == kTrackLead) s.setChord(chordForDegree(n));
+  } else if (samplerOn(t)) {
+    s.note = uint8_t(samplerNote(n));
+    s.vel = 100;
   } else {
     s.vel = kVelRow[n];
   }
@@ -1425,7 +1488,7 @@ void Ui::resetValue() {
       Step s = stepAt(heldTrack_, heldStep_);
       switch (stepField_) {
         case kFVel: s.vel = kDefaultStep.vel; break;
-        case kFGate: if (isSynth(heldTrack_)) s.gate = kDefaultStep.gate; else s.note = 60; break;
+        case kFGate: if (pitched(heldTrack_)) s.gate = kDefaultStep.gate; else s.note = 60; break;
         case kFProb: s.setProb(100); break;
         case kFRatch: s.clearFlags(kStepRatchetMask); break;
         case kFChord: s.setChord(0); break;
@@ -1460,7 +1523,7 @@ void Ui::editField(int dir, int mag, bool shift) {
   switch (stepField_) {
     case kFVel: s.vel = uint8_t(clampi(s.vel + dir * big, 1, 127)); break;
     case kFGate:
-      if (isSynth(t)) s.gate = uint8_t(clampi(s.gate + dir * big, 1, 64));
+      if (pitched(t)) s.gate = uint8_t(clampi(s.gate + dir * big, 1, 64));   // a sampler's gate ends the chop
       else s.note = uint8_t(clampi(s.note + dir * (shift ? 12 : mag), 36, 84));   // PTCH 60 +- 24
       break;
     case kFProb: s.setProb(uint8_t(clampi((s.prob() + 2) / 5 * 5 + dir * 5 * (shift ? 4 : mag), 0, 100))); break;
@@ -1747,6 +1810,16 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   if (scopeShown()) {
     scopeMoved = scope_.update(*eng_, sel_, now_);
     if (scope_.track() >= 0 && instrumentOf(sel_)) refreshJumps();
+    if (samplerOn(sel_)) {
+      // the sampler's picture: its playhead moves it; a pool change (a new sample) redraws all
+      const int32_t ph = sampler_ ? sampler_->playhead() : -1;
+      if (ph != wavePlayhead_) scopeMoved = true;
+      const uint32_t gen = sampler_ && sampler_->pool() ? sampler_->pool()->generation() : 0;
+      if (gen != wavePoolGen_) {
+        wavePoolGen_ = gen;
+        ++serial_;
+      }
+    }
   } else if (scope_.track() >= 0) {
     scope_.stop(*eng_);
   }

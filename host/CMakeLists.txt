@@ -41,6 +41,14 @@ endforeach()
 if(TARGET pg_engine AND TARGET pg_macro)
   target_link_libraries(pg_engine PUBLIC pg_macro)
 endif()
+# the voice kinds' parameter tables (pg/sampler/sampler_params.h) are read by the macro module
+if(TARGET pg_macro AND TARGET pg_sampler)
+  target_link_libraries(pg_macro PUBLIC pg_sampler)
+endif()
+# ... and by the transfer protocol (the sample pool's write side, pg/sampler/flash_pool.h)
+if(TARGET pg_io AND TARGET pg_sampler)
+  target_link_libraries(pg_io PUBLIC pg_sampler)
+endif()
 
 file(GLOB test_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
 foreach(src ${test_srcs})
@@ -109,12 +117,22 @@ endif()
 if(TARGET macro_audit)
   add_test(NAME macro_audit COMMAND macro_audit --hard macros WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(macro_audit PROPERTIES TIMEOUT 600)
+  # The sampler sets (voice perc sampler) again, on a test sample in pool slot 1 instead
+  # of the built-in sound an empty slot plays (macro_audit --test-sample).
+  add_test(NAME macro_audit_test_sample COMMAND macro_audit --hard --test-sample macros/perc
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(macro_audit_test_sample PROPERTIES TIMEOUT 600)
   set(why_silent "HARD  silent at GONE=0.00")
   set(why_clips "HARD  clips .stem peak above 0 dBFS. at HOT=1.00")
   set(why_typo "typo.pgm:5: unknown parameter 'cutx' for bass")
   # The built-in instrument table (lib/pg/src/pg/macro/builtin_data.cpp) must be what
   # host/tools/macro_builtin makes of macros/ now; it also fails on id collisions.
   add_test(NAME check_builtin COMMAND macro_builtin --check WORKING_DIRECTORY ${PG_ROOT})
+  # ... and the sampler's built-in sounds (lib/pg/src/pg/sampler/rom_samples_data.cpp) what
+  # host/tools/gen_rom_samples makes now (within 2 LSB: libm differs between hosts).
+  if(TARGET gen_rom_samples)
+    add_test(NAME check_rom_samples COMMAND gen_rom_samples --check WORKING_DIRECTORY ${PG_ROOT})
+  endif()
   foreach(bad silent clips typo)
     add_test(NAME macro_audit_catches_${bad}
              COMMAND macro_audit --hard host/tests/macro_bad/${bad}.pgm
@@ -141,6 +159,14 @@ if(Python3_Interpreter_FOUND AND TARGET xfer_sim AND NOT WIN32)
            COMMAND ${Python3_EXECUTABLE} ${PG_ROOT}/tools/test_pg.py --sim $<TARGET_FILE:xfer_sim>
            WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(test_pg_client PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
+endif()
+# The sample converters: C++ (host/common/sample_convert.h, the desktop's) and Python
+# (tools/pg_sample.py, tools/pg sample put) agree on shared test vectors.
+if(Python3_Interpreter_FOUND AND TARGET sample_convert)
+  add_test(NAME test_sample_convert
+           COMMAND ${Python3_EXECUTABLE} ${PG_ROOT}/tools/test_sample_convert.py $<TARGET_FILE:sample_convert>
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(test_sample_convert PROPERTIES TIMEOUT 300)
 endif()
 
 # The hardware spike's portable parts (src/hwspike, env:hw-spike, docs/hw-spike.md).

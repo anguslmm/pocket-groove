@@ -26,6 +26,7 @@ constexpr int kGateUnitsPerStep = 4;  // Step::gate is in quarter-steps
 constexpr int kSoundParams    = 24;   // per-track sound params, indices 0..23 (voice-defined)
 constexpr int kParamsPerTrack = 32;   // 24 sound + 8 mixer (indices 24..31)
 constexpr int kNumGlobals     = 32;
+constexpr int kSampleSlots    = 12;   // the sample pool (pg/sampler/sample_format.h kPoolSlots)
 
 // ---- Audio ----------------------------------------------------------------
 constexpr int   kQuantum           = 16;       // frames per control block; all events land on quantum edges

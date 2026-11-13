@@ -102,6 +102,14 @@ HOT_COMMON = [
     r"^pg::drums::\w+Voice::(render|renderTonal|renderCowbell|renderShaker|updateCoefs|endBlock|setParams|active|mono)\(",
     # Not the drums' fractional path (setParamsFine, updateFine): the engine feeds a
     # drum once per evaluation interval (11.6 ms), not per tick, so it stays in flash.
+    # The sampler (stage F1): its per-sample loop and what it runs once per quantum.
+    # Not updateTone / setParamsFine (only when a parameter changes: ~1.5 KB) and not
+    # its note-on path (startChop, resolve, the pools, the engine's primeNote: once
+    # per note): flash, to keep the IRAM growth near 3 KB. Its samples stay in flash
+    # too (the memory-mapped app1 partition and the ROM table).
+    r"^pg::sampler::SamplerVoice::(render|setParams|updateRate|updateRegion|edge|endChop|active|mono)\(",
+    r"^pg::sampler::\(anonymous namespace\)::(endOf|minRegion)\(",
+    r"^pg::sampler::SamplePool::generation\(",
 ]
 # The variants only one output layout runs.
 HOT_MONO = [
@@ -118,7 +126,8 @@ HOT_STEREO = [
 HOT = HOT_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 # Placement checks (regexes on demangled names, see the header).
 MUST_COMMON = [r"^pg::Engine::process\(", r"^pg::lead::LeadVoice::render\(", r"^pg::bass::BassVoice::render\(",
-               r"^pg::engine_detail::State::fineEval\(", r"^pg::bass::BassVoice::mapParams\("]
+               r"^pg::engine_detail::State::fineEval\(", r"^pg::bass::BassVoice::mapParams\(",
+               r"^pg::sampler::SamplerVoice::render\("]
 MUST = MUST_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 MUST_NOT = HOT_MONO if STEREO else HOT_STEREO
 # Per-step / per-note paths (tier 2).
@@ -128,12 +137,14 @@ STEP = [
     r"^pg::drums::\w+Voice::(noteOn|beginHit|noteOff)\(",
     r"^pg::bass::BassVoice::(noteOn|noteOff)\(",
     r"^pg::lead::LeadVoice::(noteOn|noteOff|startVoice|queueNote|allocVoice|setPan)\(",
+    r"^pg::sampler::SamplerVoice::(noteOn|noteOff|choke|setSampleSlot)\(",
 ]
 # Objects whose .rodata goes to DRAM (tier 3): the bass tables (4.2 KB).
 RAM_RODATA = ["bass/bass_tables_data.cpp"]
 
 AUDIO_OBJS = ("/pg/drums/", "/pg/bass/bass.cpp", "/pg/lead/lead.cpp", "/pg/engine/engine.cpp",
-              "/pg/engine/delay.cpp", "/pg/engine/reverb.cpp", "/pg/engine/master.cpp")
+              "/pg/engine/delay.cpp", "/pg/engine/reverb.cpp", "/pg/engine/master.cpp",
+              "/pg/sampler/sampler.cpp", "/pg/sampler/sample_pool.cpp", "/pg/sampler/flash_pool.cpp")
 
 _hot = [re.compile(p) for p in HOT + (STEP if TIER >= 2 else [])]
 

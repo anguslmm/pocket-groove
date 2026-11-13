@@ -9,7 +9,7 @@ namespace pg {
 namespace macro {
 namespace detail {
 
-extern const int kBuiltinCount = 24;
+extern const int kBuiltinCount = 27;
 
 extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
@@ -17,7 +17,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x93},   // tilt x, y
      0xe7c9, "BOOM",
      "family: MATERIAL / BODY.",
-     "Choose the drum: size, skin, wood.",
+     "Choose the drum: size, skin, wood.", 0,   // voice kind
      0x01000360u, {0, 0, 0, 0, 0, 26, 100, 0, 34, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0},
      {{"SIZE", "SMALL", "BIG", "", 450, 0, 6},
       {"SKIN", "TIGHT", "LOOSE", "", 350, 6, 4},
@@ -43,7 +43,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0xef00, "TRIO",
      "family: MORPH.",
-     "808, 909 and gabber, blended.",
+     "808, 909 and gabber, blended.", 0,   // voice kind
      0x010003ffu, {44, 96, 52, 74, 18, 16, 70, 44, 30, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0},
      {{"909", "808", "909", "long, soft .. tight, a bright click", 0, 0, 0},
       {"GABBA", "808", "GABBA", "toward the distorted, held rave kick", 0, 0, 1}},
@@ -59,7 +59,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x92},   // tilt x, y
      0xece5, "PUSH",
      "family: GESTURE.",
-     "Push it harder, hold it longer.",
+     "Push it harder, hold it longer.", 0,   // voice kind
      0x010003ffu, {54, 50, 72, 56, 56, 24, 96, 24, 36, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0},
      {{"PUSH", "", "", "", 0, 0, 5},
       {"HOLD", "", "", "", 0, 5, 4},
@@ -79,7 +79,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0x7da7, "CRACK",
      "family: OPPOSITES.",
-     "A 909-ish snare. Pitch it, rattle it.",
+     "A 909-ish snare. Pitch it, rattle it.", 0,   // voice kind
      0x00000010u, {0, 0, 0, 0, 52, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"PITCH", "LOW", "HIGH", "low fat body .. high piccolo crack", 500, 0, 5},
       {"WIRES", "DRY", "RATTLE", "all drum .. long buzzing wires", 500, 5, 4},
@@ -100,7 +100,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0xf33e, "WOOD",
      "family: MATERIAL / BODY.",
-     "Wood or metal, piccolo or field.",
+     "Wood or metal, piccolo or field.", 0,   // voice kind
      0x00000106u, {0, 50, 60, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"WD-MTL", "WOOD", "METAL", "", 350, 0, 6},
       {"SIZE", "PICCOLO", "FIELD", "", 400, 6, 4},
@@ -121,7 +121,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0xfd8e, "BITE",
      "family: INTERACTION.",
-     "Low and growling, or high and wiry.",
+     "Low and growling, or high and wiry.", 0,   // voice kind
      0x000001eeu, {0, 48, 70, 66, 0, 50, 56, 50, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"PITCH", "", "", "", 500, 0, 3},
       {"BITE", "", "", "", 0, 3, 7},
@@ -141,7 +141,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0x1ba2, "HYPE",
      "family: ENERGY.",
-     "More hands, or a calm far crowd.",
+     "More hands, or a calm far crowd.", 0,   // voice kind
      0x000000ffu, {56, 54, 64, 66, 3, 50, 46, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"MORE", "", "", "", 0, 0, 7},
       {"CALM", "", "", "", 0, 7, 7}},
@@ -160,7 +160,7 @@ extern const MacroSet kBuiltin[] = {
      {0x91, 0x9f},   // tilt x, y
      0xc06d, "SWARM",
      "family: ODD (stepped, and a pair that only makes sense together",
-     "Count the hands, play the pitch.",
+     "Count the hands, play the pitch.", 0,   // voice kind
      0x000000ebu, {60, 50, 0, 60, 0, 40, 40, 26, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"PITCH", "", "", "", 400, 0, 1},
       {"RING", "", "", "", 0, 1, 5},
@@ -180,7 +180,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0x9410, "TICK",
      "family: OPPOSITES.",
-     "Dark or bright, short or long.",
+     "Dark or bright, short or long.", 0,   // voice kind
      0x00000000u, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"DK-BRT", "DARK", "BRIGHT", "", 500, 0, 4},
       {"SH-LNG", "SHORT", "LONG", "", 500, 4, 3},
@@ -201,7 +201,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0xe0f0, "ALLOY",
      "family: MATERIAL / BODY.",
-     "From seed shaker to metal bell.",
+     "From seed shaker to metal bell.", 0,   // voice kind
      0x00000024u, {0, 0, 80, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"WD-MTL", "WOOD", "METAL", "", 600, 0, 5},
       {"SIZE", "TINY", "BIG", "", 500, 5, 4},
@@ -222,7 +222,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0x5bbe, "BLAST",
      "family: ENERGY.",
-     "Brighter and harder, or a far wash.",
+     "Brighter and harder, or a far wash.", 0,   // voice kind
      0x0000007fu, {60, 48, 66, 70, 50, 24, 60, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"MORE", "", "", "", 0, 0, 7},
       {"CALM", "", "", "", 0, 7, 6}},
@@ -241,7 +241,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0xfcf3, "SWISH",
      "family: MOVEMENT.",
-     "Open the pedal, let echoes ride.",
+     "Open the pedal, let echoes ride.", 0,   // voice kind
      0x0000004du, {64, 0, 72, 84, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"OPEN", "", "", "", 400, 0, 4},
       {"ECHO", "", "", "", 0, 4, 4},
@@ -261,7 +261,7 @@ extern const MacroSet kBuiltin[] = {
      {0x81, 0x90},   // tilt x, y
      0x088c, "TAP",
      "family: GESTURE.",
-     "A hand drum: tap, slap, let it ring.",
+     "A hand drum: tap, slap, let it ring.", 0,   // voice kind
      0x000000ffu, {0, 78, 48, 50, 24, 64, 30, 24, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"HIT", "", "", "", 350, 0, 5},
       {"PRESS", "", "", "", 0, 5, 4},
@@ -281,7 +281,7 @@ extern const MacroSet kBuiltin[] = {
      {0x91, 0x92},   // tilt x, y
      0x865d, "TRAIL",
      "family: JOURNEY.",
-     "Tom, rim, cowbell, clave, zap.",
+     "Tom, rim, cowbell, clave, zap.", 0,   // voice kind
      0x000000f8u, {0, 0, 0, 64, 40, 64, 48, 28, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"TRAIL", "", "", "", 250, 0, 5},
       {"DROP", "", "", "", 0, 5, 3},
@@ -297,12 +297,75 @@ extern const MacroSet kBuiltin[] = {
       0x030d42eeu, 0x0445c3e8u, 0x030d4000u, 0x0445c0fau, 0x03a981f4u, 0x048442eeu, 0x04e203e8u, 0x057e4000u,
       0x067840fau, 0x077241f4u, 0x0733c2eeu, 0x0639c3e8u, 0x00000000u, 0x075303e8u, 0x00000000u, 0x00fa03e8u,
       0x00000000u, 0xfec783e8u, 0x00fa0000u, 0x06b6c3e8u, 0x00000000u, 0x027103e8u, 0x00000000u, 0xffa243e8u}},
+    // perc/chop.pgm
+    {5, 4, 9, 38, 0, 0, 0, 0,
+     {0x91, 0x92},   // tilt x, y
+     0x6741, "CHOP",
+     "family: GESTURE (sampler).",
+     "Sixteen slices; each note picks one.", 1,   // voice kind
+     0x00000309u, {16, 0, 0, 110, 0, 0, 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"SLICE", "1", "16", "which of sixteen slices plays", 0, 0, 1},
+      {"PITCH", "LOW", "HIGH", "two octaves down .. two octaves up", 500, 1, 1},
+      {"TONE", "DARK", "THIN", "low-pass .. open .. high-pass", 500, 2, 5},
+      {"LENGTH", "BLIP", "LONG", "a clipped blip .. the whole slice", 600, 7, 2}},
+     {},
+     {},
+     {},
+     {{1, 120, 0, 16}, {4, 112, 16, 3}, {12, 120, 19, 2}, {10, 112, 21, 4}, {11, 112, 25, 3}, {13, 112, 28, 3}, {24, 112, 31, 3}, {3, 112, 34, 2},
+      {9, 112, 36, 2}},
+     {},
+     {0x00000000u, 0x000fa03fu, 0x001f407du, 0x002ee0bcu, 0x003e80fau, 0x004e2139u, 0x005dc177u, 0x006d61b6u,
+      0x007d01f4u, 0x008ca233u, 0x009c4271u, 0x00abe2b0u, 0x00bb82eeu, 0x00cb232du, 0x00dac36bu, 0x00ea63aau,
+      0x02710000u, 0x03e801f4u, 0x055f03e8u, 0x00000000u, 0x001f41f4u, 0x032c8000u, 0x07c061f3u, 0x000001f4u,
+      0x04c2c3e8u, 0x01d4c000u, 0x009c41f4u, 0x01f403e8u, 0x00000000u, 0x000002eeu, 0x027103e8u, 0x06978000u,
+      0x061a81f4u, 0x05dc03e8u, 0x005dc000u, 0x07c063e8u, 0x01388000u, 0x052083e8u}},
+    // perc/tape.pgm
+    {5, 4, 9, 27, 0, 0, 0, 0,
+     {0x90, 0x92},   // tilt x, y
+     0x4f7d, "TAPE",
+     "family: MOVEMENT (sampler).",
+     "The whole sample as tape.", 1,   // voice kind
+     0x00000309u, {1, 0, 0, 127, 0, 0, 0, 0, 0, 88, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"SPEED", "BACK", "FAST", "backwards .. stopped .. x1 .. x2", 750, 0, 2},
+      {"START", "HEAD", "TAIL", "where on the tape a note starts", 0, 2, 1},
+      {"WORN", "CLEAN", "WORN", "a clean copy .. crushed and dark", 0, 3, 4},
+      {"ECHO", "DRY", "ECHO", "dry .. delay and reverb", 0, 7, 2}},
+     {},
+     {},
+     {},
+     {{6, 112, 0, 6}, {24, 112, 6, 4}, {2, 112, 10, 2}, {13, 112, 12, 3}, {14, 112, 15, 3}, {10, 112, 18, 3}, {15, 112, 21, 2}, {26, 112, 23, 2},
+      {27, 112, 25, 2}},
+     {},
+     {0x00fa0000u, 0x032c815eu, 0x03c8c1f4u, 0x04074258u, 0x05dc02eeu, 0x079183e8u, 0x05dc0000u, 0x06b6c1f4u,
+      0x061a82eeu, 0x05dc03e8u, 0x00000000u, 0x06d603e8u, 0x00000000u, 0x0138812cu, 0x052083e8u, 0x00000000u,
+      0x0119412cu, 0x0445c3e8u, 0x07c06000u, 0x06b6c0c8u, 0x03c8c3e8u, 0x00000000u, 0x017703e8u, 0x00000000u,
+      0x052083e8u, 0x005dc000u, 0x036b03e8u}},
+    // perc/stutter.pgm
+    {5, 4, 8, 25, 0, 0, 0, 0,
+     {0x92, 0x91},   // tilt x, y
+     0x5570, "STUTTER",
+     "family: ENERGY (sampler).",
+     "One chop, repeated in time.", 1,   // voice kind
+     0x0104030bu, {8, 2, 0, 40, 0, 0, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 118, 0, 0, 0, 0, 0, 0, 0},
+     {{"RATE", "SLOW", "FAST", "repeats from 1/4 to 1/32", 500, 0, 1},
+      {"RISE", "FALL", "RISE", "each repeat lower .. higher", 500, 1, 1},
+      {"TONE", "DARK", "THIN", "low-pass .. open .. high-pass", 500, 2, 4},
+      {"LENGTH", "TIGHT", "OPEN", "a blip per repeat .. the whole slice", 450, 6, 2}},
+     {},
+     {},
+     {},
+     {{16, 120, 0, 5}, {17, 112, 5, 4}, {12, 120, 9, 2}, {10, 112, 11, 4}, {11, 112, 15, 3}, {13, 112, 18, 3}, {3, 112, 21, 2}, {9, 112, 23, 2}},
+     {},
+     {0x001f4000u, 0x002ee0fau, 0x004e21f4u, 0x005dc2eeu, 0x006d6384u, 0x02af8000u, 0x03e801c2u, 0x03e80226u,
+      0x052083e8u, 0x00000000u, 0x001f41f4u, 0x02ee0000u, 0x07c061f3u, 0x000001f4u, 0x04a383e8u, 0x02328000u,
+      0x007d01f4u, 0x027103e8u, 0x00000000u, 0x000002bcu, 0x02ee03e8u, 0x003e8000u, 0x07c063e8u, 0x0445c000u,
+      0x067843e8u}},
     // bass/acid.pgm
     {6, 4, 19, 43, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
      0xd9d2, "ACID",
      "family: INTERACTION.",
-     "The 303 squelch. Open it, then bite.",
+     "The 303 squelch. Open it, then bite.", 0,   // voice kind
      0x0011871cu, {0, 0, 70, 44, 96, 0, 0, 0, 0, 34, 0, 0, 0, 0, 0, 1, 60, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"OPEN", "", "", "", 400, 0, 4},
       {"BITE", "", "", "", 0, 4, 8},
@@ -326,7 +389,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x93},   // tilt x, y
      0x66f0, "POLES",
      "family: OPPOSITES.",
-     "Round house bass. Push either way.",
+     "Round house bass. Push either way.", 0,   // voice kind
      0x0011075fu, {48, 50, 50, 48, 70, 0, 0, 0, 36, 60, 0, 0, 0, 0, 0, 0, 50, 0, 0, 0, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"TONE", "DARK", "BRIGHT", "a muffled dub thump .. an open pluck", 500, 0, 6},
       {"TOUCH", "SOFT", "HARD", "slow, round, sub .. instant, driven", 500, 6, 6},
@@ -352,7 +415,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x9f},   // tilt x, y
      0x0752, "SURGE",
      "family: ENERGY.",
-     "More and more, or deep and calm.",
+     "More and more, or deep and calm.", 0,   // voice kind
      0x000b874fu, {46, 62, 56, 40, 0, 0, 10, 0, 88, 58, 0, 0, 0, 0, 0, 4, 40, 90, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"MORE", "", "", "", 0, 0, 8},
       {"CALM", "", "", "", 0, 8, 8}},
@@ -372,7 +435,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x00},   // tilt x, y
      0x1b3a, "ROAD",
      "family: JOURNEY.",
-     "One road from deep to screaming.",
+     "One road from deep to screaming.", 0,   // voice kind
      0x0022c878u, {0, 0, 0, 48, 90, 28, 0, 0, 0, 0, 0, 72, 0, 0, 70, 0, 0, 96, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"ROAD", "", "", "", 0, 0, 8},
       {"DIRT", "", "", "", 0, 8, 4},
@@ -395,7 +458,7 @@ extern const MacroSet kBuiltin[] = {
      {0x82, 0x9f},   // tilt x, y
      0x1a31, "DICE",
      "family: ODD (stepped, and a macro that only comes alive combined",
-     "Roll for a flavour and an interval.",
+     "Roll for a flavour and an interval.", 0,   // voice kind
      0x0001c23fu, {56, 70, 60, 42, 90, 30, 0, 0, 0, 70, 0, 0, 0, 0, 80, 5, 50, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"FLAV", "", "", "", 0, 0, 8},
       {"INTV", "", "", "", 0, 8, 2},
@@ -417,7 +480,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x92},   // tilt x, y
      0xfd8f, "HANDS",
      "family: GESTURE.",
-     "Open your hand, push, shake, hold.",
+     "Open your hand, push, shake, hold.", 0,   // voice kind
      0x00a77d90u, {0, 0, 0, 0, 0, 0, 0, 72, 0, 0, 56, 40, 0, 0, 64, 0, 0, 24, 64, 0, 0, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"OPEN", "", "", "", 300, 0, 7},
       {"PUSH", "", "", "", 0, 7, 6},
@@ -442,7 +505,7 @@ extern const MacroSet kBuiltin[] = {
      {0x00, 0x9f},   // tilt x, y
      0x233a, "KEYS",
      "family: MORPH.",
-     "Organ, pluck and bell in one.",
+     "Organ, pluck and bell in one.", 0,   // voice kind
      0x0177fdffu, {100, 10, 8, 44, 7, 92, 24, 100, 0, 0, 110, 30, 0, 0, 64, 0, 1, 24, 0, 0, 0, 0, 0, 0, 100, 0, 0, 0, 0, 0, 0, 0},
      {{"PLUCK", "ORGAN", "PLUCK", "held drawbar organ .. pulse pluck", 0, 0, 0},
       {"BELL", "ORGAN", "BELL", "toward an FM bell; osc 1 switches at 0.5", 0, 0, 0}},
@@ -458,7 +521,7 @@ extern const MacroSet kBuiltin[] = {
      {0xb1, 0xa0},   // tilt x, y
      0xccff, "DRIFT",
      "family: MOVEMENT.",
-     "Long notes that bloom and wander.",
+     "Long notes that bloom and wander.", 0,   // voice kind
      0x00e7e43fu, {78, 22, 30, 60, 2, 30, 0, 0, 0, 0, 40, 0, 0, 0, 64, 0, 3, 36, 48, 0, 0, 0, 0, 60, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"BLOOM", "", "", "", 400, 0, 7},
       {"WANDER", "", "", "", 0, 7, 4},
@@ -479,7 +542,7 @@ extern const MacroSet kBuiltin[] = {
      {0x91, 0xb2},   // tilt x, y
      0xd6b1, "VOYAGE",
      "family: JOURNEY.",
-     "From flute to metal in one sweep.",
+     "From flute to metal in one sweep.", 0,   // voice kind
      0x009b59ccu, {0, 0, 34, 56, 0, 0, 40, 80, 4, 0, 0, 46, 0, 0, 64, 0, 3, 36, 0, 96, 10, 0, 0, 50, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"TRIP", "", "", "", 0, 0, 8},
       {"GRIT", "", "", "", 0, 8, 4},
@@ -503,7 +566,7 @@ extern const MacroSet kBuiltin[] = {
      {0x82, 0x9f},   // tilt x, y
      0x14b4, "SWAP",
      "family: ODD (stepped flavours, and a macro that is dull alone).",
-     "Six leads, six intervals. Click!",
+     "Six leads, six intervals. Click!", 0,   // voice kind
      0x00797948u, {0, 0, 0, 58, 0, 0, 30, 0, 0, 0, 0, 40, 0, 0, 64, 0, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
      {{"FLAV", "", "", "", 0, 0, 8},
       {"INTV", "", "", "", 0, 8, 2},

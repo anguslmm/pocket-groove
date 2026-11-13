@@ -477,12 +477,12 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       case kKSemicolon:
         cat(title, "PREVIOUS INSTRUMENT");
         *l1 = "STEPS THROUGH THIS TRACK'S LIST,";
-        *l2 = "AUDIBLE AT ONCE. CTRL+Z: BACK.";
+        *l2 = ui.samplerOn(ui.selTrack()) ? "SHIFT: PREVIOUS SAMPLE SLOT." : "AUDIBLE AT ONCE. CTRL+Z: BACK.";
         return;
       case kKDot:
         cat(title, "NEXT INSTRUMENT");
         *l1 = "STEPS THROUGH THIS TRACK'S LIST,";
-        *l2 = "AUDIBLE AT ONCE. CTRL+Z: BACK.";
+        *l2 = ui.samplerOn(ui.selTrack()) ? "SHIFT: NEXT SAMPLE SLOT." : "AUDIBLE AT ONCE. CTRL+Z: BACK.";
         return;
       case kK9:
         cat(title, "SOUND: NEXT INSTRUMENT");

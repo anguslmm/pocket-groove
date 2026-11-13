@@ -28,6 +28,21 @@
 //   id DONE                          -> id SAVED <int|sd> <NAME>         verified and installed
 //   id END                           -> id OK                            closes any session
 //   any failure                      -> id ERR <CODE> [detail...]
+// SAMPLE POOL (stage F1, pg/sampler/flash_pool.h; ERR UNKNOWN from a firmware without it,
+// ERR NO_POOL from one whose flash has no pool partition). Slots are 1..12 here:
+//   id SLS                           -> id SLOT <slot> <samples> <crc32 hex> <NAME|->  (0..12 lines)
+//                                       id SEND <n>
+//   id SPUT <slot> <samples> <crc32 hex of the audio bytes> <NAME|->
+//                                    -> id READY <chunk>                 opens a write session: the
+//                                       slot is empty from here until DONE (its chops stop)
+//   id WR <offset> <base64>          -> as for PUT (the audio: mono int16 little-endian, 22,050 Hz)
+//   id DONE                          -> id SSAVED <slot> <NAME|-> <samples>   verified against the CRC
+//                                       through the flash driver AND as the CPU reads it
+//   id SGET <slot>                   -> id SFILE <bytes> <crc32 hex> <NAME|->   then RD as for GET
+//   id SRM <slot>                    -> id OK                            the slot is empty
+// SPUT and SRM write flash: refused while the sequencer plays (ERR PLAYING, no force),
+// and a running SPUT is aborted if playback starts (the slot stays empty). The device
+// converts nothing: the host sends the slot's format (tools/pg_sample.py).
 // GET and RD are read-only and allowed while the sequencer plays. PUT writes
 // flash, which stalls the audio, so it is refused while playing (ERR PLAYING)
 // unless force is 1, and a running put is aborted if playback starts. A put
@@ -46,6 +61,7 @@
 
 #include "pg/io/project_io.h"
 #include "pg/platform.h"
+#include "pg/sampler/flash_pool.h"
 
 namespace pg::io {
 
@@ -71,6 +87,12 @@ class Xfer {
   static constexpr uint32_t kMaxPutBytes = uint32_t(kMaxHeaderSize) + (uint32_t(sizeof(Project)) + uint32_t(sizeof(Project)) / 128u + 16u);
 
   void init(FileSystem* fs, const char* firmwareVersion);
+  // The sample pool's write side (nullptr: the S* requests answer ERR NO_POOL).
+  void setSamples(sampler::SampleWriter* w) { samples_ = w; }
+  // A sample put is running: its slot (0-based) and progress, for the screen.
+  bool sampleProgress(int* slot, uint32_t* done, uint32_t* total) const;
+  // Counts SSAVED / SRM successes (wraps): the screen's "saved" toast.
+  uint32_t samplesChanged() const { return samplesChanged_; }
 
   // Feeds one received byte. Returns true if it belongs to a protocol line
   // (then the caller must not interpret it), false if the caller should
@@ -94,7 +116,7 @@ class Xfer {
   const Stats& stats() const { return stats_; }
 
  private:
-  enum class Mode : uint8_t { None, Get, Put };
+  enum class Mode : uint8_t { None, Get, Put, SampleGet, SamplePut };
   void handle(char* body, const XferEnv& env, XferOut& out);
   void reply(XferOut& out, const char* fmt, ...) __attribute__((format(printf, 3, 4)));
   void err(XferOut& out, const char* code, const char* detail = nullptr);
@@ -104,6 +126,11 @@ class Xfer {
   void doPut(const char* const* tok, int n, const XferEnv& env, XferOut& out);
   void doWrite(uint32_t offset, const char* b64, const XferEnv& env, XferOut& out);
   void doDone(XferOut& out);
+  void doSampleList(XferOut& out);
+  void doSamplePut(const char* const* tok, const XferEnv& env, XferOut& out);
+  void doSampleGet(const char* slotTok, XferOut& out);
+  void doSampleRemove(const char* slotTok, const XferEnv& env, XferOut& out);
+  void doSampleDone(XferOut& out);
   bool reopenAt(uint32_t offset);
   void closeFile();
 
@@ -122,6 +149,10 @@ class Xfer {
   char path_[kPathMax] = {};
   uint32_t size_ = 0, crc_ = 0, pos_ = 0, runCrc_ = 0, lastMs_ = 0;
   bool force_ = false;
+  sampler::SampleWriter* samples_ = nullptr;
+  int slot_ = -1;                      // the sample session's slot (0-based)
+  char sname_[sampler::kNameLen + 1] = {};
+  uint32_t samplesChanged_ = 0;
   // DONE is idempotent: the last result, for a resent DONE with the same id.
   char doneId_[8] = {};
   char doneReply_[48] = {};

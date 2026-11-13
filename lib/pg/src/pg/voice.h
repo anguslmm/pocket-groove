@@ -13,6 +13,19 @@
 
 namespace pg {
 
+// VOICE KINDS (docs/MACROLAB.md "The voice line"): what renders a track is a
+// property of its instrument. Every track has its NATIVE voice (the one the
+// engine was given with setVoice); a track may also host other kinds
+// (Engine::setAltVoice), and an instrument whose set names such a kind
+// (`voice perc sampler`) plays through that voice instead. The engine switches
+// at a quantum edge when the instrument changes. CLASSIC tracks and unknown ids
+// always play the native voice.
+enum VoiceKind : uint8_t {
+  kVoiceNative = 0,
+  kVoiceSampler = 1,   // pg/sampler (sampler_params.h): a sample pool slot played as an instrument
+  kNumVoiceKinds = 2,
+};
+
 struct NoteEvent {
   uint8_t note;     // MIDI note (drums: 60 = natural tuning)
   uint8_t vel;      // 1..127
@@ -57,6 +70,10 @@ class Voice {
   }
 
   virtual void setTempo(float /*bpm*/) {}
+
+  // The track's sample pool slot (TrackSettings::sampleSlot), sent before every
+  // note-on. Only the sampler reads it (latched at the note-on); others ignore it.
+  virtual void setSampleSlot(uint8_t /*slot*/) {}
 
   virtual void noteOn(const NoteEvent& e) = 0;
   // End of gate for `note` (for chords: the root passed to noteOn). One-shot drums may ignore.

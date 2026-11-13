@@ -1,0 +1,87 @@
+# The sampler instruments on PERC (docs/ux/sampler-*.png, docs/UX.md 10.3 "Sampler
+# instruments"). The user sample comes from the built-in sounds' WAVs, written by
+#   build/host/gen_rom_samples --check --wav build/rom
+# then: build/host/ui_shot host/ui_scripts/sampler.txt docs/ux
+dev 0
+
+# a new project; kick on the beat, PERC chops on a few steps (notes and gates)
+empty
+# a user sample in slot 2 (the desktop's samples/02-ahoo.wav, the device's tools/pg sample put 2)
+sample 2 build/rom/AHOO.wav
+wait 600
+steppost 0 0 1
+steppost 0 4 1
+steppost 0 8 1
+steppost 0 12 1
+steppost 5 0 1 60 110
+steppost 5 3 1 60 100
+steppost 5 6 1 67 100
+steppost 5 10 1 60 100
+steppost 5 12 1 55 100
+
+# PERC selected silently, SOUND: `empty` leaves it CLASSIC; `.` = TAP, TRAIL, CHOP
+down shift
+tap h
+up shift
+tap 9
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 1700
+shot sampler-chop-list
+
+# playing: the playhead runs through the slice the note plays
+tap space
+wait 1000
+until 5 3
+wait 30
+shot sampler-chop
+
+# SLICE up a few slices (z / x move macro 1)
+down x
+wait 700
+up x
+until 5 6
+wait 30
+shot sampler-chop-slice
+
+# SHIFT+. : the next sample slot, which holds a user sample
+down shift
+tap .
+up shift
+wait 100
+shot sampler-slot
+wait 2600
+until 5 10
+wait 30
+shot sampler-user
+
+# STUTTER: eight slices, the third plays, repeats while it releases
+tap .
+wait 300
+tap .
+wait 1700
+until 5 0
+wait 200
+shot sampler-stutter
+
+# TAPE: the whole sample, played as tape
+tap ;
+wait 1800
+until 5 3
+wait 300
+shot sampler-tape
+
+# STEP EDIT on a sampler instrument: the note keys set the chop's pitch
+tap space
+wait 300
+tap `
+wait 100
+down 4
+wait 400
+tap c
+wait 100
+shot sampler-step-edit
+up 4

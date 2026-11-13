@@ -1,6 +1,8 @@
 // Macro set evaluation (macro.h). Float only, no heap, no libm.
 #include "macro.h"
 
+#include "../sampler/sampler_params.h"
+
 #include <cstring>
 
 namespace pg {
@@ -124,9 +126,17 @@ int MacroSet::findPatch(const char* nm) const {
   return -1;
 }
 
+TrackParams kindParams(const ParamTable& params, int track, int kind, const ParamInfo** scratch) {
+  const int t = track >= 0 && track < kNumTracks ? track : 0;
+  if (kind == kVoiceNative || kind < 0 || kind >= kNumVoiceKinds) return params.info[t];
+  for (int p = 0; p < kParamsPerTrack; ++p) scratch[p] = p < kSoundParams ? voiceKindParam(kind, p) : params.info[t][p];
+  return scratch;
+}
+
 uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* positions, const uint8_t* under,
                   uint8_t* out) {
-  return evaluate(set, params.info[set.track < kNumTracks ? set.track : 0], positions, under, out);
+  const ParamInfo* scratch[kParamsPerTrack];
+  return evaluate(set, paramsFor(set, params, scratch), positions, under, out);
 }
 
 uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
@@ -256,10 +266,11 @@ uint32_t evaluateFine(const MacroSet& set, const FineRanges& r, const float* pos
 int enumJumps(const MacroSet& set, const ParamTable& params, int m, const float* positions, const uint8_t* under,
               float* outPos, uint8_t* outParam, int max) {
   if (m < 0 || m >= set.numMacros || max <= 0) return 0;
-  const int track = set.track < kNumTracks ? set.track : 0;
+  const ParamInfo* scratch[kParamsPerTrack];
+  const TrackParams info = paramsFor(set, params, scratch);
   uint32_t enums = 0;
   for (int p = 0; p < kParamsPerTrack; ++p)
-    if (params.info[track][p] && params.info[track][p]->fmt == ParamFormat::Enum) enums |= 1u << p;
+    if (info[p] && info[p]->fmt == ParamFormat::Enum) enums |= 1u << p;
   enums &= set.ownedMask();
   if (!enums) return 0;
   float pos[kMaxMacros];
@@ -268,7 +279,7 @@ int enumJumps(const MacroSet& set, const ParamTable& params, int m, const float*
   int found = 0;
   for (int k = 0; k <= kJumpSteps && found < max; ++k) {
     pos[m] = float(k) / float(kJumpSteps);
-    evaluate(set, params, pos, under, cur);
+    evaluate(set, info, pos, under, cur);
     if (k > 0)
       for (int p = 0; p < kParamsPerTrack && found < max; ++p)
         if (((enums >> p) & 1) && cur[p] != prev[p]) {

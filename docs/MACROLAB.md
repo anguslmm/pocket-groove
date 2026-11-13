@@ -135,7 +135,7 @@ macro BELL "ORGAN" "BELL"
 |---|---|
 | `# TEXT` | the first non-blank line, if it is a comment, is the set's **header** line (`MacroSet::about`, up to 72 characters, the rest is cut): the author's, shown by the lab and listed in the index. When it starts with the set's name and ` -- ` (the round-1 header `# ACID -- family: ...`), that part is dropped: the header line is then `family: ...` |
 | `about "TEXT"` | optional, once: an **author's note** (`MacroSet::tagline`), one short sentence of 1 to 38 characters. It is kept in the set and the built-in table but **not displayed** anywhere (the device and the lab show no caption for an instrument: the owner's rule, docs/STATE.md). Longer is an error, not cut |
-| `voice TRACK` | required, first statement. `kick snare clap chh ohh perc bass lead` (also `snar`, `closedhat`, `openhat`) |
+| `voice TRACK [KIND]` | required, first statement. `kick snare clap chh ohh perc bass lead` (also `snar`, `closedhat`, `openhat`). KIND names another **voice kind** the track hosts instead of its own voice: `sampler` (only on `perc` today: `voice perc sampler`). See "The voice line" below |
 | `name NAME` | optional, one word, up to 12 characters, shown in capitals |
 | `base p=v p=v ...` | optional, repeatable; no spaces around `=` |
 | `patch NAME p=v p=v@SW ...` | a named patch, up to 4; NAME up to 8 characters (letters, digits, `-`, `_`); repeat the line to continue it (also after other patches). `@SW` (only on enum parameters): this value's switch point, above 0 and at most 1, 2 decimals |
@@ -210,6 +210,35 @@ The ctest `check_builtin` (`macro_builtin --check`) fails while the checked-in t
 
 **The library.** `macro::findInstrument(id)`, `instrumentCount(track)`, `instrumentAt(track, i)`: the built-ins, with the host's overlay laid over them (the lab, above; the device has none).
 
+### The voice line
+
+What renders a track is a property of its instrument (stage F1; voice.h "VOICE KINDS"). Every track has its own voice; PERC also hosts a **sampler** (`pg/sampler/sampler.h`), and a set whose voice line says `voice perc sampler` plays through it. The parameter names the file may use, their ranges and defaults are the kind's ("Every parameter a file can name": `voice perc sampler`), never the track's own voice's (`modl` in a sampler set is an error). The id is still `perc:NAME` (`macro::setId`), so a sampler set and a percussion set on PERC cannot share a name. The engine switches at the quantum edge where the instrument changes kind: the old voice's notes are released, it fades out over its choke (~2 ms) while the new one starts. A kind the track does not host is as an unknown id (the native voice plays the stored parameters). Another track could host a sampler later (`Engine::setAltVoice`); only PERC is wired.
+
+**The sampler's parameters** (`lib/pg/src/pg/sampler/sampler_params.h`; all 0..127 or smaller, as every voice). The voice plays one **chop** at a time from the track's sample slot (TrackSettings::sampleSlot), from mapped flash on the device. LATCHED at the note-on (they would click if they moved under a sounding chop): `slcs`, `slce`, `strt`, `rvrs`, `atk`, `loop`, the slot. CONTINUOUS (they follow a macro while the chop sounds, also on the fractional path): the rest; `rtrg` takes its new rate at the next repeat.
+
+| name | what it does |
+|---|---|
+| `slcs` Slices 1..16 | the sample cut into this many equal slices |
+| `slce` Slice 0..15 | which slice plays (modulo `slcs`); CHOP's SLICE is a 16-step curve over it |
+| `strt` Start | where in the slice the chop starts (0 = its beginning, 127 = near its end) |
+| `len` Length | how much of the rest of the slice plays: 0 = 10 ms, 127 = all of it (a square law between); moving it moves the region's end |
+| `ptch` Pitch 16..112 | semitones around 64 (-48..+48), added to the step's note (60 = as recorded) |
+| `fine` Fine | ±1 semitone, 64 = 0 |
+| `sped` Speed | tape speed: 96 = x1, 127 = ~x2, 64 = stopped (the chop fades out below a quarter speed), 32 = x1 backwards, 0 = x2 backwards. A note starting backwards starts at the region's end |
+| `rvrs` Reverse | the chop plays from its end to its start |
+| `atk` Attack | 1 ms .. 400 ms fade in |
+| `rel` Release | after the gate: a time constant of 5 ms .. 2 s |
+| `cut` Cutoff, `res` Resonance, `filt` Filter | a state-variable filter, 60 Hz .. 10.5 kHz, LP / BP / HP; `cut` 127 with LP is no filter |
+| `bits` Bits | bit crush: 0 = clean .. 127 = 2 bits |
+| `down` Downsample | sample-and-hold rate: 0 = off, else ~22 kHz down to ~700 Hz |
+| `drv` Drive | soft saturation, level compensated |
+| `rtrg` Retrigger | OFF 1/2 1/4 1/8 1/8T 1/16 1/16T 1/32 of the tempo: the chop restarts at this rate while it sounds, gated or releasing (a chop shorter than the period waits silent for the next restart), so the repeats die away with the release |
+| `rpit` Repeat pitch | each restart is higher (above 64) or lower, up to ±12 semitones per repeat |
+| `rfad` Repeat fade | each restart quieter: 0 = all equal, 127 = -6 dB per repeat |
+| `loop` Loop | the region loops while the gate is held |
+
+The processing order: read (linear interpolation) -> envelope x velocity -> `down` -> `bits` -> `drv` -> filter. A note on a sampler track whose step carries its own macro values is given the instrument evaluated at those values before its note-on, so what it latches (CHOP's slice) is its own (engine.cpp `primeNote`). The sets: `macros/perc/chop.pgm`, `tape.pgm`, `stutter.pgm`.
+
 ## The sets in macros/
 
 [`macros/INDEX.md`](../macros/INDEX.md) lists every set by voice with its family, its idea and what to try first, and groups the sets by family ("What round 1 is testing"), so marks can be read back as evidence about a kind of macro. Every file starts with a comment header: `# NAME -- family: FAMILY.`, then the idea being tested and what the player should feel if it works, and has an `about "..."` line after its name, an author's note that is not displayed (`itest_macro_files` checks the first line, which is also the set's header line, that every set has an `about` line of at most 38 characters that the built-in table carries, that set names are unique per track, and that no set loads with a warning).
@@ -224,7 +253,10 @@ build/host/macro_audit macros/lead               # every set in a folder (any de
 build/host/macro_audit --points macros/kick/boom.pgm   # every grid point, not only lines and corners
 build/host/macro_audit --wav build/audit macros/snare/crack.pgm   # also a WAV per point, to listen to
 build/host/macro_audit --hard macros             # hard checks only, one line per set (the ctest)
+build/host/macro_audit --test-sample macros/perc # the sampler sets on a test sample in slot 1 (ctest macro_audit_test_sample)
 ```
+
+A sampler set (`voice perc sampler`) is played as the instrument it is: the engine switches PERC to the sampler and derives the parameters from the set at the grid point's positions (rounded to the bytes the device stores). Without `--test-sample` slot 1 is empty and plays its built-in sound (OHYEAH); with it, a 2.5 s chord with noise hits and a falling sweep (`macro_audit.cpp makeTestSample`). A user's sample can have silent stretches, so a slice can be silent on another sample even where the audit passes.
 
 **The grid.** Each macro alone at 0, 1/8 .. 1 with the others at their start positions (`--hard`: 0, 1/4 .. 1), every corner of the space, and a 5 x 5 grid of the first two macros (the XY pad), the others at their start.
 
@@ -321,6 +353,27 @@ voice perc
   harm  Harmonic      0..127  [64]
   nois  Noise         0..127  [64]
   drv   Drive         0..127  [32]
+voice perc sampler
+  slcs  Slices        1..16  [1]
+  slce  Slice         0..15  [0]
+  strt  Start         0..127 (screen 0%..100%)  [0]
+  len   Length        0..127 (screen 0%..100%)  [127]
+  ptch  Pitch         16..112 (screen -48..+48)  [64]
+  fine  Fine          0..127 (screen -64..+63)  [64]
+  sped  Speed         0..127  [96]
+  rvrs  Reverse       0..1 (screen OFF..ON)  [0]
+  atk   Attack        0..127  [0]
+  rel   Release       0..127  [24]
+  cut   Cutoff        0..127  [127]
+  res   Resonance     0..127  [0]
+  filt  Filter        lp bp hp  [lp]
+  bits  Bits          0..127  [0]
+  down  Downsample    0..127  [0]
+  drv   Drive         0..127  [0]
+  rtrg  Retrigger     off 1/2 1/4 1/8 1/8t 1/16 1/16t 1/32  [off]
+  rpit  Repeat pitch  0..127 (screen -64..+63)  [64]
+  rfad  Repeat fade   0..127  [0]
+  loop  Loop          0..1 (screen OFF..ON)  [0]
 voice bass
   cut   Cutoff        0..127  [46]
   res   Resonance     0..127  [78]

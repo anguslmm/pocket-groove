@@ -144,7 +144,8 @@ void scan(const MacroSet& s, Features* f) {
       f->smooth |= t.interp() == Interp::Smooth;
       f->mixer |= t.param >= kSoundParams;
       f->longCurve |= t.n > 8;   // more points than model v1 allowed
-      const ParamInfo* in = g_pt.info[s.track][t.param];
+      const ParamInfo* kindScratch[kParamsPerTrack];
+      const ParamInfo* in = paramsFor(s, g_pt, kindScratch)[t.param];   // the set's voice kind's list
       f->enumStep |= in->fmt == ParamFormat::Enum && t.interp() == Interp::Step && t.n > 2;
       int dir = 0;
       for (int k = 1; k < t.n; ++k) {
@@ -201,7 +202,11 @@ int main() {
     it::check(n > 0 && parse(buf, n, g_pt, &s2, &e) && sameSet(s, s2), "%s: format/parse round trip", path.c_str());
     // the grid: every macro at 0, 1/8 ... 1, the others at their start, then all at once
     uint8_t under[kParamsPerTrack], out[kParamsPerTrack];
+    const ParamInfo* kindScratch[kParamsPerTrack];
+    const TrackParams kp = paramsFor(s, g_pt, kindScratch);   // the set's voice kind's list (VOICE KINDS)
     for (int p = 0; p < kParamsPerTrack; ++p) under[p] = g_inst.project().tracks[s.track].params[p];
+    if (s.voice != kVoiceNative)
+      for (int p = 0; p < kSoundParams; ++p) under[p] = kp[p] ? kp[p]->def : 0;
     float pos[kMaxMacros];
     bool inRange = true, ownsRight = true;
     for (int m = 0; m < s.numMacros; ++m)
@@ -211,7 +216,7 @@ int main() {
         const uint32_t owned = evaluate(s, g_pt, pos, under, out);
         ownsRight &= owned == s.ownedMask();
         for (int p = 0; p < kParamsPerTrack; ++p) {
-          const ParamInfo* in = g_pt.info[s.track][p];
+          const ParamInfo* in = kp[p];
           if (in) inRange &= out[p] >= in->min && out[p] <= in->max;
           if (!((owned >> p) & 1)) ownsRight &= out[p] == under[p];
         }

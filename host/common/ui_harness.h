@@ -212,6 +212,7 @@ struct Rig {
     matrix.reset();
     ui.init(eng, *proj, &fs);
     ui.setDevMode(devMode);
+    ui.setSampler(&inst.sampler());
     resetClock();
     g0Held = false;
     g0Swallow = 0;
@@ -225,6 +226,7 @@ struct Rig {
     matrix.reset();
     ui.init(eng, *proj, &fs);
     ui.setDevMode(devMode);
+    ui.setSampler(&inst.sampler());
     resetClock();
     g0Held = false;
     g0Swallow = 0;
