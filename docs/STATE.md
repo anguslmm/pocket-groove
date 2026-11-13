@@ -604,6 +604,9 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    will request macro changes continually and there will be no single final assessment; a
    retuned .pgm is regenerated into the table and committed like any other change.
 4. LATER: a design sprint on the flow between desktop and device, giving each its own UX.
+   For that sprint (owner, 2026-11-13): choosing the audio input for mic recording in the desktop
+   UI. Today the automatic choice did not pick the right input on the owner's Mac and they pass
+   --mic-device by hand; recording itself works on the Mac and on the device. Owner: fine for now.
 ON HOLD, do not build: MIDI controller input. The owner is not convinced they want it (it
 distracts from the intended flow) and it needs more design than a quick proposal.
 No further desktop-specific features for now beyond the strip, Listen and Stems (and the macro lab,
