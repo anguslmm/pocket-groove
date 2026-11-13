@@ -14,7 +14,7 @@ inline pg::Step on(int note, int vel, int gate = 2, uint8_t extra = 0) {
   s.note = uint8_t(note);
   s.vel = uint8_t(vel);
   s.gate = uint8_t(gate);
-  s.flags = uint8_t(pg::kStepOn | extra);
+  s.setFlags(uint8_t(pg::kStepOn | extra));
   return s;
 }
 
@@ -38,7 +38,7 @@ inline void programGroove(pg::Project& p, int bpm = 124) {
     if ((s & 3) == 2) continue;                       // the open hat's steps
     const bool acc = (s & 3) == 1;                    // the "and" before the off-beat drives it
     Step st = on(60, acc ? 100 : 72, 2, acc ? kStepAccent : 0);
-    if ((s & 3) == 3) { st.vel = 58; st.prob = 85; }  // ghosts, a little human variation
+    if ((s & 3) == 3) { st.vel = 58; st.setProb(85); }  // ghosts, a little human variation
     pat.tracks[kTrackHatClosed].steps[s] = st;
   }
   for (int s = 2; s < 16; s += 4) pat.tracks[kTrackHatOpen].steps[s] = on(60, 92);
@@ -57,7 +57,7 @@ inline void programGroove(pg::Project& p, int bpm = 124) {
   ld.length = 32;
   auto stab = [&](int s, int root, int vel, int gate) {
     Step st = on(root, vel, gate);
-    st.chord = kChordMin7;
+    st.setChord(kChordMin7);
     ld.steps[s] = st;
   };
   stab(3, 57, 96, 2);  stab(6, 57, 84, 2);  stab(10, 57, 100, 3);
@@ -87,12 +87,12 @@ inline void programBusy(pg::Project& p, int bpm = 128) {
       const bool hit = t == kTrackKick ? (s % 4 == 0) : (t == kTrackSnare || t == kTrackClap) ? (s % 4 == 2) : true;
       if (!hit) continue;
       Step st = on(t == kTrackBass ? 36 + (s * 5) % 12 : (t == kTrackLead ? 60 + (s * 7) % 12 : 60), 80 + (s * 13) % 47, 3);
-      if (s % 3 == 0) st.flags |= kStepAccent;
-      if (t >= kTrackBass && s % 5 == 4) st.flags |= kStepSlide;
-      if (s == 7 || s == 15) st.flags |= uint8_t(2 << kStepRatchetShift);
-      if (t == kTrackLead) { st.chord = (s & 1) ? kChordMin9 : kChordMin7; st.gate = 6; }   // 4-note chords
-      if (s % 4 == 1) { st.lockParam = 1; st.lockValue = uint8_t(20 + s * 6); }   // sound param 0 p-lock
-      if (s % 6 == 5) st.prob = 60;                                                 // seed-dependent hits
+      if (s % 3 == 0) st.addFlags(kStepAccent);
+      if (t >= kTrackBass && s % 5 == 4) st.addFlags(kStepSlide);
+      if (s == 7 || s == 15) st.addFlags(uint8_t(2 << kStepRatchetShift));
+      if (t == kTrackLead) { st.setChord((s & 1) ? kChordMin9 : kChordMin7); st.gate = 6; }   // 4-note chords
+      if (s % 4 == 1) { st.setLock(1, uint8_t(20 + s * 6)); }   // sound param 0 p-lock
+      if (s % 6 == 5) st.setProb(60);                                                 // seed-dependent hits
       tp.steps[s] = st;
     }
   }

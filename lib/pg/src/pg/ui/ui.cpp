@@ -140,7 +140,7 @@ void Ui::updateFocusLock() {
   uint32_t key = 2166136261u;
   for (uint32_t v : {uint32_t(focus_.global), uint32_t(focus_.track), uint32_t(focus_.index), uint32_t(pat_),
                      st_.revision, uint32_t(writeBusy_)}) key = (key ^ v) * 16777619u;
-  for (const PendStep& p : pendSteps_) key = (key ^ (p.used ? uint32_t(p.s.lockParam) << 8 | p.idx : 0u)) * 16777619u;
+  for (const PendStep& p : pendSteps_) key = (key ^ (p.used ? p.s.extWord() << 8 | p.idx : 0u)) * 16777619u;
   if (key == lockKey_) return;
   lockKey_ = key;
   bool locked = false;
@@ -148,10 +148,49 @@ void Ui::updateFocusLock() {
     const int t = focus_.track & 7, len = trackLen(t);
     for (int i = 0; i < len && !locked; ++i) {
       const Step s = stepAt(t, i);
-      locked = (s.flags & kStepOn) && s.lockParam == focus_.index + 1;
+      locked = s.on() && stepOwnValue(t, s, focus_.index) >= 0;
     }
   }
   if (locked != focusLocked_) { focusLocked_ = locked; ++serial_; }
+}
+
+int Ui::stepOwnValue(int t, const Step& s, int index) const {
+  if (instrumentIdOf(t)) {
+    const int m = index - kMacroIndex0;
+    return (isMacroIndex(index) && s.hasMacro(m)) ? s.macroValue(m) : -1;
+  }
+  return (s.lockParam() && s.lockParam() == index + 1) ? s.lockValue() : -1;
+}
+
+// DECISION (del on a held step): a CLASSIC step loses its lock; a note with own
+// macro values loses the focused macro's value if it has one, else all of them.
+bool Ui::clearStepOwn(int t, Step& s) const {
+  if (!s.hasExt()) return false;
+  const int f = focusIndexFor(t);
+  if (instrumentIdOf(t) && isMacroIndex(f) && s.hasMacro(f - kMacroIndex0)) s.clearMacro(f - kMacroIndex0);
+  else s.clearExt();
+  return true;
+}
+
+uint8_t Ui::motionMask(int t) const {
+  if (!instrumentIdOf(t)) return 0;
+  const int len = trackLen(t) < patternLen() ? trackLen(t) : patternLen();
+  uint32_t w = 0;
+  for (int i = 0; i < len; ++i) {
+    const Step s = stepAt(t, i);
+    if (s.on()) w |= s.extWord();
+  }
+  uint8_t mask = 0;
+  for (int m = 0; m < kTrackMacros; ++m)
+    if ((w >> (6 * m)) & 63u) mask = uint8_t(mask | (1u << m));
+  return mask;
+}
+
+int Ui::shownMacro(int t, int m) const {
+  t &= 7;
+  m &= 3;
+  if (playing_ && ((st_.motion[t] >> m) & 1u) && !((st_.live[t] >> m) & 1u)) return st_.macroPos[t][m];
+  return macroValue(t, m);
 }
 
 bool Ui::patternUsed(int pat) const {
@@ -159,7 +198,7 @@ bool Ui::patternUsed(int pat) const {
   for (int t = 0; t < kNumTracks; ++t) {
     const int len = P.tracks[t].length > kMaxSteps ? kMaxSteps : P.tracks[t].length;
     for (int s = 0; s < len; ++s)
-      if (P.tracks[t].steps[s].flags & kStepOn) return true;
+      if (P.tracks[t].steps[s].flags() & kStepOn) return true;
   }
   return false;
 }
@@ -249,6 +288,9 @@ void Ui::setMacro(int t, int m, int v) {
   pendMac_[t][m] = uint8_t(v);
   pendMacFrame_[t][m] = frame_;
   pendMacMask_[t] |= uint8_t(1u << m);
+  // Record on and playing: the move is recorded into the notes it passes (the engine
+  // writes them; one undo unit with the pass's notes).
+  if (recOn_ && playing_ && instrumentOf(t)) undoForRecording("RECORDED MOTION");
   send(cmd(CmdType::SetMacro, t, m, v));
   ++serial_;
 }
@@ -315,6 +357,11 @@ void Ui::macroKeyDown(int k, int n, bool shift) {
   }
   const int m = n / 2, dir = (n & 1) ? 1 : -1;
   if (m >= s->numMacros) return;
+  if (heldStep_ < 0 && isHeld(kKDel)) {   // DEL held + a macro key: clear that macro's motion
+    rec_[k] = KeyRec{kActNone, 0, 0, 0};
+    clearMotion(m);
+    return;
+  }
   trackFocus_[sel_] = uint8_t(kMacroIndex0 + m);
   focus_ = ValueRef{false, sel_, uint8_t(kMacroIndex0 + m)};
   rec_[k] = KeyRec{kActMacro, uint8_t(m), 0, 0};
@@ -324,8 +371,7 @@ void Ui::macroKeyDown(int k, int n, bool shift) {
     const int def = macro::startByte(s->macros[m]);
     if (heldStep_ >= 0) {
       Step st = stepAt(heldTrack_, heldStep_);
-      st.lockParam = uint8_t(kLockMacro0 + m);
-      st.lockValue = uint8_t(def);
+      st.setMacroValue(m, def);
       heldEdited(st);
       setStep(heldTrack_, heldStep_, st);
     } else {
@@ -542,8 +588,8 @@ void Ui::noteOn(int t, int note, int vel, uint8_t flags, uint8_t chord) {
   c.step = kDefaultStep;
   c.step.note = uint8_t(c.b);
   c.step.vel = uint8_t(c.c);
-  c.step.flags = flags;
-  c.step.chord = chord;
+  c.step.setFlags(flags);
+  c.step.setChord(chord);
   send(c);
 }
 
@@ -559,10 +605,10 @@ uint8_t Ui::chordForDegree(int degree) const { return chordFor(chordMode_, globa
 
 Step Ui::newStep(int t) const {
   Step s = kDefaultStep;
-  s.flags = kStepOn;
+  s.setFlags(kStepOn);
   if (isSynth(t)) {
     s.note = uint8_t(noteFor(t, 0));
-    if (t == kTrackLead) s.chord = chordForDegree(0);
+    if (t == kTrackLead) s.setChord(chordForDegree(0));
   }
   return s;
 }
@@ -910,7 +956,7 @@ void Ui::stepDown(int k, int idx16, bool shift, bool ctrl) {
   heldDownMs_ = now_;
   heldOther_ = heldEdited_ = false;
   const Step s = stepAt(sel_, abs);
-  heldWasOn_ = (s.flags & kStepOn) != 0;
+  heldWasOn_ = (s.flags() & kStepOn) != 0;
   if (!stepWriteActive() && !heldWasOn_) setStep(sel_, abs, newStep(sel_));   // on at key-down
   rec_[k].act = kActStep;
 }
@@ -922,7 +968,7 @@ void Ui::stepUp(int k) {
     if (tap) stepCursor_ = uint8_t(heldStep_);
   } else if (heldWasOn_ && tap && !heldEdited_) {
     Step s = stepAt(heldTrack_, heldStep_);
-    s.flags &= uint8_t(~kStepOn);
+    s.clearFlags(kStepOn);
     setStep(heldTrack_, heldStep_, s);
   }
   heldStep_ = -1;
@@ -932,7 +978,16 @@ void Ui::stepUp(int k) {
 
 void Ui::padDown(int k, int t, bool shift) {
   if (heldStep_ >= 0) {
-    if (view_ == View::Groove && fieldAvailable(heldTrack_, t)) stepField_ = uint8_t(t);
+    if (view_ == View::Groove && fieldAvailable(heldTrack_, t)) {
+      // The MOTION field again on an instrument track: the next macro (its value is the one edited).
+      const macro::MacroSet* set = instrumentOf(heldTrack_);
+      if (t == kFLock && stepField_ == kFLock && set && set->numMacros > 0) {
+        const int f = focusIndexFor(heldTrack_) - kMacroIndex0;
+        trackFocus_[heldTrack_] = uint8_t(kMacroIndex0 + (f + 1) % set->numMacros);
+        ++serial_;
+      }
+      stepField_ = uint8_t(t);
+    }
     return;   // other views: pads are inert while a step is held
   }
   selectTrack(t);
@@ -994,13 +1049,13 @@ void Ui::stepEditNote(int k, int n) {
   Step s = stepAt(t, heldStep_);
   if (isSynth(t)) {
     s.note = uint8_t(noteFor(t, n));
-    if (t == kTrackLead) s.chord = chordForDegree(n);
+    if (t == kTrackLead) s.setChord(chordForDegree(n));
   } else {
     s.vel = kVelRow[n];
   }
   heldEdited(s);
   setStep(t, heldStep_, s);
-  noteOn(t, s.note, s.vel, 0, s.chord);           // audition
+  noteOn(t, s.note, s.vel, 0, s.chord());           // audition
   rec_[k] = KeyRec{kActNote, uint8_t(t), s.note, 0};
 }
 
@@ -1015,24 +1070,24 @@ void Ui::stepWriteNote(int k, int n, bool shift) {
       if (ok == k || !isHeld(ok) || rec_[ok].act != kActNote || !rec_[ok].c) continue;
       const int prev = rec_[ok].c - 1;
       Step p = stepAt(t, prev);
-      if (p.flags & kStepOn) {
-        p.flags |= kStepSlide;
+      if (p.flags() & kStepOn) {
+        p.addFlags(kStepSlide);
         setStep(t, prev, p);
       }
     }
   }
   Step s = kDefaultStep;
-  s.flags = uint8_t(kStepOn | (shift ? kStepAccent : 0));
+  s.setFlags(uint8_t(kStepOn | (shift ? kStepAccent : 0)));
   if (isSynth(t)) {
     s.note = uint8_t(noteFor(t, n));
     s.vel = 100;
     s.gate = 2;
-    if (t == kTrackLead) s.chord = chordForDegree(n);
+    if (t == kTrackLead) s.setChord(chordForDegree(n));
   } else {
     s.vel = kVelRow[n];
   }
   setStep(t, cur, s);
-  noteOn(t, s.note, s.vel, s.flags & kStepAccent, s.chord);
+  noteOn(t, s.note, s.vel, s.flags() & kStepAccent, s.chord());
   rec_[k] = KeyRec{kActNote, uint8_t(t), s.note, uint8_t(cur + 1)};
   stepCursor_ = uint8_t((cur + 1) % len);
   shownPage_ = uint8_t(stepCursor_ / 16);
@@ -1120,7 +1175,7 @@ void Ui::chordKey(bool shift) {
   if (heldStep_ >= 0) {
     if (view_ != View::Groove || heldTrack_ != kTrackLead) return;
     Step s = stepAt(heldTrack_, heldStep_);
-    s.chord = uint8_t((s.chord + (shift ? kChordNum - 1 : 1)) % kChordNum);
+    s.setChord(uint8_t((s.chord() + (shift ? kChordNum - 1 : 1)) % kChordNum));
     heldEdited(s);
     setStep(heldTrack_, heldStep_, s);
     return;
@@ -1145,11 +1200,9 @@ void Ui::recToggle() {
 }
 
 void Ui::delDown(int k) {
-  if (heldStep_ >= 0) {                       // remove the held step's p-lock
+  if (heldStep_ >= 0) {                       // remove the held step's p-lock / own macro value(s)
     Step s = stepAt(heldTrack_, heldStep_);
-    if (!s.lockParam) return;
-    s.lockParam = 0;
-    s.lockValue = 0;
+    if (!clearStepOwn(heldTrack_, s)) return;
     heldEdited(s);
     setStep(heldTrack_, heldStep_, s);
     return;
@@ -1219,11 +1272,11 @@ void Ui::optCombo(int k, bool shift) {
 void Ui::sendRoll(int t, bool on) {
   Command c = cmd(CmdType::Roll, t, 0, on ? kRollCode[rollRate_] : 0);
   c.step = kDefaultStep;
-  c.step.flags = kStepOn;
+  c.step.setFlags(kStepOn);
   c.step.vel = 100;
   if (isSynth(t)) {
     c.step.note = uint8_t(noteFor(t, 0));
-    if (t == kTrackLead) c.step.chord = chordForDegree(0);
+    if (t == kTrackLead) c.step.setChord(chordForDegree(0));
   }
   send(c);
 }
@@ -1287,8 +1340,9 @@ bool Ui::targetIsSmall(Target t) const {
     case Target::Field: {
       if (stepField_ == kFRatch || stepField_ == kFChord || stepField_ == kFAcc || stepField_ == kFSlide) return true;
       if (stepField_ == kFLock) {
+        if (instrumentIdOf(heldTrack_)) return false;   // a macro value
         const Step s = stepAt(heldTrack_, heldStep_);
-        const int p = s.lockParam ? s.lockParam - 1 : trackFocus_[heldTrack_];
+        const int p = s.lockParam() ? s.lockParam() - 1 : trackFocus_[heldTrack_];
         return isSmallRange(trackInfo(heldTrack_, p));
       }
       return false;
@@ -1363,10 +1417,10 @@ void Ui::resetValue() {
       switch (stepField_) {
         case kFVel: s.vel = kDefaultStep.vel; break;
         case kFGate: if (isSynth(heldTrack_)) s.gate = kDefaultStep.gate; else s.note = 60; break;
-        case kFProb: s.prob = 100; break;
-        case kFRatch: s.flags &= uint8_t(~kStepRatchetMask); break;
-        case kFChord: s.chord = 0; break;
-        case kFLock: s.lockParam = 0; s.lockValue = 0; break;
+        case kFProb: s.setProb(100); break;
+        case kFRatch: s.clearFlags(kStepRatchetMask); break;
+        case kFChord: s.setChord(0); break;
+        case kFLock: if (!clearStepOwn(heldTrack_, s)) return; break;
         default: return;
       }
       heldEdited(s);
@@ -1376,9 +1430,9 @@ void Ui::resetValue() {
     }
     case Target::Lock: {
       Step s = stepAt(heldTrack_, heldStep_);
-      if (!s.lockParam) return;
-      s.lockParam = 0;
-      s.lockValue = 0;
+      if (focus_.global || stepOwnValue(heldTrack_, s, focus_.index) < 0) return;
+      if (instrumentIdOf(heldTrack_)) s.clearMacro(focus_.index - kMacroIndex0);
+      else s.clearExt();
       heldEdited(s);
       setStep(heldTrack_, heldStep_, s);
       toast("DEFAULT", 0);
@@ -1400,25 +1454,30 @@ void Ui::editField(int dir, int mag, bool shift) {
       if (isSynth(t)) s.gate = uint8_t(clampi(s.gate + dir * big, 1, 64));
       else s.note = uint8_t(clampi(s.note + dir * (shift ? 12 : mag), 36, 84));   // PTCH 60 +- 24
       break;
-    case kFProb: s.prob = uint8_t(clampi((s.prob + 2) / 5 * 5 + dir * 5 * (shift ? 4 : mag), 0, 100)); break;
+    case kFProb: s.setProb(uint8_t(clampi((s.prob() + 2) / 5 * 5 + dir * 5 * (shift ? 4 : mag), 0, 100))); break;
     case kFRatch: {
       const int r = clampi(stepRatchet(s) + dir, 1, 4);
-      s.flags = uint8_t((s.flags & ~kStepRatchetMask) | ((r - 1) << kStepRatchetShift));
+      s.setFlags(uint8_t((s.flags() & ~kStepRatchetMask) | ((r - 1) << kStepRatchetShift)));
       break;
     }
-    case kFAcc: s.flags ^= kStepAccent; break;
-    case kFSlide: s.flags ^= kStepSlide; break;
-    case kFChord: s.chord = uint8_t(clampi(s.chord + dir, 0, kChordNum - 1)); break;
+    case kFAcc: s.toggleFlags(kStepAccent); break;
+    case kFSlide: s.toggleFlags(kStepSlide); break;
+    case kFChord: s.setChord(uint8_t(clampi(s.chord() + dir, 0, kChordNum - 1))); break;
     case kFLock: {
-      const int p = s.lockParam ? s.lockParam - 1 : focusIndexFor(t);
+      if (instrumentIdOf(t)) {   // the focused macro's own value on this note
+        const int f = focusIndexFor(t);
+        if (!isMacroIndex(f) || !instrumentOf(t)) return;
+        stepMacroEdit(t, s, f - kMacroIndex0, dir, mag, shift);
+        break;
+      }
+      const int p = s.lockParam() ? s.lockParam() - 1 : focusIndexFor(t);
       const ParamInfo* info = trackInfo(t, p);
-      if (!info && !s.lockParam) return;
+      if (!info && !s.lockParam()) return;
       const int lo = info ? info->min : 0, hi = info ? info->max : (isMacroIndex(p) ? 255 : 127);
       int d = shift ? (isSmallRange(info) ? 1 : 8) : mag;
       if (isMacroIndex(p)) d = shift ? kMacroCoarse : kMacroTap * mag;
-      const int base = s.lockParam ? s.lockValue : paramValue(t, p);
-      s.lockParam = uint8_t(p + 1);
-      s.lockValue = uint8_t(clampi(base + dir * d, lo, hi));
+      const int base = s.lockParam() ? s.lockValue() : paramValue(t, p);
+      s.setLock(uint8_t(p + 1), uint8_t(clampi(base + dir * d, lo, hi)));
       break;
     }
     default: return;
@@ -1426,6 +1485,14 @@ void Ui::editField(int dir, int mag, bool shift) {
   if (std::memcmp(&s, &before, sizeof(Step)) == 0) return;
   heldEdited(s);
   setStep(t, heldStep_, s);
+}
+
+// A held note's own value of macro m moves by whole levels of its 63 (a tap
+// one level, about 4 of 255; repeats 2 and 4; SHIFT 4). Without a value yet it
+// starts from the macro's position.
+void Ui::stepMacroEdit(int t, Step& s, int m, int dir, int mag, bool shift) {
+  const int from = s.hasMacro(m) ? s.macroCode(m) : macroPosToCode(macroValue(t, m));
+  s.setMacroCode(m, clampi(from + dir * (shift ? 4 : mag), 1, kMacroCodeMax));
 }
 
 void Ui::editLock(int dir, int mag, bool shift) {
@@ -1437,26 +1504,36 @@ void Ui::editLock(int dir, int mag, bool shift) {
   const ParamInfo* info = trackInfo(t, p);
   if (!info) return;
   Step s = stepAt(t, heldStep_);
+  if (instrumentIdOf(t)) {
+    // An instrument track: a note carries its own macro values, nothing else.
+    if (!isMacroIndex(p)) {
+      toast("INSTRUMENT: HOLD STEP + A MACRO", 2);
+      return;
+    }
+    stepMacroEdit(t, s, p - kMacroIndex0, dir, mag, shift);
+    heldEdited(s);
+    setStep(t, heldStep_, s);
+    return;
+  }
   int d = shift ? (isSmallRange(info) ? 1 : 8) : mag;
   if (isMacroIndex(p)) d = shift ? kMacroCoarse : kMacroTap * mag;
   int base;
-  if (s.lockParam == p + 1) {
-    base = s.lockValue;
+  if (s.lockParam() == p + 1) {
+    base = s.lockValue();
   } else {
     base = paramValue(t, p);
-    if (s.lockParam) {
-      const ParamInfo* old = trackInfo(t, s.lockParam - 1);
+    if (s.lockParam()) {
+      const ParamInfo* old = trackInfo(t, s.lockParam() - 1);
       char buf[40];
       char* o = cat(buf, "LOCK ");
       o = cat(o, info->name);
       o = cat(o, " REPLACES ");
       if (old) cat(o, old->name);
-      else catInt(cat(o, "P"), s.lockParam - 1);
+      else catInt(cat(o, "P"), s.lockParam() - 1);
       toast(buf, 0);
     }
   }
-  s.lockParam = uint8_t(p + 1);
-  s.lockValue = uint8_t(clampi(base + dir * d, info->min, info->max));
+  s.setLock(uint8_t(p + 1), uint8_t(clampi(base + dir * d, info->min, info->max)));
   heldEdited(s);
   setStep(t, heldStep_, s);
 }
@@ -1553,7 +1630,7 @@ void Ui::runTimers() {
       while (eraseLast_ != cur && guard++ < kMaxSteps) {
         eraseLast_ = uint8_t((eraseLast_ + 1) % len);
         Step s = stepAt(sel_, eraseLast_);
-        if (s.flags & kStepOn) {
+        if (s.flags() & kStepOn) {
           if (!eraseSnapped_) {                 // the first erase stores the undo snapshot (8.5)
             char lab[20];
             cat(cat(lab, kTrackNames[sel_]), " ERASED");
@@ -1561,7 +1638,7 @@ void Ui::runTimers() {
             eraseSnapped_ = true;
           }
           eraseDid_ = true;
-          s.flags &= uint8_t(~kStepOn);
+          s.clearFlags(kStepOn);
           setStep(sel_, eraseLast_, s);
         }
       }

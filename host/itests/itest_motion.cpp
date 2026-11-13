@@ -10,7 +10,7 @@
 //   settle      after the ramp and the blend the voice is back on bytes, exactly the
 //               stored parameters, and stays there
 //   jump        a ramp of 1 never leaves the byte path
-//   lock        a macro lock in scope wins over a moving macro, from its note on
+//   lock        a note's own value (one note: constant) wins over a move of the base
 //   rebind      a new instrument during a motion goes straight back to bytes
 //   ramp time   a ramp arrives when it says (the "motion" stage's contract)
 #include <cmath>
@@ -186,26 +186,27 @@ void testLockWins() {
   s.b = kTrackBass;
   s.c = 0;
   s.step = kDefaultStep;
-  s.step.flags = kStepOn;
+  s.step.setFlags(kStepOn);
   s.step.note = 45;
   s.step.gate = 60;
-  s.step.lockParam = uint8_t(kLockMacro0 + 0);
-  s.step.lockValue = 230;
+  s.step.setMacroValue(0, 230);
   g_inst.engine().post(s);
   Command play{};
   play.type = CmdType::Play;
   g_inst.engine().post(play);
   quanta(4);
-  // A long movement of OPEN the other way: the lock holds the cutoff where it says.
+  // A long movement of OPEN the other way: the note's value holds (motion owns OPEN:
+  // one note with its own value = constant); the move only changes the base.
   g_inst.engine().post(setMacroCommand(kTrackBass, 0, 0, 3000));
   quanta(400);
   uint8_t lk[kParamsPerTrack];
   const uint8_t lp[4] = {230, 0, 0, 255};
   derived(lp, lk);
-  it::check(g_spy.lastFine, "lock: the track is moving (fractional)");
-  it::check(std::fabs(g_spy.fine[bass::kCutoff] - float(lk[bass::kCutoff])) < 0.6f,
-            "lock: a macro lock in scope wins over the moving macro (%.2f vs %d)", double(g_spy.fine[bass::kCutoff]),
-            lk[bass::kCutoff]);
+  it::check(g_inst.project().tracks[kTrackBass].macro[0] == 0, "lock: the base moved (%d)", g_inst.project().tracks[kTrackBass].macro[0]);
+  it::check(engine_detail::macroPosition(kTrackBass, 0) == 230.0f, "lock: OPEN stays at the note's value (%.2f)",
+            double(engine_detail::macroPosition(kTrackBass, 0)));
+  it::check(!g_spy.lastFine && g_spy.bytes[bass::kCutoff] == lk[bass::kCutoff],
+            "lock: the 7-bit path plays the note's value (%d vs %d)", g_spy.bytes[bass::kCutoff], lk[bass::kCutoff]);
 }
 
 void testRebind() {

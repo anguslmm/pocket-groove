@@ -13,12 +13,12 @@
 //             given the same effective values (the values reach the voices).
 //   unknown   an id the library does not know plays the stored parameters,
 //             keeps the id, never crashes.
-//   locks     macro lock scope at step time (until the next firing step, also
-//             across the pattern wrap), sound locks ignored on an instrument
-//             track, mixer locks combined; macro locks ignored on CLASSIC.
+//   locks     CLASSIC: a sound lock plays at its step, an old macro lock is
+//             dropped (an instrument track's notes carry macro values instead:
+//             itest_motion_notes).
 //   overlay   a host overlay replacing a built-in takes effect on
 //             RefreshInstruments, counted also when discarded by suspend().
-//   copy      CopyTrack drops macro locks on another track.
+//   copy      CopyTrack drops a note's own macro values on another track.
 //   files     a project with instruments round-trips through pg::io and the
 //             engine binds it again after suspend / load / resume.
 //   stems     the offline bounce (host/common/bounce.h) plays the instrument:
@@ -232,7 +232,7 @@ void bassPhrase(Project& p) {
   for (int i = 0; i < 4; ++i) {
     Step& s = tp.steps[i * 4];
     s = kDefaultStep;
-    s.flags = kStepOn | (i == 1 ? kStepAccent : 0);
+    s.setFlags(kStepOn | (i == 1 ? kStepAccent : 0));
     s.note = notes[i];
     s.gate = 6;
   }
@@ -354,105 +354,22 @@ struct StepWatch {
   }
 };
 
+// CLASSIC locks (an instrument track's notes carry macro values instead: itest_motion_notes).
 void testLocks() {
-  setup();
-  Project& p = g_inst.project();
-  const pm::MacroSet* acid = byName(kTrackBass, "ACID");
-  if (!acid) return;
-  TrackPattern& tp = p.patterns[0].tracks[kTrackBass];
-  for (int s : {0, 4, 8, 12}) { tp.steps[s] = kDefaultStep; tp.steps[s].flags = kStepOn; tp.steps[s].note = 36; }
-  tp.steps[4].lockParam = kLockMacro0 + 0;          // OPEN at 255 on step 5
-  tp.steps[4].lockValue = 255;
-  tp.steps[8].lockParam = 1;                        // CUT: ignored on an instrument track
-  tp.steps[8].lockValue = 3;
-  tp.steps[12].lockParam = kLockMacro0 + 1;         // BITE at 200 on step 13: its scope wraps
-  tp.steps[12].lockValue = 200;
-  const uint8_t pos[4] = {60, 0, 0, 0};
-  setInstrument(kTrackBass, acid, pos);
-  quanta(1);
-  uint8_t base[kParamsPerTrack], lk0[kParamsPerTrack], lk1[kParamsPerTrack];
-  derived(*acid, pos, base);
-  uint8_t pl[4];
-  std::memcpy(pl, pos, 4); pl[0] = 255; derived(*acid, pl, lk0);
-  std::memcpy(pl, pos, 4); pl[1] = 200; derived(*acid, pl, lk1);
-  it::check(std::memcmp(base, lk0, kSoundParams) != 0 && std::memcmp(base, lk1, kSoundParams) != 0, "locks change something");
   Command play{};
   play.type = CmdType::Play;
-  g_inst.engine().post(play);
-  StepWatch w;
-  int seen = 0, bad = 0;
-  for (int k = 0; k < 40; ++k) {
-    int step;
-    uint8_t eff[kParamsPerTrack];
-    if (!w.next(&step, eff)) break;
-    ++seen;
-    // scope = from the step that fires with the lock until the next step that fires:
-    // 5..8 OPEN locked, 9..12 the CUT lock (ignored: the base), 13..16 BITE locked, wrap: base
-    const uint8_t* want = base;
-    if (step >= 4 && step < 8) want = lk0;
-    if (step >= 12) want = lk1;
-    if (std::memcmp(eff, want, kSoundParams) != 0) ++bad;
-  }
-  it::check(seen >= 32, "steps seen %d", seen);
-  it::check(bad == 0, "macro lock scope: %d steps with the wrong values", bad);
-  // the wrap explicitly: lock only on step 13, steps 1 and 13 on
-  setup();
-  Project& q = g_inst.project();
-  TrackPattern& t2 = q.patterns[0].tracks[kTrackBass];
-  t2.steps[0] = kDefaultStep; t2.steps[0].flags = kStepOn;
-  t2.steps[12] = kDefaultStep; t2.steps[12].flags = kStepOn;
-  t2.steps[12].lockParam = kLockMacro0 + 1;
-  t2.steps[12].lockValue = 200;
-  setInstrument(kTrackBass, acid, pos);
-  g_inst.engine().post(play);
-  StepWatch w2;
-  int wrapBad = 0, wraps = 0;
-  bool inLock = false;
-  for (int k = 0; k < 48; ++k) {
-    int step;
-    uint8_t eff[kParamsPerTrack];
-    if (!w2.next(&step, eff)) break;
-    if (step == 12) inLock = true;
-    if (step == 0 && inLock) { inLock = false; ++wraps; }
-    const uint8_t* want = inLock ? lk1 : base;
-    if (std::memcmp(eff, want, kSoundParams) != 0) ++wrapBad;
-  }
-  it::check(wraps >= 2 && wrapBad == 0, "lock across the wrap: %d wraps, %d wrong", wraps, wrapBad);
-
-  // mixer lock on an instrument track: the player's value at the step, combined
-  setup();
-  Project& r = g_inst.project();
-  TrackPattern& t3 = r.patterns[0].tracks[kTrackBass];
-  t3.steps[0] = kDefaultStep; t3.steps[0].flags = kStepOn;
-  t3.steps[0].lockParam = kMixLevel + 1;
-  t3.steps[0].lockValue = 50;
-  const uint8_t loud[4] = {153, 0, 0, 0};   // ACID OPEN 0.6: lvl 96
-  setInstrument(kTrackBass, acid, loud);
-  g_inst.engine().post(play);
-  StepWatch w3;
-  int step;
-  uint8_t eff[kParamsPerTrack];
-  w3.next(&step, eff);
-  uint8_t d[kParamsPerTrack];
-  derived(*acid, loud, d);
-  uint8_t player[kParamsPerTrack];
-  std::memcpy(player, r.tracks[kTrackBass].params, kParamsPerTrack);
-  player[kMixLevel] = 50;
-  pm::combineMixer(player, d, g_def[kTrackBass], player);
-  it::check(eff[kMixLevel] == player[kMixLevel], "mixer lock combined: %d want %d", eff[kMixLevel], player[kMixLevel]);
-
-  // CLASSIC: a macro lock does nothing, a sound lock works as before
+  // CLASSIC: a macro lock (version 2 numbering) is dropped, a sound lock works as before
   setup();
   Project& c = g_inst.project();
   TrackPattern& t4 = c.patterns[0].tracks[kTrackBass];
-  t4.steps[0] = kDefaultStep; t4.steps[0].flags = kStepOn;
-  t4.steps[0].lockParam = kLockMacro0;
-  t4.steps[0].lockValue = 255;
-  t4.steps[4] = kDefaultStep; t4.steps[4].flags = kStepOn;
-  t4.steps[4].lockParam = 1;
-  t4.steps[4].lockValue = 3;
+  t4.steps[0] = kDefaultStep; t4.steps[0].setFlags(kStepOn);
+  t4.steps[0].setLock(kLockMacro0, 255);
+  t4.steps[4] = kDefaultStep; t4.steps[4].setFlags(kStepOn);
+  t4.steps[4].setLock(1, 3);
   g_inst.engine().post(play);
   StepWatch w4;
+  int step;
+  uint8_t eff[kParamsPerTrack];
   w4.next(&step, eff);
   it::check(std::memcmp(eff, c.tracks[kTrackBass].params, kParamsPerTrack) == 0, "CLASSIC ignores macro locks");
   for (int k = 0; k < 6 && step != 4; ++k) w4.next(&step, eff);
@@ -511,29 +428,30 @@ void testOverlay() {
 // ---- copy ----------------------------------------------------------------------------------
 void testCopy() {
   setup();
+  setInstrument(kTrackBass, pm::instrumentAt(kTrackBass, 0));
+  setInstrument(kTrackLead, pm::instrumentAt(kTrackLead, 0));
+  quanta(1);
   Project& p = g_inst.project();
   Step& s = p.patterns[0].tracks[kTrackBass].steps[2];
-  s.flags = kStepOn;
-  s.lockParam = kLockMacro0 + 2;
-  s.lockValue = 9;
+  s.setFlags(kStepOn);
+  s.setMacroValue(2, 9);
   Command c{};
   c.type = CmdType::CopyTrack;
   c.a = 0; c.b = kTrackBass; c.c = kTrackLead;
   g_inst.engine().post(c);
   quanta(1);
-  it::check(p.patterns[0].tracks[kTrackLead].steps[2].lockParam == 0, "macro lock dropped on another track");
-  it::check(p.patterns[0].tracks[kTrackBass].steps[2].lockParam == kLockMacro0 + 2, "source keeps it");
+  it::check(p.patterns[0].tracks[kTrackLead].steps[2].hasExt() == false, "own macro values dropped on another track");
+  it::check(p.patterns[0].tracks[kTrackBass].steps[2].macroValue(2) == macroCodeToPos(macroPosToCode(9)), "source keeps it");
   Step st = s;
-  st.lockParam = kLockMacro0 + 3;
-  st.lockValue = 250;
+  st.setMacroValue(3, 250);
   Command ss{};
   ss.type = CmdType::SetStep;
   ss.a = 0; ss.b = kTrackBass; ss.c = 5; ss.step = st;
   g_inst.engine().post(ss);
   quanta(1);
-  it::check(p.patterns[0].tracks[kTrackBass].steps[5].lockParam == kLockMacro0 + 3 &&
-                p.patterns[0].tracks[kTrackBass].steps[5].lockValue == 250,
-            "a macro lock survives the sanitiser with any value");
+  it::check(p.patterns[0].tracks[kTrackBass].steps[5].macroValue(3) == macroCodeToPos(macroPosToCode(250)) &&
+                p.patterns[0].tracks[kTrackBass].steps[5].macroValue(2) == macroCodeToPos(macroPosToCode(9)),
+            "own macro values survive the sanitiser");
 }
 
 // ---- files ---------------------------------------------------------------------------------

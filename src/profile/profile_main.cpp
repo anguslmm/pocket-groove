@@ -351,7 +351,7 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
     }
     if (c->leadChord >= 0)
       for (auto& pat : p.patterns)
-        for (auto& st : pat.tracks[pg::kTrackLead].steps) st.chord = static_cast<uint8_t>(c->leadChord);
+        for (auto& st : pat.tracks[pg::kTrackLead].steps) st.setChord(static_cast<uint8_t>(c->leadChord));
   }
   p.songMode = 0;
   eng.sanitizeProject(p);
@@ -1002,7 +1002,7 @@ void findBusiest(int* bd, int* bp, int* score10) {
         const int tl = P.tracks[t].length ? P.tracks[t].length : 16;
         for (int s = 0; s < len; ++s) {
           const pg::Step& st = P.tracks[t].steps[s % tl];
-          if (st.flags & pg::kStepOn) { hits += pg::stepRatchet(st); any = true; }
+          if (st.flags() & pg::kStepOn) { hits += pg::stepRatchet(st); any = true; }
         }
       }
       if (!any) continue;

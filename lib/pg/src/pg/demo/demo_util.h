@@ -25,24 +25,23 @@ inline Step& at(Pattern& P, int track, int i) { return P.tracks[track].steps[i &
 inline Step& put(Pattern& P, int track, int i, int vel, int note = 60, int gate = 2) {
   Step& s = at(P, track, i);
   s = kDefaultStep;
-  s.flags = kStepOn;
+  s.setFlags(kStepOn);
   s.vel = uint8_t(vel < 1 ? 1 : (vel > 127 ? 127 : vel));
   s.note = uint8_t(note);
   s.gate = uint8_t(gate < 1 ? 1 : gate);
   return s;
 }
-inline Step& acc(Step& s) { s.flags |= kStepAccent; return s; }
-inline Step& slide(Step& s) { s.flags |= kStepSlide; return s; }
-inline Step& prob(Step& s, int pct) { s.prob = uint8_t(pct); return s; }
+inline Step& acc(Step& s) { s.addFlags(kStepAccent); return s; }
+inline Step& slide(Step& s) { s.addFlags(kStepSlide); return s; }
+inline Step& prob(Step& s, int pct) { s.setProb(uint8_t(pct)); return s; }
 inline Step& ratchet(Step& s, int hits) {
-  s.flags = uint8_t((s.flags & ~kStepRatchetMask) | (((hits - 1) & 3) << kStepRatchetShift));
+  s.setFlags(uint8_t((s.flags() & ~kStepRatchetMask) | (((hits - 1) & 3) << kStepRatchetShift)));
   return s;
 }
-inline Step& chord(Step& s, int c) { s.chord = uint8_t(c); return s; }
+inline Step& chord(Step& s, int c) { s.setChord(uint8_t(c)); return s; }
 // One parameter lock: `param` is the track-param index (0..23 sound, 24..31 mixer).
 inline Step& lock(Step& s, int param, int value) {
-  s.lockParam = uint8_t(param + 1);
-  s.lockValue = uint8_t(value);
+  s.setLock(uint8_t(param + 1), uint8_t(value));
   return s;
 }
 
@@ -99,7 +98,7 @@ struct N {
 };
 inline Step& noteStep(Pattern& P, int track, const N& n, int offset = 0, int transpose = 0) {
   Step& s = put(P, track, n.step + offset, n.vel, n.note + transpose, n.gate > 0 ? n.gate : 2);
-  s.flags |= uint8_t(n.flags & (kStepAccent | kStepSlide));
+  s.addFlags(uint8_t(n.flags & (kStepAccent | kStepSlide)));
   if (n.lockP >= 0) lock(s, n.lockP, n.lockV);
   return s;
 }

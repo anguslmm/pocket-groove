@@ -24,12 +24,12 @@ namespace uih {
 inline void stepOn(pg::Step& s, int vel, int note = 60, bool acc = false, bool slide = false, int prob = 100,
                    int ratch = 1, int chord = 0, int gate = 2) {
   s = pg::kDefaultStep;
-  s.flags = uint8_t(pg::kStepOn | (acc ? pg::kStepAccent : 0) | (slide ? pg::kStepSlide : 0) |
-                    ((ratch - 1) << pg::kStepRatchetShift));
+  s.setFlags(uint8_t(pg::kStepOn | (acc ? pg::kStepAccent : 0) | (slide ? pg::kStepSlide : 0) |
+                    ((ratch - 1) << pg::kStepRatchetShift)));
   s.vel = uint8_t(vel);
   s.note = uint8_t(note);
-  s.prob = uint8_t(prob);
-  s.chord = uint8_t(chord);
+  s.setProb(uint8_t(prob));
+  s.setChord(uint8_t(chord));
   s.gate = uint8_t(gate);
 }
 
@@ -61,8 +61,7 @@ inline void buildMockup(pg::Project& p, const pg::Engine& eng) {
   stepOn(st(6, 10), 100, A1 - 2);
   stepOn(st(6, 11), 100, A1, false, true);
   stepOn(st(6, 13), 100, A1 + 7, true);
-  st(6, 13).lockParam = 1;   // CUT
-  st(6, 13).lockValue = 110;
+  st(6, 13).setLock(1, 110);   // CUT
   stepOn(st(6, 14), 100, A1 + 5);
   stepOn(st(7, 2), 100, 57, false, false, 100, 1, kChordMin7, 3);
   stepOn(st(7, 7), 100, 57, false, false, 100, 1, kChordMin7, 2);

@@ -39,5 +39,10 @@ void setRumbleFilterBypass(bool bypass);
 // only while process() is not running.
 void effectiveParams(int track, uint8_t* out);
 
+// TEST ONLY: where macro m of the track was during the last quantum processed
+// (its trajectory, unrounded, 0..255; -1 for a bad index). Read it only while
+// process() is not running.
+float macroPosition(int track, int m);
+
 }  // namespace engine_detail
 }  // namespace pg

@@ -48,7 +48,7 @@ static bool clean() {
 static int stepsOn(int pat) {
   int n = 0;
   for (int t = 0; t < kNumTracks; ++t)
-    for (int i = 0; i < kMaxSteps; ++i) n += (R->proj->patterns[pat].tracks[t].steps[i].flags & kStepOn) != 0;
+    for (int i = 0; i < kMaxSteps; ++i) n += (R->proj->patterns[pat].tracks[t].steps[i].flags() & kStepOn) != 0;
   return n;
 }
 // The phantom of a three-key chord (scan matrix), or -1.
@@ -113,9 +113,9 @@ static void testNoGhostHardware() {
   R->start(false);
   down("1"); down("2");
   R->down(K("3"));
-  CHECK(!(S(6, 2).flags & kStepOn));          // held back: a phantom partner is expected
+  CHECK(!(S(6, 2).flags() & kStepOn));          // held back: a phantom partner is expected
   R->run(40);
-  CHECK(S(6, 2).flags & kStepOn);             // none came: the held step was copied there
+  CHECK(S(6, 2).flags() & kStepOn);             // none came: the held step was copied there
   up("3"); up("2"); up("1");
   CHECK(clean());
   R->matrix.order = keep;
@@ -210,7 +210,7 @@ static void testStepEdit() {
   up("-"); up("s");
   // SHIFT+l on a held lead step: previous chord type (no rectangle)
   down("sft"); down("l");
-  CHECK_EQ(S(7, 2).chord, kChordMaj7);
+  CHECK_EQ(S(7, 2).chord(), kChordMaj7);
   up("l"); up("sft"); up("3");
   CHECK(clean());
 }
@@ -221,7 +221,7 @@ static void testLockModeColumnHeld() {
   tap("9");
   CHECK(R->ui.view() == View::Sound);
   down("2"); down("z"); down("=");
-  CHECK_EQ(S(6, 1).lockParam, 1);
+  CHECK_EQ(S(6, 1).lockParam(), 1);
   CHECK(!R->ui.playing());
   up("="); up("z"); up("2");
   CHECK(clean());

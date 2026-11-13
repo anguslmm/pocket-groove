@@ -24,7 +24,7 @@ static void busyScene(float sr) {
     for (int s = 0; s < 16; ++s)
       if ((s + t) % (t == kTrackKick ? 4 : 2) == 0) {
         Step st = mkStep(30 + 9 * t + s, kStepOn | (s % 5 == 0 ? (1 << kStepRatchetShift) : 0) | (s % 3 == 0 ? kStepSlide : 0), 120, 3);
-        if (s == 6) { st.lockParam = kMixPan + 1; st.lockValue = uint8_t(s * 8); }
+        if (s == 6) { st.setLock(kMixPan + 1, uint8_t(s * 8)); }
         rig.step(0, t, s) = st;
       }
   }

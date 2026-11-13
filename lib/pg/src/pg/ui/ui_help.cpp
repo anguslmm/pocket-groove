@@ -165,8 +165,8 @@ const char* const kLegends[][5] = {
     {CA "1-..4+" CD " MACRO DOWN/UP. HOLD: SWEEP",
      CW "BOTH KEYS" CD " OF A PAIR: ITS DEFAULT",
      CT UP_ICON_TXT CD " " CT "NI" CD " INSTRUMENT. CTRL+Z GOES BACK",
-     CW "HOLD STEP" CD " + MACRO KEY = LOCK THERE",
-     CA "-+" CD " THE LAST MACRO, FROM ANY VIEW"},
+     CW "HOLD STEP" CD " + MACRO KEY = NOTE'S VALUE",
+     CW "DEL" CD "+KEY CLEARS MOTION " CA "-+" CD " LAST"},
     {CW "FN" CD "+PAD: MUTE ON/OFF",
      CW "FN" CD "+NOTE KEY: SOLO THAT TRACK",
      CD "SAME KEY AGAIN: RESTORE MUTES", "", ""},
@@ -369,7 +369,7 @@ static bool explainLayer(const Ui& ui, int table, int k, char* title, const char
         *o = 0;
         cat(cat(cat(o, ": "), s->macros[note / 2].name), (note & 1) ? " +16" : " -16");
         *l1 = "COARSE: 16 OF 255 PER TAP OR REPEAT.";
-        *l2 = "A STEP HELD: THE LOCK, COARSE.";
+        *l2 = "A STEP HELD: ITS VALUE, 4 LEVELS.";
         return true;
       }
       [[fallthrough]];
@@ -461,8 +461,16 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
         return;
       }
       cat(cat(cat(o, ": "), s->macros[m].name), (note & 1) ? " UP" : " DOWN");
-      *l1 = "TAP NUDGES, HOLD SWEEPS, SHIFT: COARSE.";
-      *l2 = "BOTH KEYS: DEFAULT. STEP HELD: LOCK.";
+      if (ui.heldStep() >= 0) {
+        *l1 = "THE HELD NOTE'S OWN VALUE: THE MACRO";
+        *l2 = "GLIDES TO IT FROM NOTE TO NOTE.";
+      } else if (ui.recOn() && ui.playing()) {
+        *l1 = "RECORDING: MOVED, IT GOES INTO EVERY";
+        *l2 = "NOTE IT PASSES (RED NAME: LIVE).";
+      } else {
+        *l1 = "TAP NUDGES, HOLD SWEEPS, SHIFT: COARSE.";
+        *l2 = "BOTH: DEFAULT. STEP HELD: NOTE VALUE.";
+      }
       return;
     }
     switch (k) {
@@ -482,8 +490,9 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
         *l2 = "AGAIN: THE NEXT ONE (; BACK).";
         return;
       case kKDel:
-        cat(title, "REMOVE LOCK");
-        *l1 = "WITH A STEP HELD: REMOVES ITS LOCK.";
+        cat(title, "CLEAR MOTION / VALUE");
+        *l1 = "HELD + A MACRO KEY: CLEARS ITS MOTION";
+        *l2 = "HERE. STEP HELD: THE NOTE'S VALUE.";
         return;
       case kKL:
         cat(title, ui.devMode() ? "DEV: PARAMETER PAGES" : "NOT USED HERE");

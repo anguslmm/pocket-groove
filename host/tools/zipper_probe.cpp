@@ -454,6 +454,118 @@ constexpr double kOverIdeal = 1.0, kStepsWorse = 2.0;
 constexpr double kPathRatio = 1.5, kPathSlack = 0.5, kPathStepsRatio = 3.0;
 constexpr double kClickOverIdeal = 1.0;
 
+// MOTION (engine.h): two bass notes a bar apart (ACID, gate held through), the
+// first with OPEN at 0.40, the second at 0.65: the engine glides OPEN in a
+// straight line from one note to the next. The voice's cutoff path over that
+// bar must have no steps: its largest change per quantum at most kPathRatio x
+// that of one ideal SetMacro ramp over the same time (from a held note) +
+// kPathSlack, and it must follow the ideal's path (the same positions in time).
+struct KfRender {
+  std::vector<float> stem;
+  std::vector<double> traj;
+  long from = 0, to = 0;   // quanta: the first note's and the second note's
+};
+
+KfRender renderKeyframes(bool ideal, long glideQ) {
+  using namespace pg;
+  KfRender out;
+  const float tailSec = 0.3f;
+  const long stepQ = long(float(kSr) * 15.0f / 120.0f / float(kQuantum));
+  const long totalQ = 20 * stepQ + long(tailSec * kSr) / kQuantum;
+  std::vector<float> l(size_t(totalQ * kQuantum), 0.0f), r(l.size(), 0.0f);
+  engine_detail::StemTap tap;
+  tap.track[kTrackBass][0] = l.data();
+  tap.track[kTrackBass][1] = r.data();
+  tap.capacity = long(l.size());
+  engine_detail::setStemTap(&tap);
+  g_inst.init(kSr, false);
+  Engine& e = g_inst.engine();
+  const macro::MacroSet* set = nullptr;
+  for (int i = 0; i < macro::instrumentCount(kTrackBass); ++i)
+    if (std::string(macro::instrumentAt(kTrackBass, i)->name) == "ACID") set = macro::instrumentAt(kTrackBass, i);
+  const int a = macroCodeToPos(macroPosToCode(102)), b = macroCodeToPos(macroPosToCode(166));
+  const uint8_t pos[4] = {uint8_t(a), 0, 0, 255};
+  e.post(setInstrumentCommand(kTrackBass, set->id, pos));
+  Command g{};
+  g.type = CmdType::SetGlobal;
+  g.a = kGTempo;
+  g.c = 120;
+  e.post(g);
+  int16_t buf[2 * kQuantum];
+  for (int i = 0; i < 4; ++i) g_inst.process(buf, kQuantum);
+  Project& p = g_inst.project();
+  p.patterns[0].length = 32;
+  p.patterns[0].tracks[kTrackBass].length = 32;
+  for (int s : {0, 16}) {
+    Step& st = p.patterns[0].tracks[kTrackBass].steps[s];
+    st = kDefaultStep;
+    st.setFlags(kStepOn);
+    st.note = 45;
+    st.vel = 110;
+    st.gate = 64;   // held through the bar
+    if (!ideal) st.setMacroValue(0, s ? b : a);
+  }
+  if (ideal) {
+    Command n{};
+    n.type = CmdType::NoteOn;
+    n.a = kTrackBass;
+    n.b = 45;
+    n.c = 110;
+    e.post(n);
+    e.post(setMacroCommand(kTrackBass, 0, uint8_t(b), uint16_t(glideQ)));
+  } else {
+    Command play{};
+    play.type = CmdType::Play;
+    e.post(play);
+  }
+  uint8_t lastStep = 0xFF;
+  for (long q = 0; q < totalQ; ++q) {
+    g_inst.process(buf, kQuantum);
+    const EngineStatus st = e.status();
+    if (!ideal && st.playing && st.masterStep != lastStep) {
+      if (st.masterStep == 0) out.from = q;
+      if (st.masterStep == 16) out.to = q;
+      lastStep = st.masterStep;
+    }
+    out.traj.push_back(1200.0 * std::log2(double(static_cast<bass::BassVoice*>(g_inst.voice(kTrackBass))->debugCutoffHz())));
+  }
+  if (ideal) { out.from = 0; out.to = glideQ; }
+  engine_detail::setStemTap(nullptr);
+  out.stem = l;
+  return out;
+}
+
+int keyframeCase(const std::string& dir, bool check) {
+  const KfRender mo = renderKeyframes(false, 0);
+  const KfRender id = renderKeyframes(true, mo.to - mo.from);
+  save(dir, "motion_bass_acid_keyframes_motion.wav", mo.stem);
+  save(dir, "motion_bass_acid_keyframes_ideal.wav", id.stem);
+  // over the glide, leaving the first 20 ms (the note's attack moves the cutoff on its own)
+  const long skip = long(0.020f * kSr) / pg::kQuantum;
+  double pm = 0.0, pi = 0.0, dev = 0.0;
+  for (long q = mo.from + skip + 1; q < mo.to && q < long(mo.traj.size()); ++q) {
+    pm = std::max(pm, std::fabs(mo.traj[size_t(q)] - mo.traj[size_t(q - 1)]));
+    const long qi = q - mo.from;
+    if (qi > 0 && qi < long(id.traj.size())) {
+      pi = std::max(pi, std::fabs(id.traj[size_t(qi)] - id.traj[size_t(qi - 1)]));
+      dev = std::max(dev, std::fabs(mo.traj[size_t(q)] - id.traj[size_t(qi)]));
+    }
+  }
+  std::printf("  bass_acid_keyframes: two notes a bar apart, OPEN 102 -> 166 between them (%ld quanta)\n", mo.to - mo.from);
+  std::printf("    path  (voice's own cutoff, largest change per quantum, cents): motion %6.2f  ideal %6.2f; "
+              "largest distance from the ideal %.2f cents\n", pm, pi, dev);
+  int fails = 0;
+  if (check && (mo.to <= mo.from || pm > kPathRatio * pi + kPathSlack)) {
+    std::printf("    FAIL: the keyframe glide moves in bursts (more than the ideal ramp)\n");
+    ++fails;
+  }
+  if (check && dev > 5.0) {
+    std::printf("    FAIL: the keyframe glide leaves the ideal straight line\n");
+    ++fails;
+  }
+  return fails;
+}
+
 int engineCases(const std::string& dir, bool check) {
   using namespace pg;
   struct Run {
@@ -523,6 +635,7 @@ int engineCases(const std::string& dir, bool check) {
       fail(ck[1] > ck[2] + kClickOverIdeal, "the glide clicks between hits (more than the ideal)");
     }
   }
+  fails += keyframeCase(dir, check);
   if (check) std::printf("zipper_probe --engine: %s\n", fails ? "FAILED" : "all within the limits");
   return fails ? 1 : 0;
 }

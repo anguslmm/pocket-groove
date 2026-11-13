@@ -15,7 +15,7 @@ Headphones first: the jack is driven straight from the codec and the firmware ca
 7. [Chord stabs on the lead](#7-chord-stabs-on-the-lead)
 8. [Sidechain ducking](#8-sidechain-ducking)
 9. [Sound design recipes](#9-sound-design-recipes)
-10. [Parameter locks](#10-parameter-locks)
+10. [Note values and parameter locks](#10-note-values-and-parameter-locks)
 11. [Performance](#11-performance)
 12. [Song mode](#12-song-mode)
 13. [Copy, paste, undo](#13-copy-paste-undo)
@@ -85,7 +85,7 @@ Pressing a pad plays the track and *selects* it. The selected track is the curso
 
 **Edits go to the playing pattern.** When stopped, that's the pattern last played or selected with `opt`+step. To edit another pattern, select it with `opt`+step (while stopped it switches at once).
 
-**Sound settings belong to the project,** not the pattern: changing the bass's instrument or a macro changes it in all 16 patterns. To change a macro for one step only, use a lock (chapter 10).
+**Sound settings belong to the project,** not the pattern: changing the bass's instrument or a macro changes it in all 16 patterns. To move a macro through a pattern, give its notes their own values: the macro glides from note to note (chapter 4.4 "Motion", chapter 10).
 
 ---
 
@@ -114,7 +114,7 @@ The bottom part shows the selected track's 16 steps as large pads:
 | bar along the bottom | drum step's velocity |
 | white bar on the top edge | accent |
 | white bridge to the next pad | slide |
-| ◆ | parameter lock |
+| ◆ | a note's own macro values (instrument track) or a parameter lock (CLASSIC track) |
 | small ticks | ratchet (2-4 hits) |
 | `%`, dimmer colour | probability below 100 % |
 | `m7`, `M7`, `m9`... | lead chord |
@@ -166,15 +166,15 @@ The key map says "with SHIFT one octave"; the octave is `ctrl`+`;`/`.` now (ghos
 
 | Key | Action |
 |---|---|
-| pads `a`-`k` | Choose the field that `-`/`=` changes: `a` VEL, `s` GATE (drums: PTCH), `d` PROB, `f` RTCH, `g` ACC, `h` SLD (bass, lead), `j` CHRD (lead), `k` LOCK. The last field used is selected when the panel opens. |
-| `-` `=` | Change the field. ACC and SLD flip on/off. Both together = field default (VEL 100, GATE 0.5 step, PTCH 0, PROB 100 %, RTCH x1, no chord, no lock). |
+| pads `a`-`k` | Choose the field that `-`/`=` changes: `a` VEL, `s` GATE (drums: PTCH), `d` PROB, `f` RTCH, `g` ACC, `h` SLD (bass, lead), `j` CHRD (lead), `k` MOVE on an instrument track (the note's own macro values; `k` again: the next macro), LOCK on a CLASSIC track. The last field used is selected when the panel opens. |
+| `-` `=` | Change the field. ACC and SLD flip on/off. Both together = field default (VEL 100, GATE 0.5 step, PTCH 0, PROB 100 %, RTCH x1, no chord, no lock or note value). |
 | notes | Set the step's note (synth: scale degree at the track octave; drum: velocity) and hear it. |
 | `;` `.` | Note +1 / -1 semitone, chromatic, so any note is reachable; `ctrl`+`;` / `ctrl`+`.` = an octave (earlier builds used `shift`; with step 1 held the keyboard can't tell `shift`+`;` from `shift`+`-`). Drums: pitch -24..+24. |
 | `l` | Lead: next chord type (`shift`: previous). |
 | other step keys | Copy the held step there (all fields). |
 | `'` | Flip the page while holding, to copy across pages. |
-| `del` | Remove the step's parameter lock. |
-| `9` `0` `o` | Switch view and keep holding: lock mode (chapter 10). |
+| `del` | Remove the note's value of the focused macro (if it has none: all its values), or a CLASSIC step's lock. |
+| `9` `0` `o` | Switch view and keep holding: note values or locks (chapter 10). |
 | `` ` `` | Release the step and go home. |
 
 Field ranges: VEL 1-127 (`shift` ±8); GATE 0.25-16 steps in quarter steps (default 0.5); PTCH -24..+24 semitones; PROB 0-100 % in 5 % steps (`shift` ±20 %); RTCH x1-x4 hits inside the step; CHRD OFF, OCT, 5TH, MAJ, MIN, MAJ7, MIN7, DOM7, SUS4, MIN9.
@@ -219,10 +219,27 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | `ctrl`+`z` | Right after changing instruments: back to what the track had (a run of `.` `.` `.` is one step back), again: forward. |
 | `-` `=` | The focused macro. |
 | pads | Select another track and show its instrument (and hear it). |
-| steps | Tap toggles a step (the strip at the bottom shows them). Hold + a macro key (or `-`/`=`) = lock that macro on that step (chapter 10); `del` removes the lock. |
+| steps | Tap toggles a step (the strip at the bottom shows them). Hold + a macro key (or `-`/`=`) = that note's own value of the macro (Motion, below; chapter 10); `del` removes it. |
+| `del` held + a macro key | Clear that macro's motion: its values leave every note of this track in this pattern (`ctrl`+`z` brings them back). |
 | `'` | Which 16 steps the strip shows. |
 
 A track with no instrument shows **CLASSIC**: it plays its classic sound (the demos, older projects), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
+
+#### Motion
+
+![Step 1 held: OPEN and BITE get their own values on that note](ux/motion-held.png)
+
+A note can carry its own value of each macro. Hold the step key and move a macro (its keys, or `-`/`=`): the slider turns amber and shows the note's value, a white tick shows the macro's position (its **base**). Move another macro while still holding: the note gets a value of that one too, up to all four. While the pattern plays, each macro then **glides in a straight line from one such note's value to the next one's**, arriving exactly as that note starts; it keeps moving through rests and past notes without a value, and from the last such note of the pattern toward the first one of whatever plays next (the same pattern again, a queued pattern, the next song slot). One note with a value: the macro just stays there. No note with a value in the playing pattern: the macro sits at its base. A value can't rise and fall within one note; a note followed by a long gap glides slowly.
+
+![While it plays the sliders move by themselves](ux/motion-playing.png)
+
+While it plays, the sliders of macros with motion move by themselves and a white tick marks their base; an amber `~` by a macro's name means notes of this pattern carry its values (also when stopped). Moving such a macro by hand while it plays changes only its base (heard where a pattern has no values).
+
+**Recording motion**: turn REC on (`enter`) while playing and move a macro: it turns red (**live**). You hear your hand, and every note of the track that starts while it is live takes the macro's value. It stays live until you leave it alone for a bar, or turn REC off. `ctrl`+`z` takes back the whole pass (with any notes recorded in it).
+
+![BITE live in a recording pass](ux/motion-live.png)
+
+**Clearing**: hold `del` and tap one of a macro's keys: that macro's values leave every note of the track in this pattern (`ctrl`+`z` brings them back). To clear one note's value, hold the step and press `del`. When you stop, the sound rests where the motion left it until you move the macro; the page shows the base positions.
 
 ### 4.5 MIX (`0`)
 
@@ -592,31 +609,24 @@ MIN or 5TH chords. Open CUT from 24 to about 100 over several bars (live, or wit
 
 ---
 
-## 10. Parameter locks
+## 10. Note values and parameter locks
 
-A lock gives one step its own value for one macro of the track's instrument (or one MIX value): a brighter bass note, a longer clap, a delay throw on one stab. **One lock per step.** The lock holds from that step until the next step of the same track that plays.
+**On a track with an instrument** a note carries its own values of the instrument's macros, one per macro, up to all four on the same note; between notes each macro glides from one value to the next (chapter 4.4, "Motion"). A brighter bass note, a filter that opens over a bar, a wobble that speeds up toward the drop.
 
-**Lock from SOUND, MIX or FX**
-
-1. Go to the view (SOUND: the instrument page; MIX: choose the row; FX DUCK tab: a pad for its DUCK amount).
+1. Go to SOUND (the instrument page).
 2. Hold the step key. The header turns amber (`◆LOCK`).
-3. SOUND: press the macro's key (or `-`/`=` for the focused one). The lock starts from the macro's current position; both keys of the pair lock its default. The slider's name and handle turn amber and a white tick marks the unlocked position. MIX: `-`/`=`.
-4. While still holding, moving another macro replaces the lock (toast `LOCK BITE REPLACES OPEN`).
-5. Release the step.
+3. Press a macro's key (or `-`/`=` for the focused one): the note's value starts one level from the macro's position and moves a level per tap (63 levels; `shift`: 4). Both keys of the pair: its default. Another macro's keys give the note a value of that one too.
+4. Release the step.
 
-![Locking the bass's TONE on step 3](ux/instrument-lock.png)
+![The bass's TONE darker on step 3](ux/instrument-lock.png)
 
-On a CLASSIC track the locks are of bare parameters, as before instruments (developer mode); on a track with an instrument such a lock is kept but ignored, and the step edit's LOCK field shows it as `OFF`.
+You can also start in GROOVE: hold the step, then press `9` without letting go. **From STEP EDIT**: hold the step, press `k` (MOVE), `-`/`=`: the value of the track's focused macro (the one you last moved in SOUND); `k` again picks the next macro. **Remove**: hold the step and press `del` (the focused macro's value; again: all of them), or `-` and `=` together in the MOVE field. **Seeing them**: ◆ on the step pad; an amber top edge on the step strip; while the step is held, the values in amber.
 
-You can also start in GROOVE: hold the step, then press `9` (or `0`) without letting go.
+An instrument track has **no parameter locks**: the instrument owns its sound, and the MIX values are the track's. (A project saved before version 3 keeps its macro locks as the notes' values; its sound and mixer locks on instrument tracks are dropped when it loads.) Choosing an instrument for a CLASSIC track clears its locks in every pattern, and going back to CLASSIC clears its notes' values.
 
-**From STEP EDIT**: hold the step, press `k` (LOCK), `-`/`=`. With no lock yet, this locks the track's focused macro (the one you last moved in SOUND).
+**On a CLASSIC track** (the demos, older projects) a lock gives one step its own value for one parameter (in developer mode) or one MIX value: a longer clap, a delay throw on one stab. **One lock per step.** The lock holds from that step until the next step of the same track that plays. Hold the step key in MIX (or FX DUCK, for a track's DUCK amount) and press `-`/`=`; moving another value replaces the lock (toast `LOCK CUT REPLACES RES`). STEP EDIT's `k` is LOCK there.
 
-**Remove a lock**: hold the step and press `del`, or `-` and `=` together.
-
-**Seeing locks**: ◆ on the step pad; an amber top edge on the step strip in SOUND and MIX; while the step is held, the locked value in amber.
-
-Globals (everything in FX except the DUCK amounts) can't be locked. A bass step that locks macro 1 ignores the bass sweep (`shift`+`[` `]`) on that step.
+Globals (everything in FX except the DUCK amounts) can't be locked. A bass note with its own value of macro 1 is not moved by the bass sweep (`shift`+`[` `]` moves macro 1's base, which plays where a pattern has no values).
 
 ---
 
@@ -638,7 +648,7 @@ Globals (everything in FX except the DUCK amounts) can't be locked. A bass step 
 
 ![DJ filter: high-pass at 30](manual/m-djfilter.png)
 
-**Bass sweep.** `shift`+`[`/`]` sweeps the bass's macro 1 the same way (OPEN on ACID, the instrument a new project starts with), from any view; `shift`+both returns it to where you started. On a CLASSIC bass (the factory demos) it sweeps the cutoff, as before instruments; steps with a CUT lock ignore it (in the demos most bass steps have one: see chapter 9). A step that locks macro 1 ignores it the same way.
+**Bass sweep.** `shift`+`[`/`]` sweeps the bass's macro 1 the same way (OPEN on ACID, the instrument a new project starts with), from any view; `shift`+both returns it to where you started. On a CLASSIC bass (the factory demos) it sweeps the cutoff, as before instruments; steps with a CUT lock ignore it (in the demos most bass steps have one: see chapter 9). While the playing pattern gives macro 1 notes their own values, the sweep moves only its base.
 
 **Erase.** Hold `del` in GROOVE while playing: the selected track's steps are cleared as the playhead passes. `ERASE` shows in the footer. `ctrl`+`z` brings them back.
 
@@ -675,9 +685,9 @@ While the chain plays, the status bar shows the slot number in green and the pla
 | Step taps, STEP EDIT changes, copying a held step, step-write notes and rests | | yes |
 | A live recording pass | | yes (the whole pass) |
 
-- A track pastes onto the same kind: drum to drum, bass or lead to bass or lead (`CAN'T PASTE DRUMS ON BASS` otherwise). Pasting onto a different voice drops chords (except on the lead) and sound-parameter locks. The paste also sets the track's length.
+- A track pastes onto the same kind: drum to drum, bass or lead to bass or lead (`CAN'T PASTE DRUMS ON BASS` otherwise). Pasting onto a different voice drops chords (except on the lead) and sound-parameter locks; pasting onto another track or another instrument drops the notes' macro values. The paste also sets the track's length.
 - To copy a track to another pattern: `ctrl`+`c`, switch pattern with `opt`+step (wait for it to start, or do it stopped), `ctrl`+`v`.
-- **Undo is one level** and covers one pattern: `ctrl`+`z` swaps the pattern back to how it was before the last undoable action; `ctrl`+`z` again redoes it. A new undoable action replaces the snapshot. Every change to a pattern's steps and lengths is undoable, and one gesture is one action: everything done while one step key is held (placing it, every nudge of its note, fields and lock, copies to other steps, deleting it on a tap) undoes together; so does one `del` erase pass, and one live recording pass (from the first recorded note until `enter` turns REC off or the transport stops). Two separate taps are two actions, so `ctrl`+`z` takes back only the second. The toast names what it takes back, e.g. `UNDO: KICK STEP 5`, `UNDO: RECORDED NOTES`.
+- **Undo is one level** and covers one pattern: `ctrl`+`z` swaps the pattern back to how it was before the last undoable action; `ctrl`+`z` again redoes it. A new undoable action replaces the snapshot. Every change to a pattern's steps and lengths is undoable, and one gesture is one action: everything done while one step key is held (placing it, every nudge of its note, fields and values, copies to other steps, deleting it on a tap) undoes together; so does one `del` erase pass, one clear of a macro's motion, and one live recording pass (from the first recorded note or recorded macro move until `enter` turns REC off or the transport stops). Two separate taps are two actions, so `ctrl`+`z` takes back only the second. The toast names what it takes back, e.g. `UNDO: KICK STEP 5`, `UNDO: RECORDED NOTES`.
 - Not undoable: sound and mixer values, mutes, song chain edits, tempo, swing and the scale. Loading a project clears undo and the clipboard.
 
 ---
@@ -872,7 +882,7 @@ A second firmware, `cardputer-adv-usb`, makes the Cardputer a USB audio interfac
 
 ## 17. Known limitations of v1
 
-- Sound settings are per project, not per pattern. Use parameter locks for per-step changes.
+- Sound settings are per project, not per pattern. Use the notes' own macro values (motion) for changes within a pattern, parameter locks on CLASSIC tracks.
 - One parameter lock per step. A track's locks can only be added from SOUND, MIX, FX (DUCK amounts) or STEP EDIT's LOCK field; there is no motion recording.
 - No MIDI, no sync to other gear, no audio input, no samples. Every sound is synthesised.
 - Mono output only (see chapter 16); the stereo USB firmware sends stereo to a computer (16.1).

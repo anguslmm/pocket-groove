@@ -72,11 +72,10 @@ void testLockEverything() {
           const ParamInfo* info = g_inst.engine().trackParamInfo(t, i);
           Step st = grooves::on(t == kTrackBass ? 30 + rng.range(0, 30) : 36 + rng.range(0, 60), rng.range(1, 127),
                                 rng.range(1, 12), uint8_t(rng.range(0, 3) == 0 ? kStepAccent : 0));
-          if (t >= kTrackBass && rng.range(0, 3) == 0) st.flags |= kStepSlide;
-          if (rng.range(0, 7) == 0) st.flags |= uint8_t(rng.range(1, 3) << kStepRatchetShift);
-          if (t == kTrackLead) st.chord = uint8_t(rng.range(0, kChordNum - 1));
-          st.lockParam = uint8_t(i + 1);
-          st.lockValue = pass == 0 ? info->min : (pass == 1 ? info->max : uint8_t(rng.range(info->min, info->max)));
+          if (t >= kTrackBass && rng.range(0, 3) == 0) st.addFlags(kStepSlide);
+          if (rng.range(0, 7) == 0) st.addFlags(uint8_t(rng.range(1, 3) << kStepRatchetShift));
+          if (t == kTrackLead) st.setChord(uint8_t(rng.range(0, kChordNum - 1)));
+          st.setLock(uint8_t(i + 1), pass == 0 ? info->min : (pass == 1 ? info->max : uint8_t(rng.range(info->min, info->max))));
           tp.steps[s] = st;
           ++locks;
         }

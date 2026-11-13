@@ -14,8 +14,8 @@ static Rig rig;
 
 static Command noteOn(int track, int note, int vel, int flags = 0, int chord = 0) {
   Command c = cmd(CmdType::NoteOn, track, note, vel);
-  c.step.flags = uint8_t(flags);
-  c.step.chord = uint8_t(chord);
+  c.step.setFlags(uint8_t(flags));
+  c.step.setChord(uint8_t(chord));
   return c;
 }
 
@@ -68,7 +68,7 @@ static RecResult recordAt(double atSteps, int track, int swing = 0, int trackLen
   RecResult r{-1, -1, 0, false};
   for (int p = 0; p < kNumPatterns; ++p)
     for (int s = 0; s < kMaxSteps; ++s)
-      if (rig.proj.patterns[p].tracks[track].steps[s].flags & kStepOn) { r.pattern = p; r.step = s; r.found = true; }
+      if (rig.proj.patterns[p].tracks[track].steps[s].flags() & kStepOn) { r.pattern = p; r.step = s; r.found = true; }
   r.seqOnsNear = rig.v[track].ons().size();   // 1 = only the live note sounded
   return r;
 }
@@ -109,7 +109,7 @@ static void testRecord() {
   const double L = rig.stepLen();
   rig.proj.patterns[0].length = 8;
   Step pre = kDefaultStep;
-  pre.note = 55; pre.lockParam = 3; pre.lockValue = 9; pre.prob = 80; pre.flags = uint8_t(2 << kStepRatchetShift);
+  pre.note = 55; pre.setLock(3, 9); pre.setProb(80); pre.setFlags(uint8_t(2 << kStepRatchetShift));
   rig.step(0, kTrackSnare, 4) = pre;                        // off, but carries tuning/lock/prob/ratchet
   rig.step(0, kTrackLead, 4) = pre;
   rig.post(CmdType::SetRecord, 0, 0, 1);
@@ -122,15 +122,15 @@ static void testRecord() {
   rig.post(noteOn(kTrackLead, 72, 93, kStepAccent | kStepSlide, kChordSus4));
   rig.runSamples(long(7.5 * L) - rig.time);
   const Step& d = rig.step(0, kTrackSnare, 4);
-  CHECKF(d.flags == (kStepOn | (2 << kStepRatchetShift)) && d.vel == 93 && d.note == 55 && d.lockParam == 3 && d.lockValue == 9 && d.prob == 80 && d.gate == pre.gate,
-         "drum record wrote flags %02x vel %d note %d", d.flags, d.vel, d.note);
+  CHECKF(d.flags() == (kStepOn | (2 << kStepRatchetShift)) && d.vel == 93 && d.note == 55 && d.lockParam() == 3 && d.lockValue() == 9 && d.prob() == 80 && d.gate == pre.gate,
+         "drum record wrote flags %02x vel %d note %d", d.flags(), d.vel, d.note);
   const Step& s = rig.step(0, kTrackLead, 4);
-  CHECKF(s.flags == (kStepOn | kStepAccent | kStepSlide | (2 << kStepRatchetShift)) && s.vel == 93 && s.note == 72 && s.chord == kChordSus4 && s.gate == kDefaultStep.gate,
-         "synth record wrote flags %02x vel %d note %d chord %d gate %d", s.flags, s.vel, s.note, s.chord, s.gate);
+  CHECKF(s.flags() == (kStepOn | kStepAccent | kStepSlide | (2 << kStepRatchetShift)) && s.vel == 93 && s.note == 72 && s.chord() == kChordSus4 && s.gate == kDefaultStep.gate,
+         "synth record wrote flags %02x vel %d note %d chord %d gate %d", s.flags(), s.vel, s.note, s.chord(), s.gate);
   CHECK(rig.eng.status().revision == rev0 + 2);
   CHECK(rig.v[kTrackLead].ons().size() == 1);
-  rig.proj.patterns[0].tracks[kTrackLead].steps[4].flags = kStepOn;   // drop ratchet for a simple count
-  rig.proj.patterns[0].tracks[kTrackLead].steps[4].prob = 100;
+  rig.proj.patterns[0].tracks[kTrackLead].steps[4].setFlags(kStepOn);   // drop ratchet for a simple count
+  rig.proj.patterns[0].tracks[kTrackLead].steps[4].setProb(100);
   rig.runSamples(long(20.5 * L) - rig.time);
   const auto lo = rig.v[kTrackLead].ons();
   CHECKF(lo.size() == 3, "recorded note should play on passes 2 and 3 (got %zu note-ons)", lo.size());
@@ -151,7 +151,7 @@ static void testRecord() {
   rig.post(noteOn(kTrackSnare, 60, 100));
   rig.run(4);
   bool any = false;
-  for (int st = 0; st < kMaxSteps; ++st) any |= (rig.step(0, kTrackSnare, st).flags & kStepOn) != 0;
+  for (int st = 0; st < kMaxSteps; ++st) any |= (rig.step(0, kTrackSnare, st).flags() & kStepOn) != 0;
   CHECK(!any && rig.eng.status().revision == 0);
   CHECK(rig.v[kTrackSnare].ons().size() == 2);
 }
@@ -172,7 +172,7 @@ static void testQueue() {
   rig.run(8);
   int applied = 0;
   for (int i = 0; i < 256; ++i)
-    if (rig.proj.patterns[i % 16].tracks[(i / 16) % 8].steps[(i / 128) % 64].flags & kStepOn) ++applied;
+    if (rig.proj.patterns[i % 16].tracks[(i / 16) % 8].steps[(i / 128) % 64].flags() & kStepOn) ++applied;
   CHECKF(applied == 256, "%d of 256 queued edits applied", applied);
   CHECK(rig.eng.status().revision == 257);
 
@@ -201,7 +201,7 @@ static void testQueue() {
   for (int i = 1; i < 16; ++i) rig.post(CmdType::CopyPattern, i - 1, i);
   rig.run(1);
   int copied = 0;
-  for (int i = 1; i < 16; ++i) copied += (rig.step(i, kTrackKick, 0).flags & kStepOn) ? 1 : 0;
+  for (int i = 1; i < 16; ++i) copied += (rig.step(i, kTrackKick, 0).flags() & kStepOn) ? 1 : 0;
   CHECKF(copied >= 1 && copied < 15, "bulk copies in the first quantum: %d (should be throttled)", copied);
   rig.run(20);
   copied = 0;
@@ -281,7 +281,7 @@ static void testSuspend() {
   CHECK(!st.playing && st.pattern == 0 && st.queuedPattern == 0xFF && st.revision != revBefore);
   // An edit queued while suspended was meant for the old project: discarded
   // (see Engine::suspend(); test_engine_suspend covers the details).
-  CHECK(!(rig.step(0, kTrackSnare, 3).flags & kStepOn));
+  CHECK(!(rig.step(0, kTrackSnare, 3).flags() & kStepOn));
   CHECK(rig.v[kTrackKick].chokes().size() >= 1);
   rig.post(CmdType::Play);
   rig.runSeconds(1.0);
@@ -296,7 +296,7 @@ static void testSuspend() {
   rig.post(CmdType::Play);
   rig.runSeconds(0.5);
   CHECK(rig.proj.patterns[3].length <= kMaxSteps && rig.proj.patterns[3].tracks[2].length <= kMaxSteps);
-  CHECK(rig.proj.globals[kGTempo] == 200 && rig.proj.patterns[0].tracks[0].steps[0].prob == 100);
+  CHECK(rig.proj.globals[kGTempo] == 200 && rig.proj.patterns[0].tracks[0].steps[0].prob() == 100);
   CHECK(engine_detail::faultCount() == 0);
 
   // Two threads: the audio thread hammers process(); suspend() must only return
@@ -393,19 +393,21 @@ static void testEdits() {
   };
   // SetStep stores the step, clamping out-of-range fields.
   Command c = cmd(CmdType::SetStep, 2, kTrackLead, 63);
-  c.step = {200, kStepOn | kStepAccent, 0, 255, 250, 99, 77, 9};
+  c.step = {200, kStepOn | kStepAccent, 0, 255, 100, {77, 9, 3}};
+  c.step.setProb(127);
+  c.step.setChord(15);
   rig.post(c);
   expectRev(1, "SetStep");
   const Step& s = rig.step(2, kTrackLead, 63);
-  CHECK(s.note == 127 && s.flags == (kStepOn | kStepAccent) && s.vel == 1 && s.gate == 255 && s.prob == 100 && s.chord == 0 && s.lockParam == 0);
+  CHECK(s.note == 127 && s.flags() == (kStepOn | kStepAccent) && s.vel == 1 && s.gate == 255 && s.prob() == 100 && s.chord() == 0 && s.lockParam() == 0);
   c = cmd(CmdType::SetStep, 0, kTrackBass, 0);
   c.step = mkStep(60);
-  c.step.lockParam = 4 + 1; c.step.lockValue = 200;            // stub param 4 has range 5..50
+  c.step.setLock(4 + 1, 200);            // stub param 4 has range 5..50
   rig.post(c);
-  c.c = 1; c.step.lockParam = kMixPan + 1; c.step.lockValue = 255;
+  c.c = 1; c.step.setLock(kMixPan + 1, 255);
   rig.post(c);
   expectRev(2, "SetStep locks");
-  CHECK(rig.step(0, kTrackBass, 0).lockValue == 50 && rig.step(0, kTrackBass, 1).lockValue == 127);
+  CHECK(rig.step(0, kTrackBass, 0).lockValue() == 50 && rig.step(0, kTrackBass, 1).lockValue() == 127);
   // Out-of-range addresses are ignored.
   rig.post(CmdType::SetStep, 16, 0, 0);
   rig.post(CmdType::SetStep, 0, 8, 0);
@@ -462,10 +464,10 @@ static void testEdits() {
 
   // Copy / clear.
   Step a = mkStep(50, kStepOn | kStepSlide, 90, 3);
-  a.chord = kChordMin; a.lockParam = 2; a.lockValue = 33;
+  a.setChord(kChordMin); a.setLock(2, 33);
   rig.step(4, kTrackLead, 7) = a;
   Step m = mkStep(51, kStepOn, 80, 2);
-  m.lockParam = kMixPan + 1; m.lockValue = 20;
+  m.setLock(kMixPan + 1, 20);
   rig.step(4, kTrackLead, 8) = m;
   rig.step(4, kTrackKick, 1) = mkStep(61, kStepOn, 70, 1);
   rig.proj.patterns[4].length = 12;
@@ -477,16 +479,16 @@ static void testEdits() {
   rig.post(CmdType::CopyTrack, 6, kTrackKick, kTrackPerc);
   expectRev(2, "CopyTrack");
   const Step& bs = rig.step(6, kTrackBass, 7);
-  CHECKF(bs.note == 50 && bs.flags == (kStepOn | kStepSlide) && bs.vel == 90 && bs.gate == 3 && bs.chord == 0 && bs.lockParam == 0,
-         "lead->bass copy: chord %d lock %d", bs.chord, bs.lockParam);
-  CHECK(rig.step(6, kTrackBass, 8).lockParam == kMixPan + 1 && rig.step(6, kTrackBass, 8).lockValue == 20);   // mixer locks survive
+  CHECKF(bs.note == 50 && bs.flags() == (kStepOn | kStepSlide) && bs.vel == 90 && bs.gate == 3 && bs.chord() == 0 && bs.lockParam() == 0,
+         "lead->bass copy: chord %d lock %d", bs.chord(), bs.lockParam());
+  CHECK(rig.step(6, kTrackBass, 8).lockParam() == kMixPan + 1 && rig.step(6, kTrackBass, 8).lockValue() == 20);   // mixer locks survive
   CHECK(rig.proj.patterns[6].tracks[kTrackBass].length == 9);
   CHECK(std::memcmp(&rig.proj.patterns[6].tracks[kTrackKick], &rig.proj.patterns[6].tracks[kTrackPerc], sizeof(TrackPattern)) == 0);
   rig.post(CmdType::ClearTrack, 6, kTrackLead);
   expectRev(1, "ClearTrack");
   bool clean = rig.proj.patterns[6].tracks[kTrackLead].length == 9;
   for (int i = 0; i < kMaxSteps; ++i) clean &= std::memcmp(&rig.step(6, kTrackLead, i), &kDefaultStep, sizeof(Step)) == 0;
-  CHECK(clean && (rig.step(6, kTrackBass, 7).flags & kStepOn));
+  CHECK(clean && (rig.step(6, kTrackBass, 7).flags() & kStepOn));
   rig.post(CmdType::ClearPattern, 6);
   expectRev(1, "ClearPattern");
   clean = rig.proj.patterns[6].length == 16;

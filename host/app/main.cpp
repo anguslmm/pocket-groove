@@ -312,9 +312,11 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   uint32_t lockedMask(int track) override {
     const pg::TrackPattern& tp = g_inst.project().patterns[g_ui.editPattern() & 15].tracks[track & 7];
     uint32_t m = 0;
+    if (!pg::instrumentId(g_inst.project().tracks[track & 7])) return 0;   // CLASSIC: locks, no macro values
     for (int i = 0; i < tp.length && i < pg::kMaxSteps; ++i)
-      if ((tp.steps[i].flags & pg::kStepOn) && pg::isMacroLock(tp.steps[i].lockParam))
-        m |= 1u << (tp.steps[i].lockParam - pg::kLockMacro0);
+      if (tp.steps[i].on())
+        for (int k = 0; k < pg::kTrackMacros; ++k)
+          if (tp.steps[i].hasMacro(k)) m |= 1u << k;
     return m;
   }
   // While a note is typed after a mark the keyboard is the lab's (text input on).

@@ -782,8 +782,8 @@ void Lab::draw(uint8_t* px) {
     s2 = m.size() > 29 ? fitStart(m.substr(29), 29) : std::string();
     sc = AMBER;
   } else if (set && locked) {
-    s1 = "CYAN: MACRO LOCKED ON STEPS";
-    s2 = "OF THIS PATTERN (LOCKS WIN)";
+    s1 = "CYAN: NOTES HOLD OWN VALUES";
+    s2 = "(MOTION; THE SLIDER: ITS BASE)";
     sc = CYAN;
   } else if (set && t.focus < nm && set->macros[t.focus].desc[0]) {
     const std::string m = std::string(set->macros[t.focus].name) + ": " + set->macros[t.focus].desc;

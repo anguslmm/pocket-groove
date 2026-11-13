@@ -12,8 +12,14 @@
 //                 instrument, undo / redo of a run of changes
 //   CLASSIC       the page, the invitation, picking one, undo back to the
 //                 exact classic values; developer mode shows the parameters
-//   locks         hold a step + macro key / -/= = macro lock (both keys:
-//                 the default), DEL removes it, the STEP EDIT LOCK field
+//   note values   hold a step + macro key / -/= = that note's own value of the
+//                 macro, one per macro (both keys: the default), in whole levels
+//                 of 63; DEL removes the focused macro's, then all; the STEP EDIT
+//                 MOTION field (its pad again: the next macro)
+//   motion        while playing the sliders follow the engine (the base stays);
+//                 a move of a macro with motion only moves its base; record on +
+//                 a held macro key = live (written into the notes passed, one
+//                 undo unit); hold DEL + a macro key clears its motion (undo)
 //   sweep         SHIFT+[ ] moves the bass's macro 1 (CLASSIC: the cutoff)
 //   help          key labels and explain texts of the page and its SHIFT layer
 #include <cstdio>
@@ -253,37 +259,56 @@ static void testClassic() {
   CHECK(!R->ui.instrumentPage());
 }
 
+static int code(int pos) { return macroPosToCode(pos); }
+static int lvl(int c) { return macroCodeToPos(c); }
+
 static void testLocks() {
   newProjectOnBass();
   const macro::MacroSet* acid = first(kTrackBass);
-  const int p0 = MAC(kTrackBass, 0);
-  // hold step 1 + macro key = a macro lock on that step
+  const int p0 = MAC(kTrackBass, 0), p1 = MAC(kTrackBass, 1);
+  // hold step 1 + macro key = that note's own value of the macro, one level up
   down("1");
   R->run(300);
   tap("x");
-  CHECK_EQ(R->step(kTrackBass, 0).lockParam, kLockMacro0);
-  CHECK_EQ(R->step(kTrackBass, 0).lockValue, p0 + 2);
+  CHECK(R->step(kTrackBass, 0).hasMacro(0));
+  CHECK_EQ(R->step(kTrackBass, 0).macroValue(0), lvl(code(p0) + 1));
   CHECK_EQ(MAC(kTrackBass, 0), p0);              // the macro itself did not move
   down("shift"); tap("x"); up("shift");
-  CHECK_EQ(R->step(kTrackBass, 0).lockValue, p0 + 18);
-  tap("v");                                       // another macro replaces the lock (one per step)
-  CHECK_EQ(R->step(kTrackBass, 0).lockParam, kLockMacro0 + 1);
+  CHECK_EQ(R->step(kTrackBass, 0).macroValue(0), lvl(code(p0) + 5));
+  tap("v");                                       // a second macro: its own value too, the first stays
+  CHECK(R->step(kTrackBass, 0).hasMacro(1) && R->step(kTrackBass, 0).hasMacro(0));
+  CHECK_EQ(R->step(kTrackBass, 0).macroValue(1), lvl(code(p1) + 1));
+  CHECK_EQ(R->step(kTrackBass, 0).macroValue(0), lvl(code(p0) + 5));
   down("c"); down("v"); up("v"); up("c");        // both keys: the default on that step
-  CHECK_EQ(R->step(kTrackBass, 0).lockValue, macro::startByte(acid->macros[1]));
-  tap("=");                                       // -/= edit the lock of the focused macro
-  CHECK_EQ(R->step(kTrackBass, 0).lockValue, macro::startByte(acid->macros[1]) + 2);
-  tap("del");
-  CHECK_EQ(R->step(kTrackBass, 0).lockParam, 0);
+  CHECK_EQ(R->step(kTrackBass, 0).macroValue(1), lvl(code(macro::startByte(acid->macros[1]))));
+  tap("=");                                       // -/= edit the focused macro's value
+  CHECK_EQ(R->step(kTrackBass, 0).macroValue(1), lvl(code(macro::startByte(acid->macros[1])) + 1));
+  R->frame();                                     // drawn: both sliders in the held-step language
+  tap("del");                                     // DEL: the focused macro's value first ...
+  CHECK(!R->step(kTrackBass, 0).hasMacro(1) && R->step(kTrackBass, 0).hasMacro(0));
+  tap("del");                                     // ... then the rest
+  CHECK(!R->step(kTrackBass, 0).hasExt());
+  tap("x");
   up("1");
-  CHECK(R->step(kTrackBass, 0).flags & kStepOn);  // the hold turned the step on, an edit keeps it
-  // the STEP EDIT LOCK field in GROOVE locks the focused macro
+  CHECK(R->step(kTrackBass, 0).on());             // the hold turned the step on, an edit keeps it
+  CHECK(R->step(kTrackBass, 0).hasMacro(0));
+  // the STEP EDIT MOTION field in GROOVE edits the focused macro's value
   tap("`");
   down("2");
   R->run(300);
-  tap("k");                                       // LOCK field
+  tap("k");                                       // MOTION field
   tap("=");
-  CHECK_EQ(R->step(kTrackBass, 1).lockParam, kLockMacro0 + 1);   // focus: macro 2
-  CHECK_EQ(R->step(kTrackBass, 1).lockValue, MAC(kTrackBass, 1) + 2);
+  CHECK(R->step(kTrackBass, 1).hasMacro(0) && !R->step(kTrackBass, 1).hasMacro(1));   // focus: macro 1 (x)
+  CHECK_EQ(R->step(kTrackBass, 1).macroValue(0), lvl(code(MAC(kTrackBass, 0)) + 1));
+  tap("k");                                       // the field's pad again: the next macro
+  CHECK_EQ(R->ui.trackFocus(kTrackBass), kMacroIndex0 + 1);
+  tap("=");
+  CHECK(R->step(kTrackBass, 1).hasMacro(1) && R->step(kTrackBass, 1).hasMacro(0));
+  CHECK_EQ(R->step(kTrackBass, 1).macroValue(1), lvl(code(MAC(kTrackBass, 1)) + 1));
+  tap("del");                                     // the focused one (macro 2)
+  CHECK(!R->step(kTrackBass, 1).hasMacro(1) && R->step(kTrackBass, 1).hasMacro(0));
+  for (int i = 0; i < 4; ++i) tap("k");           // round the four and back to macro 2
+  CHECK_EQ(R->ui.trackFocus(kTrackBass), kMacroIndex0 + 1);
   for (int i = 0; i < 6; ++i) { down("shift"); tap("="); up("shift"); }   // far enough to be heard
   up("2");
   // played: the lock reaches the voice at its step
@@ -294,6 +319,82 @@ static void testLocks() {
   engine_detail::effectiveParams(kTrackBass, eff);
   CHECK(std::memcmp(eff, TS(kTrackBass).params, kSoundParams) != 0);
   tap("space");
+}
+
+// Motion on the page: the sliders follow the engine while the pattern plays (the
+// base stays), the clear gesture (hold DEL + a macro key), a recording pass of a
+// moved macro (live: the chip in the record colour, written into the notes, one
+// undo unit).
+static void testMotion() {
+  newProjectOnBass();
+  const int p0 = MAC(kTrackBass, 0), p1 = MAC(kTrackBass, 1);
+  // two notes with their own OPEN, set by hand (hold the step, tap the macro key)
+  down("1"); R->run(300);
+  for (int i = 0; i < 20; ++i) tap("z");
+  up("1");
+  down("5"); R->run(300);
+  for (int i = 0; i < 20; ++i) tap("x");
+  up("5");
+  const int lo = R->step(kTrackBass, 0).macroValue(0), hi = R->step(kTrackBass, 4).macroValue(0);
+  CHECK(lo < p0 && hi > p0);
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 1);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), p0);  // stopped: the page shows the base
+  // playing: the slider follows the engine; the base does not move
+  tap("space");
+  int seenLo = 999, seenHi = -1, follow = 0, frames = 0;
+  for (int f = 0; f < 120; ++f) {
+    R->run(33);
+    const int v = R->ui.shownMacro(kTrackBass, 0);
+    seenLo = v < seenLo ? v : seenLo;
+    seenHi = v > seenHi ? v : seenHi;
+    ++frames;
+    // (the page shows the status of its last frame: within one frame's movement, ~11)
+    follow += std::abs(v - int(engine_detail::macroPosition(kTrackBass, 0) + 0.5f)) <= 16;
+  }
+  CHECK(seenLo <= lo + 2 && seenHi >= hi - 2);
+  CHECK(follow >= frames - 2);
+  CHECK_EQ(MAC(kTrackBass, 0), p0);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 1), p1);  // no motion: its position
+  // a move of OPEN while the motion owns it: only its base
+  tap("x");
+  CHECK_EQ(MAC(kTrackBass, 0), p0 + 2);
+  // record on: a moved macro is live (heard, written into the notes it passes)
+  tap("ent");
+  down("v");
+  R->run(2500);                                   // more than a bar: every note passes
+  CHECK(R->ui.macroLive(kTrackBass, 1));
+  R->frame();                                     // drawn: BITE's chip in the record colour
+  up("v");
+  CHECK(R->step(kTrackBass, 0).hasMacro(1) && R->step(kTrackBass, 4).hasMacro(1));
+  CHECK(!R->step(kTrackBass, 2).hasExt());        // no values on empty steps
+  CHECK(R->ui.undoAvailable());
+  tap("ent");                                     // record off: the pass ends, BITE plays its new motion
+  R->run(100);
+  CHECK(!R->ui.macroLive(kTrackBass, 1));
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 3);
+  ctrl("z");                                      // the pass is one undo unit
+  R->run(100);
+  CHECK(!R->step(kTrackBass, 0).hasMacro(1) && !R->step(kTrackBass, 4).hasMacro(1));
+  CHECK(R->step(kTrackBass, 0).hasMacro(0) && R->step(kTrackBass, 4).hasMacro(0));   // the hand-set ones stay
+  // clear OPEN's motion: hold DEL, tap one of its keys
+  down("del");
+  tap("z");
+  up("del");
+  R->run(50);
+  CHECK(toastHas("MOTION CLEARED"));
+  CHECK_EQ(R->ui.motionMask(kTrackBass), 0);
+  CHECK(!R->step(kTrackBass, 0).hasExt() && !R->step(kTrackBass, 4).hasExt());
+  CHECK(R->step(kTrackBass, 0).on());             // the notes stay
+  R->run(400);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), MAC(kTrackBass, 0));
+  down("del"); tap("z"); up("del");
+  CHECK(toastHas("NO MOTION"));
+  ctrl("z");                                      // undo brings the values back
+  R->run(100);
+  CHECK(R->step(kTrackBass, 0).hasMacro(0) && R->step(kTrackBass, 4).hasMacro(0));
+  tap("space");
+  R->run(100);
+  CHECK_EQ(R->ui.shownMacro(kTrackBass, 0), MAC(kTrackBass, 0));   // stopped: the base again
 }
 
 static void testSweep() {
@@ -329,7 +430,7 @@ static void testHelp() {
   tap("x");
   R->ui.explainText(title, &l1, &l2);
   CHECK(std::strcmp(title, "x: OPEN UP") == 0 || std::strstr(title, "OPEN UP") != nullptr);
-  CHECK(std::strstr(l2, "LOCK") != nullptr);
+  CHECK(std::strstr(l2, "NOTE VALUE") != nullptr);
   tap(".");
   R->ui.explainText(title, &l1, &l2);
   CHECK(std::strstr(title, "NEXT INSTRUMENT") != nullptr);
@@ -363,6 +464,7 @@ int main() {
     testInstrumentSteps();
     testClassic();
     testLocks();
+    testMotion();
     testSweep();
     testHelp();
   }

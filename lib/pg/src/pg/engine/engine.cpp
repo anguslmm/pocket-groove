@@ -56,7 +56,7 @@ struct PendNote {
 struct TrackRt {
   // ---- sequencer ----
   uint8_t pos, next;                  // last evaluated step / next step index
-  uint8_t lockParam, lockValue;       // active p-lock (lockParam = index + 1, 0 = none)
+  uint8_t lockParam, lockValue;       // CLASSIC: active p-lock (lockParam = index + 1, 0 = none)
   uint8_t supValid, supPattern, supStep;   // one-shot "don't fire this step" after a recorded note
   uint8_t ratLeft, ratSlide;
   int32_t ratCd, ratInterval, ratGate;
@@ -78,18 +78,23 @@ struct TrackRt {
   uint8_t bindValid;                  // 0: (re)bind at the next quantum
   uint8_t evPos[kTrackMacros];        // the positions the derived values came from
   uint8_t iMix[macro::kMixRows];      // the instrument's evaluated mixer rows (level .. duck)
-  uint8_t lkSound[kSoundParams];      // with a macro lock in scope: the sound params with that macro at the lock
-  uint8_t lkMix[macro::kMixRows];     // ... and its mixer rows
-  uint8_t lkValid;                    // lkSound / lkMix hold the current macro lock's evaluation
+  uint8_t lkSound[kSoundParams];      // with the macros standing away from the stored bytes (motion): the sound
+  uint8_t lkMix[macro::kMixRows];     // params and mixer rows the 7-bit path plays there (at stand[])
+  uint8_t stand[kTrackMacros];        // where the macros stand, rounded, when lkSound / lkMix are valid
+  uint8_t standOn;                    // lkSound / lkMix are in use (stand[] differs from the stored bytes)
   uint8_t dMix[macro::kMixRows];      // mixer defaults, the reference of the mixer rule
   // ---- macro motion (engine.h "MACRO MOTION") ----
   float mFrom[kTrackMacros], mTo[kTrackMacros];   // ramp in position units 0..255; mTo = where it is / goes
   uint32_t mStart[kTrackMacros];      // qCount when the ramp began
-  uint16_t mDur[kTrackMacros];        // ramp length, quanta
+  uint32_t mDur[kTrackMacros];        // ramp length, quanta (a motion glide can be 128 steps at 60 BPM: 32 s)
   uint8_t moving;                     // bit m: macro m is on a ramp
   uint8_t fine;                       // the voice plays fractional values (fineTick), not eff[0..23]
   uint8_t anchor;                     // start an interval at the next quantum: 1 from the values now, 2 jump, 3 entering
   uint8_t settling;                   // the motion ended: the interval runs into the stored bytes
+  // ---- motion (engine.h "MOTION"): the notes' own macro values ----
+  uint8_t kfMask;                     // bit m: macro m has keyframes in the playing pattern (motion owns it)
+  uint8_t live;                       // bit m: motion recording: the player's hand moves macro m (heard, written)
+  uint32_t liveUntil[kTrackMacros];   // qCount after which a still hand stops being live (one bar)
   // The values the voice hears move linearly from fA (at iStart) to fB (at iStart + iLen):
   // fB is the instrument evaluated where the macros will be at the interval's end, so
   // the set is evaluated once per interval (kFineEvalQuanta), the voice fed every tick.
@@ -140,6 +145,8 @@ struct State {
   std::atomic<uint8_t> aStep[kNumTracks], aTrig[kNumTracks];
   std::atomic<float> aPeakL, aPeakR, aDuck;
   std::atomic<uint32_t> aRevision;
+  std::atomic<uint32_t> aMacPos[kNumTracks];          // heard macro positions, rounded, byte m = macro m
+  std::atomic<uint8_t> aMotion[kNumTracks], aLive[kNumTracks];
 
   // ---- suspend / resume ----
   std::atomic<bool> suspendReq, inProcess;
@@ -159,6 +166,10 @@ struct State {
   uint8_t writesDone;                 // WriteTrack / WritePattern commands consumed
   uint8_t instRefreshes;              // RefreshInstruments commands consumed
   uint8_t fineTracks;                 // bit t: tr[t].fine (one compare per quantum when nothing moves)
+  uint8_t motDirty;                   // bit t: re-aim track t's motion at the next quantum (edits, tempo, queue)
+  bool motStart;                      // Play from the top: the first step sets the motions' start values
+  bool boundaryNow;                   // fireMasterStep: this step began a pattern
+  uint8_t pubMask;                    // bit t: publish track t's macro positions at the end of the quantum
   uint16_t rampQ;                     // kMacroRampMs in quanta
   uint16_t settleQ;                   // kMacroSettleMs in quanta
   uint32_t qCount;                    // quanta processed (record timing)
@@ -225,7 +236,9 @@ struct State {
   void resetFx();
   void sanitizeProject();
   void sanitizeTrackSound(int t);
-  bool sanitizeStep(int track, Step& s) const;
+  bool sanitizeStep(int track, bool inst, Step& s) const;
+  bool instTrack(int t) const { return instrumentId(proj->tracks[t]) != 0; }
+  void clearTrackExt(int t);
   bool sanitizeAll(Project& p) const;
   bool sanitizeTrack(Project& p, int t) const;
   void paramRange(int track, int idx, int& lo, int& hi) const;
@@ -267,10 +280,22 @@ struct State {
   void deriveInto(const macro::MacroSet& set, int t, const uint8_t* positions, uint8_t* out) const;
   void evalInstrument(int t, int lockMacro, uint8_t lockPos, uint8_t* out);
   void refreshInstrument(int t, bool rebind);
-  void evalLock(int t);
+  void updateStand(int t);
   // macro motion
   float macroPos(const TrackRt& r, int m, uint32_t q) const;
   void startRamp(int t, int m, uint8_t target, uint16_t quanta);
+  void rampTo(int t, int m, float from, float to, uint32_t quanta);
+  // motion
+  uint8_t keyframeMask(int t, int pattern) const;
+  void motionStep(int t, bool fresh);
+  void aimMotion(int t, uint8_t which, uint32_t minQuanta);
+  void refreshMotion();
+  float loopStartValue(int t, int m) const;
+  void liveStep(int t);
+  void publishMotion(int t) {
+    aMotion[t].store(tr[t].kfMask, std::memory_order_relaxed);
+    aLive[t].store(tr[t].live, std::memory_order_relaxed);
+  }
   void jumpMacro(int t, int m, float to);
   void resetMotion(int t);
   void fineValues(int t, uint32_t q, float* v);
@@ -394,7 +419,8 @@ void State::resetRuntime() {
     std::memset(r.eff, 0, sizeof(r.eff));
     r.bindValid = 0;                  // a new project may be in place: bind at the next quantum
     r.inst = nullptr;
-    r.lkValid = 0;
+    r.standOn = 0;
+    r.kfMask = r.live = 0;
     r.moving = 0;
     r.fine = r.anchor = r.settling = 0;
     for (int i = 0; i < kSoundParams + 3; ++i) r.fA[i] = r.fB[i] = 0;
@@ -405,6 +431,11 @@ void State::resetRuntime() {
     for (int m = 0; m < kTrackMacros; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;
   }
   fineTracks = 0;
+  motDirty = 0;
+  motStart = false;
+  boundaryNow = false;
+  pubMask = 0xFF;
+  for (int t = 0; t < kNumTracks; ++t) publishMotion(t);
   duck.reset();
   fxDuckPrev = 1.0f;
   duckPrev = 1.0f;
@@ -456,27 +487,32 @@ void State::paramRange(int track, int idx, int& lo, int& hi) const {
 
 // Clamp one step to the documented field ranges. Returns true if it changed.
 // DECISION: unknown flag bits are cleared, gate 0 becomes 1, a chord on a
-// track other than the lead is dropped, and a p-lock naming a param that does
-// not exist (unused voice slot, reserved mixer slot) is removed.
-bool State::sanitizeStep(int track, Step& s) const {
+// track other than the lead is dropped. CLASSIC track: a lock naming a param
+// that does not exist (unused voice slot, reserved mixer slot) is removed, its
+// value clamped, ext[2] zero. Instrument track (`inst`): the step's last three
+// bytes are four macro codes, every value legal.
+bool State::sanitizeStep(int track, bool inst, Step& s) const {
   Step o = s;
   if (s.note > 127) s.note = 127;
-  s.flags &= uint8_t(kStepOn | kStepAccent | kStepSlide | kStepRatchetMask);
   if (s.vel < 1) s.vel = 1;
   if (s.vel > 127) s.vel = 127;
   if (s.gate < 1) s.gate = 1;
-  if (s.prob > 100) s.prob = 100;
-  if (s.chord >= kChordNum || track != kTrackLead) s.chord = 0;
-  if (s.lockParam >= kLockMacro0 + kTrackMacros) s.lockParam = 0;
-  if (s.lockParam && !isMacroLock(s.lockParam)) {   // a macro lock's value is any position 0..255
-    const int idx = s.lockParam - 1;
-    const bool exists = idx < kSoundParams ? (tr[track].pHas >> idx) & 1u : mixParamInfo(track, idx) != nullptr;
-    if (!exists) {
-      s.lockParam = 0;
+  if (s.prob() > 100) s.setProb(100);
+  if (s.chord() >= kChordNum || track != kTrackLead) s.setChord(0);
+  if (!inst) {
+    const int lp = s.lockParam();
+    if (lp == 0 || lp > kParamsPerTrack) {
+      s.clearExt();
     } else {
-      int lo, hi;
-      paramRange(track, idx, lo, hi);
-      s.lockValue = uint8_t(clampi(s.lockValue, lo, hi));
+      const int idx = lp - 1;
+      const bool exists = idx < kSoundParams ? (tr[track].pHas >> idx) & 1u : mixParamInfo(track, idx) != nullptr;
+      if (!exists) {
+        s.clearExt();
+      } else {
+        int lo, hi;
+        paramRange(track, idx, lo, hi);
+        s.setLock(lp, clampi(s.lockValue(), lo, hi));
+      }
     }
   }
   return std::memcmp(&o, &s, sizeof(Step)) != 0;
@@ -494,6 +530,7 @@ bool State::sanitizeTrack(Project& p, int t) const {
     if (v != ts.params[i]) { ts.params[i] = v; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
+  const bool inst = instrumentId(ts) != 0;
   // DECISION: an instrument track's sound parameters are derived values, so the
   // sanitiser derives them (a project saved with an older version of a set comes
   // back with what the set gives now; the engine then finds nothing to change).
@@ -509,7 +546,7 @@ bool State::sanitizeTrack(Project& p, int t) const {
     TrackPattern& tp = p.patterns[pt].tracks[t];
     const uint8_t len = uint8_t(sanitizeLength(tp.length));
     if (len != tp.length) { tp.length = len; changed = true; }
-    for (int i = 0; i < kMaxSteps; ++i) changed |= sanitizeStep(t, tp.steps[i]);
+    for (int i = 0; i < kMaxSteps; ++i) changed |= sanitizeStep(t, inst, tp.steps[i]);
   }
   return changed;
 }
@@ -523,12 +560,25 @@ bool State::sanitizeAll(Project& p) const {
   if (p.version != kProjectVersion) {
     // DECISION: version 1 had no instruments (the bytes were reserved, zero): it loads
     // with none on any track (CLASSIC), whatever those bytes hold, so it sounds exactly
-    // as it did. Any other foreign version is treated the same way.
+    // as it did. Any other foreign version is treated the same way. Versions 1 and 2
+    // store steps in the old layout (StepV2): repacked here, losslessly (project.h).
+    const bool v2 = p.version == 2;
     for (int t = 0; t < kNumTracks; ++t) {
       TrackSettings& ts = p.tracks[t];
-      std::memset(ts.instrument, 0, sizeof(ts.instrument));
-      std::memset(ts.macro, 0, sizeof(ts.macro));
-      std::memset(ts.reserved, 0, sizeof(ts.reserved));
+      if (!v2) {
+        std::memset(ts.instrument, 0, sizeof(ts.instrument));
+        std::memset(ts.macro, 0, sizeof(ts.macro));
+        std::memset(ts.reserved, 0, sizeof(ts.reserved));
+      }
+      const bool inst = instrumentId(ts) != 0;
+      for (int pt = 0; pt < kNumPatterns; ++pt) {
+        Step* steps = p.patterns[pt].tracks[t].steps;
+        for (int i = 0; i < kMaxSteps; ++i) {
+          StepV2 o;
+          std::memcpy(&o, &steps[i], sizeof(o));
+          steps[i] = repackStepV2(o, inst);
+        }
+      }
     }
     p.version = kProjectVersion;
     changed = true;
@@ -590,6 +640,7 @@ void State::refreshGlobals() {
   if (!gValid || newBpm != bpm) {
     if (gValid && bpm > 0 && gridCd > 0) gridCd = gridCd * int64_t(bpm) / int64_t(newBpm);   // keep phase
     bpm = newBpm;
+    motDirty = 0xFF;
     const uint64_t srQ8 = uint64_t(sr * 256.0f + 0.5f);
     stepLenFP = ((srQ8 * 15u) << 24) / uint64_t(bpm);
     stepTicks = int32_t(stepLenFP >> 24);
@@ -598,6 +649,7 @@ void State::refreshGlobals() {
       if (tr[t].rollC) tr[t].rollInt = int64_t((stepLenFP * 2u) / tr[t].rollC);
     }
   }
+  if (gValid && v[kGSwing] != swing) motDirty = 0xFF;   // the notes' times moved: motion re-aims
   swing = v[kGSwing];
 
   duckSrc = v[kGDuckSource];
@@ -701,8 +753,9 @@ void State::apply(const Command& c) {
     case CmdType::SetStep: {
       if (c.a >= kNumPatterns || c.b >= kNumTracks || c.c >= kMaxSteps) break;
       Step s = c.step;
-      sanitizeStep(c.b, s);
+      sanitizeStep(c.b, instTrack(c.b), s);
       proj->patterns[c.a].tracks[c.b].steps[c.c] = s;
+      motDirty = uint8_t(motDirty | (1u << c.b));
       bump();
       break;
     }
@@ -726,11 +779,13 @@ void State::apply(const Command& c) {
     case CmdType::SetTrackLength:
       if (c.a >= kNumPatterns || c.b >= kNumTracks) break;
       proj->patterns[c.a].tracks[c.b].length = uint8_t(clampi(c.c, 1, kMaxSteps));
+      motDirty = uint8_t(motDirty | (1u << c.b));
       bump();
       break;
     case CmdType::SetPatternLength:
       if (c.a >= kNumPatterns) break;
       proj->patterns[c.a].length = uint8_t(clampi(c.c, 1, kMaxSteps));
+      motDirty = 0xFF;
       bump();
       break;
     case CmdType::SetMute:
@@ -748,6 +803,7 @@ void State::apply(const Command& c) {
       if (c.a >= kNumPatterns) break;
       if (playing) {
         queued = c.a;
+        motDirty = 0xFF;   // what plays next changed: glides into it re-aim from where they are
       } else {
         // Stopped: switch immediately and park at the top of the pattern.
         curPattern = c.a;
@@ -760,6 +816,7 @@ void State::apply(const Command& c) {
       // DECISION: an out-of-range start slot means slot 0. The start slot is
       // remembered: Play (from the top) in song mode restarts from it too.
       proj->songMode = c.c ? 1 : 0;
+      motDirty = 0xFF;
       if (proj->songMode) {
         songStart = c.a < kSongSlots ? c.a : 0;
         if (playing) {
@@ -779,18 +836,27 @@ void State::apply(const Command& c) {
       if (c.a >= kSongSlots || c.b >= kNumPatterns) break;
       proj->song[c.a].pattern = c.b;
       proj->song[c.a].repeats = c.c;
+      motDirty = 0xFF;
       bump();
       break;
     case CmdType::SetRecord:
       recording = c.c != 0;
       if (!recording)
-        for (int t = 0; t < kNumTracks; ++t) tr[t].recHeld = 0;
+        for (int t = 0; t < kNumTracks; ++t) {
+          tr[t].recHeld = 0;
+          if (tr[t].live) {   // the hands let go: the recorded motion plays
+            tr[t].live = 0;
+            motDirty = uint8_t(motDirty | (1u << t));
+            publishMotion(t);
+          }
+        }
       break;
     case CmdType::ClearTrack: {
       // DECISION: clears the steps, keeps the track's length.
       if (c.a >= kNumPatterns || c.b >= kNumTracks) break;
       TrackPattern& tp = proj->patterns[c.a].tracks[c.b];
       for (int s = 0; s < kMaxSteps; ++s) tp.steps[s] = kDefaultStep;
+      motDirty = uint8_t(motDirty | (1u << c.b));
       bump();
       break;
     }
@@ -803,32 +869,34 @@ void State::apply(const Command& c) {
         p.tracks[t].length = 16;
         for (int s = 0; s < kMaxSteps; ++s) p.tracks[t].steps[s] = kDefaultStep;
       }
+      motDirty = 0xFF;
       bump();
       break;
     }
     case CmdType::CopyPattern:
       if (c.a >= kNumPatterns || c.b >= kNumPatterns || c.a == c.b) break;
       std::memcpy(&proj->patterns[c.b], &proj->patterns[c.a], sizeof(Pattern));
+      motDirty = 0xFF;
       bump();
       break;
     case CmdType::CopyTrack: {
       // DECISION ("same type only"): drum -> drum and synth -> synth are allowed,
-      // drum <-> synth is ignored. Bass <- lead drops the chord field; p-locks
-      // on sound params are dropped when the voices differ (different meaning).
+      // drum <-> synth is ignored. Bass <- lead drops the chord field; CLASSIC
+      // p-locks on sound params are dropped when the voices differ (different
+      // meaning), and so are a note's own macro values (another instrument's
+      // macros) and anything that does not fit the destination's track kind.
       if (c.a >= kNumPatterns || c.b >= kNumTracks || c.c >= kNumTracks || c.b == c.c) break;
       if (isSynthTrack(c.b) != isSynthTrack(c.c)) break;
       TrackPattern& dst = proj->patterns[c.a].tracks[c.c];
       std::memcpy(&dst, &proj->patterns[c.a].tracks[c.b], sizeof(TrackPattern));
+      const bool srcInst = instTrack(c.b), dstInst = instTrack(c.c);
       for (int s = 0; s < kMaxSteps; ++s) {
         Step& st = dst.steps[s];
-        if (c.c != kTrackLead) st.chord = 0;
-        // sound-param and macro locks mean something else on another voice / instrument
-        if ((st.lockParam && st.lockParam <= kSoundParams) || isMacroLock(st.lockParam)) {
-          st.lockParam = 0;
-          st.lockValue = 0;
-        }
-        sanitizeStep(c.c, st);
+        if (c.c != kTrackLead) st.setChord(0);
+        if (srcInst || dstInst || (st.lockParam() && st.lockParam() <= kSoundParams)) st.clearExt();
+        sanitizeStep(c.c, dstInst, st);
       }
+      motDirty = uint8_t(motDirty | (1u << c.c));
       bump();
       break;
     }
@@ -838,13 +906,20 @@ void State::apply(const Command& c) {
     case CmdType::SetInstrument: {
       if (c.a >= kNumTracks) break;
       TrackSettings& ts = proj->tracks[c.a];
-      setInstrumentId(ts, uint16_t(c.step.lockParam | (c.step.lockValue << 8)));
+      const uint16_t id = uint16_t(c.step.ext[0] | (c.step.ext[1] << 8));
+      // The steps' last bytes are a lock on a CLASSIC track and macro values on an
+      // instrument track: a change of kind clears them (project.h Step).
+      if ((instrumentId(ts) != 0) != (id != 0)) clearTrackExt(c.a);
+      setInstrumentId(ts, id);
       ts.macro[0] = c.step.note;
-      ts.macro[1] = c.step.flags;
+      ts.macro[1] = c.step.flagsRaw;
       ts.macro[2] = c.step.vel;
       ts.macro[3] = c.step.gate;
       bump();
       refreshInstrument(c.a, true);   // now, so later commands of this drain see it
+      tr[c.a].kfMask = 0;             // (refreshInstrument jumped every macro to its byte)
+      tr[c.a].live = 0;
+      motDirty = uint8_t(motDirty | (1u << c.a));
       break;
     }
     case CmdType::SetMacro:
@@ -853,13 +928,34 @@ void State::apply(const Command& c) {
         proj->tracks[c.a].macro[c.b] = c.c;
         bump();
       }
+      {
+        // MOTION: with record on and the transport running the player's hand is live
+        // (heard, and written into the notes it passes); otherwise a macro whose motion
+        // the playing pattern owns only gets a new base (heard once the motion ends;
+        // a glide to the base re-aims).
+        TrackRt& r = tr[c.a];
+        const uint8_t bit = uint8_t(1u << c.b);
+        if (playing && recording && r.inst && c.b < r.inst->numMacros) {
+          r.live = uint8_t(r.live | bit);
+          r.liveUntil[c.b] = qCount + uint32_t((uint64_t(stepLenFP) * 16u) / uint64_t(kQuantumFP));   // a bar
+          publishMotion(c.a);
+        }
+        if ((r.kfMask & bit) && !(r.live & bit)) {
+          motDirty = uint8_t(motDirty | (1u << c.a));
+          break;
+        }
+      }
       // The stored parameters are derived after the drain (quantum()), once for any
       // number of moves; the voice follows the macro's trajectory (MACRO MOTION).
-      startRamp(c.a, c.b, c.c, uint16_t(c.step.lockParam | (c.step.lockValue << 8)));
+      startRamp(c.a, c.b, c.c, uint16_t(c.step.ext[0] | (c.step.ext[1] << 8)));
       break;
     case CmdType::RefreshInstruments:
       for (int t = 0; t < kNumTracks; ++t)
-        if (c.a == 0xFF || c.a == t) refreshInstrument(t, true);
+        if (c.a == 0xFF || c.a == t) {
+          refreshInstrument(t, true);
+          tr[t].kfMask = 0;
+          motDirty = uint8_t(motDirty | (1u << t));
+        }
       ++instRefreshes;
       aInstRefreshes.store(instRefreshes, std::memory_order_relaxed);
       break;
@@ -869,6 +965,7 @@ void State::apply(const Command& c) {
       // engine will never read the buffer again, which is what the UI waits for.
       if (c.ptr && c.a < kNumPatterns && c.b < kNumTracks) {
         writeTrack(c.a, c.b, static_cast<const TrackPattern*>(c.ptr));
+        motDirty = uint8_t(motDirty | (1u << c.b));
         bump();
       }
       ++writesDone;
@@ -880,6 +977,7 @@ void State::apply(const Command& c) {
         dst.length = uint8_t(sanitizeLength(src->length));
         std::memcpy(dst.reserved, src->reserved, sizeof(dst.reserved));
         for (int t = 0; t < kNumTracks; ++t) writeTrack(c.a, t, &src->tracks[t]);
+        motDirty = 0xFF;
         bump();
       }
       ++writesDone;
@@ -891,7 +989,14 @@ void State::writeTrack(int pattern, int track, const TrackPattern* src) {
   TrackPattern& dst = proj->patterns[pattern].tracks[track];
   std::memcpy(&dst, src, sizeof(TrackPattern));
   dst.length = uint8_t(sanitizeLength(dst.length));
-  for (int s = 0; s < kMaxSteps; ++s) sanitizeStep(track, dst.steps[s]);
+  const bool inst = instTrack(track);
+  for (int s = 0; s < kMaxSteps; ++s) sanitizeStep(track, inst, dst.steps[s]);
+}
+
+// Every step of track t in every pattern loses its lock / macro values.
+void State::clearTrackExt(int t) {
+  for (int pt = 0; pt < kNumPatterns; ++pt)
+    for (int s = 0; s < kMaxSteps; ++s) proj->patterns[pt].tracks[t].steps[s].clearExt();
 }
 
 // ---------------------------------------------------------------- roll ----
@@ -917,9 +1022,9 @@ void State::startRoll(int t, const Command& c) {
   NoteEvent ev;
   ev.note = c.step.note > 127 ? 127 : c.step.note;
   ev.vel = uint8_t(clampi(c.step.vel, 1, 127));
-  ev.accent = (c.step.flags & kStepAccent) != 0;
+  ev.accent = (c.step.flags() & kStepAccent) != 0;
   ev.slide = false;
-  ev.chord = (t == kTrackLead && c.step.chord < kChordNum) ? c.step.chord : 0;
+  ev.chord = (t == kTrackLead && c.step.chord() < kChordNum) ? c.step.chord() : 0;
   r.rollEv = ev;
   if (wasRolling && !playing) return;     // rate change while free-running: keep the phase
   if (!playing) {
@@ -988,6 +1093,7 @@ void State::play(bool cont) {
     if (!playing) {
       playing = true;
       gridCd = 0;
+      motDirty = 0xFF;   // motion picks up from where the macros are
       for (int t = 0; t < kNumTracks; ++t)
         if (tr[t].rollC) tr[t].rollCd = (tr[t].rollC & 1) && (absStep & 1) ? int64_t(stepLenFP) : 0;
     }
@@ -1010,6 +1116,8 @@ void State::play(bool cont) {
   sinceFire = 0;
   absStep = 0;
   playing = true;
+  motStart = true;     // the first step sets every motion's start value (motionStep)
+  motDirty = 0;
 #if PG_STEM_TAP
   playsLeft = endAfter > 0 ? endAfter - 1 : -1;
   seqHeld = false;
@@ -1023,9 +1131,23 @@ void State::play(bool cont) {
 // then choke()s every voice (voice.h names transport stop as a choke case), so
 // stop is tight; the send FX are untouched and ring out. P-locks are dropped so
 // the voices return to the params the UI shows.
+// DECISION (motion at Stop): the macros rest where the motion had them (a tail
+// or a live note sounds as the pattern left it); the motion lets go of them, so
+// the next move of a macro glides from there to its new base.
 void State::stop() {
   playing = false;
+  motStart = false;
+  motDirty = 0;
   for (int t = 0; t < kNumTracks; ++t) {
+    TrackRt& r = tr[t];
+    for (uint8_t b = r.kfMask; b; b = uint8_t(b & (b - 1))) {
+      const int m = __builtin_ctz(b);
+      jumpMacro(t, m, macroPos(r, m, qCount));
+    }
+    r.kfMask = 0;
+    r.live = 0;
+    publishMotion(t);
+    pubMask = uint8_t(pubMask | (1u << t));
     tr[t].recHeld = 0;
     releaseNotes(t);
     vChoke(t);
@@ -1045,13 +1167,11 @@ void State::buildEff(int t) {
   if (!r.inst) {
     if (r.lockParam && r.lockParam <= kParamsPerTrack) r.eff[r.lockParam - 1] = r.lockValue;   // CLASSIC
   } else {
-    // An instrument: params[0..23] are derived (or, with a macro lock in scope, its
-    // evaluation); sound-param locks are ignored; a mixer lock replaces the player's
-    // value, which then combines with the instrument's level and sends.
-    const bool macroLock = isMacroLock(r.lockParam) && r.lkValid;
-    if (macroLock) std::memcpy(r.eff, r.lkSound, kSoundParams);
-    if (r.lockParam > kSoundParams && r.lockParam <= kParamsPerTrack) r.eff[r.lockParam - 1] = r.lockValue;
-    macro::combineMixerRows(r.eff, macroLock ? r.lkMix : r.iMix, r.dMix, r.eff);
+    // An instrument: params[0..23] are derived (or, with the macros standing away from
+    // the stored bytes, the evaluation where they stand); no locks; the player's mixer
+    // values combine with the instrument's level and sends.
+    if (r.standOn) std::memcpy(r.eff, r.lkSound, kSoundParams);
+    macro::combineMixerRows(r.eff, r.standOn ? r.lkMix : r.iMix, r.dMix, r.eff);
   }
   r.mute = ts.mute;
 }
@@ -1098,12 +1218,13 @@ void State::refreshInstrument(int t, bool rebind) {
     r.bindValid = 1;
     resetMotion(t);                                // a new instrument jumps: nothing moves
   } else {
-    // Positions changed under the engine by another route than SetMacro: they jump.
+    // Positions changed under the engine by another route than SetMacro: they jump
+    // (not a macro the playing pattern's motion owns: that one only has a new base).
     for (int m = 0; m < kTrackMacros; ++m)
-      if (float(ts.macro[m]) != r.mTo[m]) jumpMacro(t, m, float(ts.macro[m]));
+      if (!((r.kfMask >> m) & 1u) && float(ts.macro[m]) != r.mTo[m]) jumpMacro(t, m, float(ts.macro[m]));
   }
   std::memcpy(r.evPos, ts.macro, kTrackMacros);
-  r.lkValid = 0;
+  r.standOn = 0;
   r.paramsSent = 0;
   if (!r.inst) return;   // CLASSIC or unknown: the stored parameters play
   uint8_t out[kParamsPerTrack];
@@ -1115,21 +1236,34 @@ void State::refreshInstrument(int t, bool rebind) {
   }
   for (int i = 0; i < macro::kMixRows; ++i) r.iMix[i] = out[kMixLevel + i];
   if (changed) bump();
-  if (isMacroLock(r.lockParam)) evalLock(t);
+  updateStand(t);
 }
 
-// The macro lock in scope (r.lockParam 33..36): the instrument with that macro at the lock's value.
-void State::evalLock(int t) {
+// The 7-bit path where the macros stand (no macro on a ramp): the stored values
+// when they stand on the stored bytes; otherwise (a motion holds them elsewhere, or
+// they rest there after Stop) the instrument evaluated there, once per change.
+void State::updateStand(int t) {
   TrackRt& r = tr[t];
-  r.lkValid = 0;
-  if (!r.inst || !isMacroLock(r.lockParam)) return;
-  const int m = r.lockParam - kLockMacro0;
-  if (m >= r.inst->numMacros) return;              // the set has no such macro: the lock does nothing
+  if (r.moving) return;   // the fractional path plays; asked again when the last ramp ends
+  const uint8_t* base = proj->tracks[t].macro;
+  uint8_t want[kTrackMacros];
+  bool diff = false;
+  for (int m = 0; m < kTrackMacros; ++m) {
+    want[m] = uint8_t(clampi(int(r.mTo[m] + 0.5f), 0, 255));
+    diff |= want[m] != base[m];
+  }
+  if (!r.inst || !diff) {
+    if (r.standOn) { r.standOn = 0; r.paramsSent = 0; }
+    return;
+  }
+  if (r.standOn && std::memcmp(want, r.stand, kTrackMacros) == 0) return;
+  std::memcpy(r.stand, want, kTrackMacros);
   uint8_t out[kParamsPerTrack];
-  evalInstrument(t, m, r.lockValue, out);
+  deriveInto(*r.inst, t, want, out);
   for (int i = 0; i < kSoundParams; ++i) r.lkSound[i] = ((r.pHas >> i) & 1u) ? out[i] : 0;
   for (int i = 0; i < macro::kMixRows; ++i) r.lkMix[i] = out[kMixLevel + i];
-  r.lkValid = 1;
+  r.standOn = 1;
+  r.paramsSent = 0;
 }
 
 void State::ensureParams(int t) {
@@ -1165,7 +1299,9 @@ void State::jumpMacro(int t, int m, float to) {
   TrackRt& r = tr[t];
   r.mFrom[m] = r.mTo[m] = to;
   r.moving = uint8_t(r.moving & ~(1u << m));
+  pubMask = uint8_t(pubMask | (1u << t));
   if (r.fine) r.anchor = 2;   // the values jump there at the next quantum
+  else updateStand(t);
 }
 
 // Every macro stands at its stored position and the track plays the 7-bit path.
@@ -1173,6 +1309,7 @@ void State::resetMotion(int t) {
   TrackRt& r = tr[t];
   for (int m = 0; m < kTrackMacros; ++m) r.mFrom[m] = r.mTo[m] = float(proj->tracks[t].macro[m]);
   r.moving = 0;
+  pubMask = uint8_t(pubMask | (1u << t));
   if (r.fine) exitFine(t);
 }
 
@@ -1184,13 +1321,19 @@ void State::resetMotion(int t) {
 // without a bound instrument, or a macro the set does not have: jump.
 void State::startRamp(int t, int m, uint8_t target, uint16_t quanta) {
   TrackRt& r = tr[t];
-  const float to = float(target);
-  if (quanta == 0) quanta = rampQ;
+  rampTo(t, m, macroPos(r, m, qCount), float(target), quanta == 0 ? rampQ : quanta);
+}
+
+// A straight line from `from` (where the macro is now, or a note's exact value) to
+// `to` in `quanta`; 1 or less: a jump.
+void State::rampTo(int t, int m, float from, float to, uint32_t quanta) {
+  TrackRt& r = tr[t];
   if (!r.inst || m >= r.inst->numMacros || quanta <= kMacroJump) { jumpMacro(t, m, to); return; }
-  const float from = macroPos(r, m, qCount);
+  pubMask = uint8_t(pubMask | (1u << t));
   if (from == to) {   // already there: it stops
     r.mFrom[m] = r.mTo[m] = to;
     r.moving = uint8_t(r.moving & ~(1u << m));
+    if (!r.fine) updateStand(t);
     return;
   }
   r.mFrom[m] = from;
@@ -1230,7 +1373,6 @@ void State::fineValues(int t, uint32_t q, float* v) {
   TrackRt& r = tr[t];
   float pos[kTrackMacros];
   for (int m = 0; m < kTrackMacros; ++m) pos[m] = macroPos(r, m, q) * (1.0f / float(macro::kPosMax));
-  if (isMacroLock(r.lockParam) && r.lkValid) pos[r.lockParam - kLockMacro0] = macro::posFromByte(r.lockValue);
   macro::FineRanges fr;
   fr.enumMask = r.fEnum;
   fr.stepMask = r.fStep;
@@ -1239,12 +1381,8 @@ void State::fineValues(int t, uint32_t q, float* v) {
   float all[kParamsPerTrack];
   macro::evaluateFine(*r.inst, fr, pos, r.dDef, all);
   for (int i = 0; i < kSoundParams; ++i) v[i] = ((r.pHas >> i) & 1u) ? all[i] : 0.0f;
-  // The player's mixer rows (a mixer lock replaces its value, as buildEff does).
-  uint8_t player[macro::kMixRows];
-  std::memcpy(player, proj->tracks[t].params + kMixLevel, macro::kMixRows);
-  if (r.lockParam > kMixLevel && r.lockParam <= kMixLevel + macro::kMixRows)
-    player[r.lockParam - 1 - kMixLevel] = r.lockValue;
-  macro::combineMixerFine(player, all + kMixLevel, r.dMix, v + kSoundParams);
+  // The player's mixer rows (instrument tracks have no locks).
+  macro::combineMixerFine(proj->tracks[t].params + kMixLevel, all + kMixLevel, r.dMix, v + kSoundParams);
 }
 
 // What the 7-bit path would play now, as floats in fineValues' layout.
@@ -1335,6 +1473,7 @@ __attribute__((noinline)) bool State::fineInterval(int t, float* cur) {
       fineValues(t, end, to);
       r.settling = 0;
     } else {
+      updateStand(t);   // the bytes to run into: the stored ones, or where a motion holds the macros
       bytesNow(t, to);
       r.settling = 1;
     }
@@ -1358,6 +1497,206 @@ void State::fineTick() {
   for (int t = 0; t < kNumTracks; ++t) {
     if (!((fineTracks >> t) & 1u)) continue;
     if (tr[t].anchor || ((qCount + uint32_t(t)) & uint32_t(kFineQuanta - 1)) == 0) fineEval(t);
+  }
+}
+
+// ---------------------------------------------------------------- motion ----
+// engine.h "MOTION". A keyframe of macro m on track t is a note (a step that is on)
+// with its own value of m, at its grid time with swing, within the master length
+// of the pattern (a track wraps on its own length). Nothing here runs per quantum:
+// motionStep runs at a step of a track whose pattern has motion (a few compares
+// unless the step is a keyframe), aimMotion (a scan of at most two patterns'
+// worth of steps) at a keyframe, a pattern boundary, or once per drain that
+// changed what the motion depends on (refreshMotion).
+
+namespace {
+// The quantum (counted from now, at least minQ) in which a step whose ideal time
+// is dFP (Q32 samples from this quantum's edge) fires: the sequencer fires a step
+// in the first quantum whose edge is less than half a quantum before it.
+uint32_t fireQuanta(int64_t dFP, uint32_t minQ) {
+  int64_t j = dFP < kHalfQuantumFP ? 0 : (dFP - kHalfQuantumFP) / kQuantumFP + 1;
+  if (j < int64_t(minQ)) j = minQ;
+  return uint32_t(j);
+}
+}  // namespace
+
+// Macros (bits) with keyframes in `pattern` for track t (only macros its set has).
+uint8_t State::keyframeMask(int t, int pattern) const {
+  const TrackRt& r = tr[t];
+  if (!r.inst || r.inst->numMacros <= 0) return 0;
+  const Pattern& P = proj->patterns[pattern];
+  const TrackPattern& tp = P.tracks[t];
+  const int tlen = sanitizeLength(tp.length), plen = sanitizeLength(P.length);
+  const int n = tlen < plen ? tlen : plen;
+  uint32_t w = 0;
+  for (int i = 0; i < n; ++i)
+    if (tp.steps[i].on()) w |= tp.steps[i].extWord();
+  uint8_t mask = 0;
+  for (int m = 0; m < kTrackMacros; ++m)
+    if ((w >> (6 * m)) & 63u) mask = uint8_t(mask | (1u << m));
+  return uint8_t(mask & ((1u << r.inst->numMacros) - 1u));
+}
+
+// Aims macros `which` of track t at their next keyframe after the steps already
+// played: through the rest of this pattern, then the pattern that plays next (the
+// same one looping, a queued one, the next song slot); none there: the base,
+// arriving at the boundary. From where the macro is now, arriving in the quantum
+// that note fires (at least minQuanta from now).
+void State::aimMotion(int t, uint8_t which, uint32_t minQuanta) {
+  TrackRt& r = tr[t];
+  which = uint8_t(which & ~r.live);
+  if (!which || !r.inst) return;
+  const int64_t L = int64_t(stepLenFP);
+  uint8_t found = 0;
+  uint8_t val[kTrackMacros] = {};
+  int64_t when[kTrackMacros] = {};
+  auto scan = [&](const Step& st, int64_t at) {
+    if (!st.on()) return;
+    for (uint8_t b = uint8_t(which & ~found); b; b = uint8_t(b & (b - 1))) {
+      const int m = __builtin_ctz(b);
+      if (st.hasMacro(m)) {
+        found = uint8_t(found | (1u << m));
+        val[m] = st.macroValue(m);
+        when[m] = at;
+      }
+    }
+  };
+  const int plen = curPatternLen();
+  int k = 0;
+  {
+    const TrackPattern& tp = proj->patterns[curPattern].tracks[t];
+    const int tlen = sanitizeLength(tp.length);
+    int s = r.next >= tlen ? 0 : r.next;
+    for (int idx = masterNext; idx < plen && found != which; ++idx, ++k) {
+      scan(tp.steps[s], gridCd + int64_t(k) * L + swingOffFP(idx));
+      s = s + 1 >= tlen ? 0 : s + 1;
+    }
+  }
+  if (found != which) {
+    const int64_t t0 = gridCd + int64_t(k) * L;   // the boundary's grid line (k: the steps left)
+    const uint8_t np = decideNext(false);
+    const TrackPattern& tq = proj->patterns[np].tracks[t];
+    const int tl2 = sanitizeLength(tq.length), pl2 = sanitizeLength(proj->patterns[np].length);
+    for (int j = 0; j < pl2 && found != which; ++j) scan(tq.steps[j % tl2], t0 + int64_t(j) * L + swingOffFP(j));
+    for (uint8_t b = uint8_t(which & ~found); b; b = uint8_t(b & (b - 1))) {
+      const int m = __builtin_ctz(b);
+      val[m] = proj->tracks[t].macro[m];
+      when[m] = t0;
+    }
+  }
+  for (uint8_t b = which; b; b = uint8_t(b & (b - 1))) {
+    const int m = __builtin_ctz(b);
+    rampTo(t, m, macroPos(r, m, qCount), float(val[m]), fireQuanta(when[m], minQuanta));
+  }
+}
+
+// Where the looping pattern has macro m at its first step (Play from the top): a
+// keyframe there, or the line from the pattern's last keyframe (one loop earlier)
+// to its first, at that time. So the first pass sounds as every later one.
+float State::loopStartValue(int t, int m) const {
+  const Pattern& P = proj->patterns[curPattern];
+  const TrackPattern& tp = P.tracks[t];
+  const int tlen = sanitizeLength(tp.length), plen = sanitizeLength(P.length);
+  int iF = -1, iL = -1;
+  float vF = 0.0f, vL = 0.0f;
+  for (int i = 0; i < plen; ++i) {
+    const Step& st = tp.steps[i % tlen];
+    if (!st.on() || !st.hasMacro(m)) continue;
+    if (iF < 0) { iF = i; vF = float(st.macroValue(m)); }
+    iL = i;
+    vL = float(st.macroValue(m));
+  }
+  if (iF < 0) return float(proj->tracks[t].macro[m]);
+  if (iF == 0 || vF == vL) return vF;
+  const int64_t L = int64_t(stepLenFP);
+  const int64_t tL = int64_t(iL) * L + swingOffFP(iL) - int64_t(plen) * L;   // < 0
+  const int64_t tF = int64_t(iF) * L + swingOffFP(iF);                         // > 0
+  const float w = float(-tL >> 16) / float((tF - tL) >> 16);
+  return vL + (vF - vL) * w;
+}
+
+// After master step r.pos of track t fired (or would have: a muted, suppressed or
+// unlucky note moves the motion all the same). `fresh`: the step began a pattern,
+// or Play started: the playing pattern's motion is looked up again.
+void State::motionStep(int t, bool fresh) {
+  TrackRt& r = tr[t];
+  if (fresh) {
+    const uint8_t now = keyframeMask(t, curPattern);
+    const uint8_t ended = uint8_t(r.kfMask & ~now & ~r.live);
+    r.kfMask = now;
+    publishMotion(t);
+    // No motion in this pattern: the base (the glide into the pattern already went there;
+    // at Play, from where an earlier motion left it resting).
+    uint8_t toBase = ended;
+    if (motStart)
+      for (int m = 0; m < kTrackMacros; ++m)
+        if (!((now >> m) & 1u) && !((r.live >> m) & 1u) && !((r.moving >> m) & 1u) && r.mTo[m] != float(proj->tracks[t].macro[m]))
+          toBase = uint8_t(toBase | (1u << m));
+    for (uint8_t b = toBase; b; b = uint8_t(b & (b - 1))) startRamp(t, __builtin_ctz(b), proj->tracks[t].macro[__builtin_ctz(b)], 0);
+  }
+  if (r.live) liveStep(t);
+  const uint8_t mask = uint8_t(r.kfMask & ~r.live);
+  if (!mask) return;
+  const Step& st = proj->patterns[curPattern].tracks[t].steps[r.pos];
+  uint8_t kf = 0;
+  if (st.on())
+    for (uint8_t b = mask; b; b = uint8_t(b & (b - 1))) {
+      const int m = __builtin_ctz(b);
+      if (st.hasMacro(m)) {
+        kf = uint8_t(kf | (1u << m));
+        // At its note the value is exactly the note's (the glide arrived here).
+        r.mFrom[m] = r.mTo[m] = float(st.macroValue(m));
+        r.moving = uint8_t(r.moving & ~(1u << m));
+      }
+    }
+  uint8_t aim = kf;
+  if (fresh) {
+    const uint8_t other = uint8_t(mask & ~kf);
+    if (motStart)
+      for (uint8_t b = other; b; b = uint8_t(b & (b - 1))) jumpMacro(t, __builtin_ctz(b), loopStartValue(t, __builtin_ctz(b)));
+    aim = mask;
+  }
+  if (aim) aimMotion(t, aim, 1);
+  if (kf && !r.moving && !r.fine) updateStand(t);
+}
+
+// Motion recording (engine.h "MOTION"): a live macro's value goes into the note
+// that starts here; a hand still for a bar is no longer live (its motion plays).
+void State::liveStep(int t) {
+  TrackRt& r = tr[t];
+  for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
+    const int m = __builtin_ctz(b);
+    if (int32_t(qCount - r.liveUntil[m]) >= 0) {
+      r.live = uint8_t(r.live & ~(1u << m));
+      motDirty = uint8_t(motDirty | (1u << t));
+      publishMotion(t);
+    }
+  }
+  if (!r.live || !recording) return;
+  Step& st = proj->patterns[curPattern].tracks[t].steps[r.pos];
+  if (!st.on()) return;
+  const uint32_t before = st.extWord();
+  for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
+    const int m = __builtin_ctz(b);
+    st.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
+  }
+  if (st.extWord() != before) bump();
+}
+
+// What the motion depends on changed (a step, a length, the next pattern, the
+// tempo): every dirty track's motion re-aims from where its macros are.
+void State::refreshMotion() {
+  for (int t = 0; t < kNumTracks; ++t) {
+    if (!((motDirty >> t) & 1u)) continue;
+    TrackRt& r = tr[t];
+    const uint8_t now = keyframeMask(t, curPattern);
+    const uint8_t ended = uint8_t(r.kfMask & ~now & ~r.live);
+    if (now != r.kfMask) {
+      r.kfMask = now;
+      publishMotion(t);
+    }
+    for (uint8_t b = ended; b; b = uint8_t(b & (b - 1))) startRamp(t, __builtin_ctz(b), proj->tracks[t].macro[__builtin_ctz(b)], 0);
+    aimMotion(t, now, 0);
   }
 }
 
@@ -1441,8 +1780,8 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
   r.supValid = 0;
   r.ratLeft = 0;                                   // ratchets never spill into the next step
 
-  bool fires = (st.flags & kStepOn) && !proj->tracks[t].mute && !suppressed && !r.rollC;
-  if (fires && st.prob < 100) fires = (rand32() % 100u) < st.prob;
+  bool fires = (st.flags() & kStepOn) && !proj->tracks[t].mute && !suppressed && !r.rollC;
+  if (fires && st.prob() < 100) fires = (rand32() % 100u) < st.prob();
 
   if (!fires) {
     // Slide into a rest (step off, muted, or lost its probability roll): a
@@ -1461,23 +1800,15 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
 
   // Parameter lock scope: from this step until the next step of this track
   // that FIRES (with or without a lock of its own).
-  const uint8_t newLock = (st.lockParam >= 1 && st.lockParam < kLockMacro0 + kTrackMacros) ? st.lockParam : 0;
-  const bool lockChanged = newLock != r.lockParam || st.lockValue != r.lockValue;
-  if (lockChanged) r.paramsSent = 0;
-  r.lockParam = newLock;
-  r.lockValue = st.lockValue;
-  if (r.inst && isMacroLock(newLock) && (lockChanged || !r.lkValid)) evalLock(t);
-  // DECISION (a lock while a macro moves): the lock's values arrive at its note, as
-  // on the 7-bit path (they jump; the other macros keep moving underneath). Blending
-  // out after a motion, the track goes straight to its 7-bit values instead.
-  if (r.fine && lockChanged) {
-    if (r.settling) {
-      exitFine(t);
-    } else {
-      r.anchor = 2;
-      fineEval(t);
-    }
+  // (CLASSIC only: an instrument track's notes carry macro values instead, motionStep.)
+  uint8_t newLock = 0, newValue = 0;
+  if (!instTrack(t) && st.lockParam() >= 1 && st.lockParam() <= kParamsPerTrack) {
+    newLock = st.lockParam();
+    newValue = st.lockValue();
   }
+  if (newLock != r.lockParam || newValue != r.lockValue) r.paramsSent = 0;
+  r.lockParam = newLock;
+  r.lockValue = newValue;
 
   const int ratchets = stepRatchet(st);
   int32_t gate = int32_t((int64_t(st.gate) * stepTicks) / (kGateUnitsPerStep * ratchets));
@@ -1485,10 +1816,10 @@ void State::fireTrackStep(int t, const Step& st, int stepIndex, int32_t frac, in
   NoteEvent ev;
   ev.note = st.note > 127 ? 127 : st.note;
   ev.vel = st.vel < 1 ? 1 : (st.vel > 127 ? 127 : st.vel);
-  ev.accent = (st.flags & kStepAccent) != 0;
+  ev.accent = (st.flags() & kStepAccent) != 0;
   ev.slide = false;
-  ev.chord = (t == kTrackLead && st.chord < kChordNum) ? st.chord : 0;
-  const bool slide = isSynthTrack(t) && (st.flags & kStepSlide);
+  ev.chord = (t == kTrackLead && st.chord() < kChordNum) ? st.chord() : 0;
+  const bool slide = isSynthTrack(t) && (st.flags() & kStepSlide);
 
   hit(t, ev, frac + gate, slide && ratchets == 1);
   if (ratchets > 1) {
@@ -1532,6 +1863,7 @@ uint8_t State::decideNext(bool commit) {
 }
 
 void State::boundary() {
+  boundaryNow = true;
   curPattern = decideNext(true);
   queued = kNoPattern;
   masterNext = 0;
@@ -1599,6 +1931,12 @@ void State::fireMasterStep() {
     fireTrackStep(t, tp.steps[s], s, frac, dur);
   }
   gridCd += int64_t(stepLenFP);
+  // MOTION: the notes' own macro values at their grid times (whether they fire or not).
+  const bool fresh = boundaryNow || motStart;
+  for (int t = 0; t < kNumTracks; ++t)
+    if (tr[t].inst && (fresh || tr[t].kfMask || tr[t].live)) motionStep(t, fresh);
+  boundaryNow = false;
+  motStart = false;
 }
 
 void State::sequencerTick() {
@@ -1659,9 +1997,9 @@ void State::liveNoteOn(const Command& c) {
   NoteEvent ev;
   ev.note = uint8_t(c.b > 127 ? 127 : c.b);
   ev.vel = uint8_t(clampi(c.c, 1, 127));
-  ev.accent = (c.step.flags & kStepAccent) != 0;
-  ev.slide = isSynthTrack(t) && (c.step.flags & kStepSlide);
-  ev.chord = (t == kTrackLead && c.step.chord < kChordNum) ? c.step.chord : 0;
+  ev.accent = (c.step.flags() & kStepAccent) != 0;
+  ev.slide = isSynthTrack(t) && (c.step.flags() & kStepSlide);
+  ev.chord = (t == kTrackLead && c.step.chord() < kChordNum) ? c.step.chord() : 0;
   ensureParams(t);
   vOn(t, ev);
   tr[t].liveHeld[ev.note >> 5] |= 1u << (ev.note & 31);
@@ -1728,24 +2066,33 @@ void State::recordNote(int t, const NoteEvent& ev) {
   }
   if (isSynthTrack(t) && r.recHeld && (r.recPattern != pattern || r.recStep != step)) {
     Step& prev = proj->patterns[r.recPattern].tracks[t].steps[r.recStep];
-    if (prev.flags & kStepOn) prev.flags |= kStepSlide;
+    if (prev.flags() & kStepOn) prev.addFlags(kStepSlide);
   }
   Step& s = proj->patterns[pattern].tracks[t].steps[step];
   s.vel = ev.vel;
   if (isSynthTrack(t)) {
     s.note = ev.note;
-    s.flags = uint8_t((s.flags & kStepRatchetMask) | kStepOn | (ev.accent ? kStepAccent : 0) |
-                      (ev.slide ? kStepSlide : 0));
+    s.setFlags(uint8_t((s.flags() & kStepRatchetMask) | kStepOn | (ev.accent ? kStepAccent : 0) |
+                      (ev.slide ? kStepSlide : 0)));
     s.gate = kDefaultStep.gate;
-    s.chord = ev.chord;
+    s.setChord(ev.chord);
     r.recHeld = 1;
+    for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {   // a live hand: the note takes its values
+      const int m = __builtin_ctz(b);
+      s.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
+    }
     r.recNote = ev.note;
     r.recPattern = uint8_t(pattern);
     r.recStep = uint8_t(step);
     r.recStartQ = qCount;
   } else {
-    s.flags |= kStepOn;
+    s.addFlags(kStepOn);
+    for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
+      const int m = __builtin_ctz(b);
+      s.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
+    }
   }
+  motDirty = uint8_t(motDirty | (1u << t));
   bump();
 }
 
@@ -2180,6 +2527,18 @@ void State::publishStatus() {
   }
   aDuck.store(duck.gain(), rx);
   aRevision.store(revision, rx);
+  // Heard macro positions (the page's sliders): tracks that jumped or settled, and
+  // every 4th quantum the moving ones. Nothing moving: this compare.
+  const uint8_t pub = uint8_t(pubMask | ((qCount & 3u) == 0 ? fineTracks : 0));
+  if (pub) {
+    for (int t = 0; t < kNumTracks; ++t) {
+      if (!((pub >> t) & 1u)) continue;
+      uint32_t w = 0;
+      for (int m = 0; m < kTrackMacros; ++m) w |= uint32_t(clampi(int(macroPos(tr[t], m, qCount) + 0.5f), 0, 255)) << (8 * m);
+      aMacPos[t].store(w, rx);
+    }
+    pubMask = 0;
+  }
   // Peak hold: the UI resets these to 0 in status(); a reset that races with
   // this max is simply re-raised on the next quantum.
   if (peakL > aPeakL.load(rx)) aPeakL.store(peakL, rx);
@@ -2200,6 +2559,10 @@ void State::quantum(int16_t* out) {
     const TrackSettings& ts = proj->tracks[t];
     if (!r.bindValid || instrumentId(ts) != r.boundId || (r.inst && std::memcmp(ts.macro, r.evPos, kTrackMacros) != 0))
       refreshInstrument(t, false);
+  }
+  if (motDirty) {                 // edits, a queued pattern, tempo: motion re-aims (rare)
+    if (playing) refreshMotion();
+    motDirty = 0;
   }
   if (fineTracks) fineTick();     // nothing moving: this compare is all macro motion costs
   refreshGlobals();
@@ -2417,8 +2780,7 @@ Command setMacroCommand(int track, int macro, uint8_t position, uint16_t rampQua
   c.a = uint8_t(track);
   c.b = uint8_t(macro);
   c.c = position;
-  c.step.lockParam = uint8_t(rampQuanta & 0xFF);
-  c.step.lockValue = uint8_t(rampQuanta >> 8);
+  c.step.setLock(uint8_t(rampQuanta & 0xFF), uint8_t(rampQuanta >> 8));
   return c;
 }
 
@@ -2427,10 +2789,9 @@ Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4])
   std::memset(&c, 0, sizeof(c));
   c.type = CmdType::SetInstrument;
   c.a = uint8_t(track);
-  c.step.lockParam = uint8_t(id & 0xFF);
-  c.step.lockValue = uint8_t(id >> 8);
+  c.step.setLock(uint8_t(id & 0xFF), uint8_t(id >> 8));
   c.step.note = positions[0];
-  c.step.flags = positions[1];
+  c.step.flagsRaw = positions[1];
   c.step.vel = positions[2];
   c.step.gate = positions[3];
   return c;
@@ -2457,6 +2818,12 @@ EngineStatus Engine::status() {
   st.duckGain = s.aDuck.load(rx);
   st.revision = s.aRevision.load(rx);
   st.instrumentRefreshes = s.aInstRefreshes.load(rx);
+  for (int t = 0; t < kNumTracks; ++t) {
+    const uint32_t w = s.aMacPos[t].load(rx);
+    for (int m = 0; m < kTrackMacros; ++m) st.macroPos[t][m] = uint8_t(w >> (8 * m));
+    st.motion[t] = s.aMotion[t].load(rx);
+    st.live[t] = s.aLive[t].load(rx);
+  }
   return st;
 }
 
@@ -2498,6 +2865,10 @@ void effectiveParams(int track, uint8_t* out) {
   std::memcpy(out, g_state->tr[track].eff, kParamsPerTrack);
 }
 uint32_t faultCount() { return g_state ? g_state->faults + g_state->master.faults() : 0; }
+float macroPosition(int track, int m) {
+  if (!g_state || track < 0 || track >= kNumTracks || m < 0 || m >= kTrackMacros) return -1.0f;
+  return g_state->macroPos(g_state->tr[track], m, g_state->qCount - 1u);
+}
 
 #if PG_STEM_TAP
 void setStemTap(StemTap* tap) {

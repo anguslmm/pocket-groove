@@ -139,7 +139,7 @@ void testStatic(int d) {
     for (int t : {int(kTrackBass), int(kTrackLead)})
       for (int s = 0; s < kMaxSteps; ++s) {
         const Step& st = g_a.patterns[pt].tracks[t].steps[s];
-        it::check(!((st.flags & kStepOn) && st.lockParam == 1), "demo %d P%d: %s CUT locked on step %d (jam pattern)",
+        it::check(!((st.flags() & kStepOn) && st.lockParam() == 1), "demo %d P%d: %s CUT locked on step %d (jam pattern)",
                   d, pt + 1, t == kTrackBass ? "bass" : "lead", s + 1);
       }
   it::check(g_a.songMode == 0, "demo %d: must boot in loop mode (songMode 0) on pattern 1", d);

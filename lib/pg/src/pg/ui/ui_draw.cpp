@@ -248,8 +248,8 @@ void Ui::drawStatus(Framebuffer& fb) {
     int v = valueOf(focus_);
     // While a step is held in SOUND/MIX/FX and it locks the focused param, show the lock.
     if (heldStep_ >= 0 && view_ != View::Groove && !focus_.global) {
-      const Step s = stepAt(heldTrack_, heldStep_);
-      if (s.lockParam == focus_.index + 1) v = s.lockValue;
+      const int own = stepOwnValue(heldTrack_, stepAt(heldTrack_, heldStep_), focus_.index);
+      if (own >= 0) v = own;
     }
     char val[kValueTextCap], name[6];
     formatValue(info, focus_, v, val);
@@ -313,7 +313,7 @@ void Ui::drawGroove(Framebuffer& fb) {
     if (isSynth(t)) {
       for (int i = 0; i < len; ++i) {
         const Step s = stepAt(t, i);
-        if (!(s.flags & kStepOn)) continue;
+        if (!(s.flags() & kStepOn)) continue;
         if (s.note < lo) lo = s.note;
         if (s.note > hi) hi = s.note;
       }
@@ -326,21 +326,21 @@ void Ui::drawGroove(Framebuffer& fb) {
       const int x = ovX(i);
       const Step s = stepAt(t, idx);
       const bool here = ph == idx;
-      if (!(s.flags & kStepOn)) {
+      if (!(s.flags() & kStepOn)) {
         g.rect(x, y + 1, 10, 7, here ? LINE : (i % 4 == 0 ? RAISED : PANEL));
         continue;
       }
       uint8_t c = col;
       if (m) c = LINE;
       else if (here) c = WHITE;
-      else if (s.prob < 100) c = tc(t, kMid);
+      else if (s.prob() < 100) c = tc(t, kMid);
       if (isSynth(t)) {
         g.rect(x, y + 1, 10, 7, m ? uint8_t(PANEL) : tc(t, kTint));
         const int lvl = hi == lo ? 0 : rnd(float(s.note - lo) * 4.0f / float(hi - lo));
-        g.rect(x, y + 5 - lvl, (s.flags & kStepSlide) ? 13 : 10, 3, c);
+        g.rect(x, y + 5 - lvl, (s.flags() & kStepSlide) ? 13 : 10, 3, c);
       } else {
         g.rect(x, y + 1, 10, 7, c);
-        if ((s.flags & kStepAccent) && !here && !m) g.rect(x, y + 1, 10, 1, WHITE);
+        if ((s.flags() & kStepAccent) && !here && !m) g.rect(x, y + 1, 10, 1, WHITE);
       }
     }
     const bool flash = before(now_, flashUntil_[t]);
@@ -365,13 +365,13 @@ void Ui::drawGroove(Framebuffer& fb) {
     }
     const Step s = stepAt(t, idx);
     const bool play = ph == idx;
-    if (!(s.flags & kStepOn)) {
+    if (!(s.flags() & kStepOn)) {
       uint8_t fill = i % 4 == 0 ? RAISED : PANEL;
       if (play) fill = LINE;
       g.rrect(x, y, PAD_W, PAD_H, fill);
       g.text(x + 11, y + 6, key, play ? DIM : LINE);
     } else {
-      const uint8_t fill = play ? uint8_t(WHITE) : (s.prob < 100 ? tc(t, kMid) : tc(t));
+      const uint8_t fill = play ? uint8_t(WHITE) : (s.prob() < 100 ? tc(t, kMid) : tc(t));
       g.rrect(x, y, PAD_W, PAD_H, fill);
       const uint8_t ink = BG;
       g.text(x + 3, y + 2, key, play ? uint8_t(DIM) : tc(t, kDim));
@@ -384,12 +384,12 @@ void Ui::drawGroove(Framebuffer& fb) {
         g.rect(x + 3, y + 12, w > 2 ? w : 2, 3, ink);
       }
       int mx = x + 23;
-      if (t == kTrackLead && s.chord && s.chord < kChordNum) {
-        const char* lab = chordShort(s.chord);
+      if (t == kTrackLead && s.chord() && s.chord() < kChordNum) {
+        const char* lab = chordShort(s.chord());
         g.textR(mx, y + 1, lab, play ? uint8_t(DIM) : tc(t, kDim));
         mx -= int(std::strlen(lab)) * 6 + 1;
       }
-      if (s.lockParam && mx - 4 >= x + 9) {
+      if (s.hasExt() && mx - 4 >= x + 9) {   // a lock, or a note's own macro values
         g.text(mx - 4, y + 1, PG_ICON_LOCK, ink);
         mx -= 7;
       }
@@ -398,9 +398,9 @@ void Ui::drawGroove(Framebuffer& fb) {
         for (int k2 = 0; k2 < r; ++k2) g.rect(mx - k2 * 2, y + 3, 1, 5, ink);
         mx -= r * 2 + 2;
       }
-      if (s.prob < 100 && mx - 4 >= x + 9) g.text(mx - 4, y + 2, "%", ink);
-      if (s.flags & kStepAccent) g.rect(x + 1, y, PAD_W - 2, 2, play ? AMBER : WHITE);
-      if ((s.flags & kStepSlide) && synth) {
+      if (s.prob() < 100 && mx - 4 >= x + 9) g.text(mx - 4, y + 2, "%", ink);
+      if (s.flags() & kStepAccent) g.rect(x + 1, y, PAD_W - 2, 2, play ? AMBER : WHITE);
+      if ((s.flags() & kStepSlide) && synth) {
         const int gx = x + PAD_W;
         const int gw = (i % 8) < 7 ? padX(i + 1) - gx : 2;
         g.rect(gx - 2, y + 12, gw + 4, 3, WHITE);
@@ -516,7 +516,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
       g.text(fx + 3, 50, key, LINE);
       continue;
     }
-    const char* fname = (k == kFGate && drum) ? "PTCH" : kFieldNames[k];
+    const char* fname = (k == kFGate && drum) ? "PTCH" : (k == kFLock && instrumentIdOf(t) ? "MOVE" : kFieldNames[k]);
     const bool selF = k == stepField_;
     g.rrect(fx, 48, 27, 37, selF ? RAISED : BG);
     if (selF) g.rframe(fx, 48, 27, 37, WHITE);
@@ -537,25 +537,39 @@ void Ui::drawStepEdit(Framebuffer& fb) {
           fr = s.gate / 16.0f > 1.0f ? 1.0f : float(s.gate) / 16.0f;
         }
         break;
-      case kFProb: cat(catInt(txt, s.prob), "%"); fr = float(s.prob) / 100.0f; break;
+      case kFProb: cat(catInt(txt, s.prob()), "%"); fr = float(s.prob()) / 100.0f; break;
       case kFRatch: catInt(cat(txt, "x"), stepRatchet(s)); break;
-      case kFAcc: cat(txt, (s.flags & kStepAccent) ? "ON" : "OFF"); break;
-      case kFSlide: cat(txt, (s.flags & kStepSlide) ? "ON" : "OFF"); break;
-      case kFChord: cat(txt, s.chord ? chordName(s.chord) : "OFF"); break;
+      case kFAcc: cat(txt, (s.flags() & kStepAccent) ? "ON" : "OFF"); break;
+      case kFSlide: cat(txt, (s.flags() & kStepSlide) ? "ON" : "OFF"); break;
+      case kFChord: cat(txt, s.chord() ? chordName(s.chord()) : "OFF"); break;
       case kFLock: {
-        if (s.lockParam) {
-          // a macro lock reads as the macro (M1..M4 when the track has no such macro); a sound
-          // lock on a track with an instrument is ignored by the engine: drawn DIM
-          const ParamInfo* info = trackInfo(t, s.lockParam - 1);
+        if (instrumentIdOf(t)) {
+          // MOTION: four marks (lit = the note has its own value of that macro), the
+          // focused macro's name and value under them (its pad again: the next macro)
+          const int f = focusIndexFor(t);
+          const int fm = isMacroIndex(f) ? f - kMacroIndex0 : 0;
+          for (int m = 0; m < kTrackMacros; ++m)
+            g.rect(fx + 10 + m * 4, 52, 3, 3, s.hasMacro(m) ? uint8_t(AMBER) : (m == fm ? uint8_t(TEXT) : uint8_t(LINE)));
+          const ParamInfo* info = trackInfo(t, kMacroIndex0 + fm);
           char nm[6], v[kValueTextCap];
           if (info) upperCopy(info->name, nm, 5);
-          else if (isMacroLock(s.lockParam)) catInt(cat(nm, "M"), s.lockParam - kLockMacro0 + 1);
-          else catInt(cat(nm, "P"), s.lockParam - 1);
-          if (info) formatValue(info, ValueRef{false, uint8_t(t), uint8_t(s.lockParam - 1)}, s.lockValue, v);
-          else itoa10(s.lockValue, v);
-          const bool ignored = instrumentOf(t) ? s.lockParam <= kSoundParams : isMacroLock(s.lockParam);
-          g.textC(fx + 14, 68, nm, ignored ? DIM : AMBER);
-          g.textC(fx + 14, 77, ignored ? "OFF" : v, ignored ? DIM : AMBER);
+          else catInt(cat(nm, "M"), fm + 1);
+          const bool has = s.hasMacro(fm);
+          if (has && info) formatValue(info, ValueRef{false, uint8_t(t), uint8_t(kMacroIndex0 + fm)}, s.macroValue(fm), v);
+          else if (has) itoa10(s.macroValue(fm), v);
+          g.textC(fx + 14, 68, nm, has ? AMBER : DIM);
+          g.textC(fx + 14, 77, has ? v : "-", has ? AMBER : DIM);
+          continue;
+        }
+        if (s.lockParam()) {
+          const ParamInfo* info = trackInfo(t, s.lockParam() - 1);
+          char nm[6], v[kValueTextCap];
+          if (info) upperCopy(info->name, nm, 5);
+          else catInt(cat(nm, "P"), s.lockParam() - 1);
+          if (info) formatValue(info, ValueRef{false, uint8_t(t), uint8_t(s.lockParam() - 1)}, s.lockValue(), v);
+          else itoa10(s.lockValue(), v);
+          g.textC(fx + 14, 68, nm, AMBER);
+          g.textC(fx + 14, 77, v, AMBER);
           continue;
         }
         cat(txt, "OFF");
@@ -582,7 +596,7 @@ void Ui::drawStepEdit(Framebuffer& fb) {
   x = g.text(4, 127, "TAP STEP", WHITE);
   x = g.text(x, 127, " COPY HERE  ", DIM);
   x = g.text(x, 127, "DEL", WHITE);
-  g.text(x, 127, " NO LOCK", DIM);
+  g.text(x, 127, instrumentIdOf(t) ? " CLEAR" : " NO LOCK", DIM);
   footerRight(g, "/ HELP", DIM);
 }
 
@@ -596,12 +610,12 @@ void miniStrip(Gfx& g, const Ui& ui, int y, int track, int page, int play, int h
     if (idx >= len) continue;
     const int x = stripX(i);
     const Step s = ui.stepAt(track, idx);
-    const bool on = s.flags & kStepOn;
+    const bool on = s.flags() & kStepOn;
     uint8_t c;
     if (on) c = play == idx ? uint8_t(WHITE) : tc(track);
     else c = play == idx ? LINE : (i % 4 == 0 ? RAISED : PANEL);
     g.rect(x, y, 13, 8, c);
-    if (on && s.lockParam) g.rect(x, y, 13, 2, AMBER);
+    if (on && s.hasExt()) g.rect(x, y, 13, 2, AMBER);
     if (held == idx) g.frame(x - 1, y - 1, 15, 10, WHITE);
   }
 }
@@ -766,6 +780,7 @@ void Ui::drawInstrument(Framebuffer& fb) {
   }
   drawScope(fb);
   // the four macros
+  const uint8_t motion = motionMask(t);
   for (int m = 0; m < kTrackMacros; ++m) {
     const int cx0 = kCellX[m / 2], cy0 = kLabelY[m % 2], w = kCellW;
     const int kLo = kKNote0 + 2 * m, kHi = kLo + 1;
@@ -783,11 +798,13 @@ void Ui::drawInstrument(Framebuffer& fb) {
     }
     const macro::Macro& mc = s->macros[m];
     const bool f = !focus_.global && focus_.track == t && focus_.index == kMacroIndex0 + m;
-    const bool locked = held && hs.lockParam == kLockMacro0 + m;
+    const bool locked = held && hs.hasMacro(m);
     const bool moving = macroMoving(m);
-    const bool lit = f || moving || locked;
-    const int v = macroValue(t, m);
-    const int shown = locked ? hs.lockValue : v;
+    const bool live = macroLive(t, m);              // motion recording: the hand is written into the notes
+    const bool lit = f || moving || locked || live;
+    const int v = macroValue(t, m);                  // the base
+    const int heard = shownMacro(t, m);              // the motion moves it while playing
+    const int shown = locked ? hs.macroValue(m) : heard;
     // the label row: low end, the macro's name, high end
     char nm[8], lab[10];
     fitText(nm, mc.name, 6);
@@ -798,10 +815,15 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const int ncx = (mc.lo[0] || mc.hi[0]) ? (loEnd + hiStart) / 2 : cx0 + w / 2;
     if (lit) {
       const int nw = int(std::strlen(nm)) * 6 + 3;
-      g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col));
+      g.rrect(ncx - nw / 2, cy0 - 1, nw, 9, live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : col)));
       g.textC(ncx, cy0, nm, BG);
     } else {
       g.textC(ncx, cy0, nm, TEXT);
+    }
+    // motion: notes of this pattern carry their own values of this macro
+    if ((motion >> m) & 1u) {
+      const int mx = ncx - (int(std::strlen(nm)) * 6 + 3) / 2 - 7;
+      if (mx >= loEnd + 1) g.text(mx, cy0, "~", AMBER);
     }
     // the keys as caps at the ends: the left one moves toward the left label
     const bool d1 = isHeld(kLo) && rec_[kLo].act == kActMacro, d2 = isHeld(kHi) && rec_[kHi].act == kActMacro;
@@ -819,9 +841,9 @@ void Ui::drawInstrument(Framebuffer& fb) {
     const int dx = tx0 + (macro::startByte(mc) * tl + 127) / 255;
     g.pixel(dx, sy + 7, DIM);
     g.rect(dx - 1, sy + 8, 3, 1, DIM);
-    if (locked) g.rect(tx0 + (v * tl + 127) / 255, sy, 1, 9, WHITE);   // where it is when not locked
+    if (locked || shown != v) g.rect(tx0 + (v * tl + 127) / 255, sy, 1, 9, WHITE);   // the base, where it differs
     // the handle: a cap with a dark outline so it reads over the fill
-    const uint8_t hc = locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : (f ? col : tc(t, kMid)));
+    const uint8_t hc = live ? uint8_t(RED) : (locked ? uint8_t(AMBER) : (moving ? uint8_t(WHITE) : (f ? col : tc(t, kMid))));
     g.rect(hx - 3, sy, 7, 9, BG);
     g.rrect(hx - 2, sy, 5, 9, hc);
   }
@@ -833,7 +855,7 @@ void Ui::drawInstrument(Framebuffer& fb) {
     x = g.text(x, 127, " INSTRUMENT  HOLD STEP+KEY ", DIM);
     g.text(x, 127, PG_ICON_LOCK, AMBER);
   } else {
-    g.text(4, 127, "MOVE A MACRO = LOCK  DEL REMOVE", DIM);
+    g.text(4, 127, "MOVE A MACRO = NOTE VALUE  DEL", DIM);
   }
   footerRight(g, "/ HELP", DIM);
   if (listUntil_) drawInstrumentList(fb);
@@ -885,7 +907,7 @@ void Ui::drawSound(Framebuffer& fb) {
   // the focused value (big read-out), with the held step's lock if it locks it
   const ParamInfo* finfo = infoFor(focus_);
   int fv = valueOf(focus_);
-  if (held && !focus_.global && hs.lockParam == focus_.index + 1) fv = hs.lockValue;
+  if (held && !focus_.global && stepOwnValue(t, hs, focus_.index) >= 0) fv = stepOwnValue(t, hs, focus_.index);
   char fval[kValueTextCap];
   formatValue(finfo, focus_, fv, fval);
   int x = g.chip(4, 14, kTrackNames[t], col);
@@ -913,7 +935,7 @@ void Ui::drawSound(Framebuffer& fb) {
   for (int c = 0; c < 8; ++c) {
     const int idx = page * 8 + c;
     const ParamInfo* info = idx < kSoundParams ? eng_->trackParamInfo(t, idx) : nullptr;
-    const int lock = (held && hs.lockParam == idx + 1) ? hs.lockValue : -1;
+    const int lock = held ? stepOwnValue(t, hs, idx) : -1;
     makeCol(cols[c], info, ValueRef{false, uint8_t(t), uint8_t(idx)}, paramValue(t, idx), lock);
     if (!focus_.global && focus_.track == t && focus_.index == idx) focusCol = c;
   }
@@ -966,7 +988,8 @@ void Ui::drawMix(Framebuffer& fb) {
     g.rect(cx - 5, 34, 10, 56, s ? BG : PANEL);
     int v = paramValue(t, param);
     bool locked = false;
-    if (held && t == heldTrack_ && hs.lockParam == param + 1) { v = hs.lockValue; locked = true; }
+    const int own = (held && t == heldTrack_) ? stepOwnValue(t, hs, param) : -1;
+    if (own >= 0) { v = own; locked = true; }
     if (pan) {
       const int midy = 34 + 28;
       const int d = rnd(float(v - 64) / 64.0f * 28.0f);

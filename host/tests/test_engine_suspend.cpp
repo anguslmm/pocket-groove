@@ -17,7 +17,7 @@ static Command setStep(int pattern, int track, int s) {
   c.step = mkStep(60);
   return c;
 }
-static bool stepOn(int pattern, int track, int s) { return (rig.step(pattern, track, s).flags & kStepOn) != 0; }
+static bool stepOn(int pattern, int track, int s) { return (rig.step(pattern, track, s).flags() & kStepOn) != 0; }
 
 // 1. The audio thread keeps running while suspended (the normal device case).
 static void testDiscardWhileRunning() {
@@ -52,8 +52,8 @@ static void testDiscardWhileRunning() {
   rig.run(10);
   CHECK(!stepOn(0, kTrackSnare, 1) && !stepOn(0, kTrackSnare, 2) && !stepOn(0, kTrackSnare, 4));
   CHECK(stepOn(0, kTrackSnare, 3));
-  CHECK(!(rig.proj.patterns[2].tracks[kTrackClap].steps[0].flags & kStepOn));
-  CHECK(!(rig.proj.patterns[3].tracks[kTrackClap].steps[0].flags & kStepOn));
+  CHECK(!(rig.proj.patterns[2].tracks[kTrackClap].steps[0].flags() & kStepOn));
+  CHECK(!(rig.proj.patterns[3].tracks[kTrackClap].steps[0].flags() & kStepOn));
   CHECK(uint8_t(rig.eng.status().writesDone - w0) == 2);
   std::printf("  suspend with a running audio thread: 5 stale commands dropped (2 writes counted), post-resume edit applied\n");
 }
@@ -80,7 +80,7 @@ static void testDiscardWithoutAudio() {
   rig.run(4);
   const EngineStatus st = rig.eng.status();
   CHECK(!stepOn(0, kTrackPerc, 5) && stepOn(0, kTrackPerc, 6));
-  CHECK(!(rig.proj.patterns[1].tracks[kTrackPerc].steps[0].flags & kStepOn));
+  CHECK(!(rig.proj.patterns[1].tracks[kTrackPerc].steps[0].flags() & kStepOn));
   CHECK(!st.playing);
   CHECK(uint8_t(st.writesDone - w0) == 1);
   // A WritePattern dropped the same way counts too.
