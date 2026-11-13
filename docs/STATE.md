@@ -38,9 +38,13 @@ Order of work (owner, updated 2026-11-12):
 1. DONE and confirmed on hardware: real-time performance (IRAM placement), stereo USB audio as
    the default firmware, stems via tools/pg, desktop app with strip / Listen / Stems, backlight
    noise gone, ghost filter (pad k + SHIFT + n harmless), explain-mode text.
-2. NOW: the owner's full pass through every instrument and setting on the desktop build, using
-   docs/ASSESSMENT.md. In parallel: env:hw-spike (tilt sensor and mic sampling to/from flash)
-   to learn what the hardware can do before designing around it.
+2. NOW: the owner's assessment of the sounds on the desktop build. The full parameter-by-
+   parameter pass in docs/ASSESSMENT.md is DROPPED (2026-11-13: the owner played every bass
+   and lead setting and most of kick and snare, is happy overall, and the document is far too
+   long to fill in). Instead: play the remaining voices and effects by ear and answer a handful
+   of free-form questions (what was fun, what was ugly or useless, what was missing).
+   ASSESSMENT.md stays as a reference only. In parallel: env:hw-spike (tilt sensor and mic
+   sampling to/from flash) to learn what the hardware can do before designing around it.
 3. THEN: the macro redesign (see Design direction). The owner will make a song only AFTER the
    redesign: the goal is a fun experience that is not hindered by the tiny device.
 4. LATER: a design sprint on the flow between desktop and device, giving each its own UX.
@@ -54,7 +58,7 @@ macro controls with a reactive picture, not through bare parameters; the bare pa
 NOT exposed to the player ("be bold and confident in our choices"). Tilt (the IMU) as a
 control appeals. Candidates: characters per voice, dice/mutate/morph, punch-in effects,
 mic sampling (try samples in flash on the Cardputer before considering a bigger device).
-The macros get designed from the owner's full pass through every sound on the desktop build.
+The macros get designed from the owner's short free-form feedback on the sounds (see item 2), not from a per-parameter survey.
 
 Motion (decided with the owner 2026-11-12, to be built as part of the macro redesign; needs a
 new project format, which is fine because the owner writes no real song before the redesign):
