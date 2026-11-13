@@ -5,7 +5,9 @@
 # (the committed images are 720x405, 64-colour PNGs).
 # Each block also checks a workflow the manual describes. `empty` + `boot` =
 # a first power-on, which loads the ROM demo ACIDJAM (the harness's `demo` is
-# the UX mockup project instead, so it is not used here).
+# the UX mockup project instead, so it is not used here). The device has no
+# developer mode, so neither do these screenshots.
+dev 0
 
 # Power-on: the banner over GROOVE (first boot: ACIDJAM)
 empty

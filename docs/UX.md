@@ -15,7 +15,7 @@ Status: complete for v1 implementation. Mockups are in `docs/ux/` (contact sheet
 7. **Performance.** FN+pad mutes and FN+note-key solos. OPT+step queues a pattern for the next boundary, and OPT+SHIFT+step copies the current pattern there first and then queues it (that's how variations get built). ALT+pad rolls a track while held. `[`/`]` sweep the DJ filter. Holding DEL while playing erases the selected track as the playhead passes. All of these need at most one modifier plus one key.
 8. **Feedback.** There's a status bar on every screen showing transport, rec, pattern/queue/song slot, BPM with a beat blink, the focus chip, a mono level meter, a ducker gain-reduction bar and battery. GROOVE shows all 8 tracks' 16 steps plus a trigger lamp per track. The selected track's 16 steps are drawn as large pads with note names, velocity bars and accent, slide, ratchet, probability, lock and chord markers. Value changes pop up a name, value and bar for 1.2 s. Holding `/` shows the current view's key map, and tapping `/` turns on "explain" mode.
 9. **Destructive actions.** CTRL+X/C/V cut, copy and paste the selected track, and CTRL+SHIFT+X/C do the same for the whole pattern. Every destructive action stores a one-level undo snapshot of the affected pattern (4.2 KB), and so does a change of instrument (the track's instrument, positions and sound). CTRL+Z undoes, and pressing it again redoes. Files are `/int/pg/NAME.pgv` and `/sd/pg/NAME.pgv`, with 8-character names. CTRL+S saves. Load asks before discarding unsaved work.
-10. **Power-on.** The device resumes the last session, or loads the factory demo (4 patterns, A minor, 124 BPM, ducker on) the very first time. A banner says "SPACE PLAY". One key press gives a pumping acid-house groove.
+10. **Power-on.** The device resumes the last session, or loads the factory demo ACIDJAM (A minor, 124 BPM, ducker on, an instrument on every track) the very first time. A banner says "SPACE PLAY". One key press gives a pumping acid-house groove whose bass moves by itself.
 
 ---
 
@@ -600,22 +600,11 @@ The BPM column is the tempo field of each file's header, read by `io::listProjec
 ## 14. Power-on and the demo
 
 1. The splash is the boot banner over a blank GROOVE, up to 800 ms, while the engine starts.
-2. The device loads `/int/pg/_last.pgv` if it's valid, otherwise the ROM demo. It is **stopped**, the selected track is BASS, the focus is BASS CUT, and the banner shows `SPACE PLAY`. Any key dismisses the banner, and that key also performs its normal action. So the very first SPACE both dismisses and plays.
-3. **Demo project "DEMO"** (A minor, 124 BPM, swing 54 %, ducker source KICK, depth 100, the default per-track duck amounts so the bass pumps, delay 1/8D, DJ filter off):
-   * **P01 "groove"** is exactly the pattern in the mockups (`screens.demo_pattern()`):
-     * kick on 1,5,9,13 (step 1 accented);
-     * clap on 5,13;
-     * snare ghosts on 8 (prob 40) and 16 (prob 50), plus 13;
-     * closed hats on all 16 with velocity 100/55/80/55, and a x2 ratchet on 16;
-     * open hats on 3,7,11,15;
-     * perc RIM on 4, 10 (prob 60), 15;
-     * acid bass A1 A1 A2(slide) C2 A1 A1 G1 A1(slide) E2 D2 with accents on 1, 9, 14, and a CUT 110 lock on 14;
-     * lead MIN7 stabs A3 on 3 and 8, and MAJ7 F3 on 11 (gate 1.5).
-     * Bass sound: CUT 58, RES 96, ENV 84, DCY 40, ACC 100, DRV 52, SUB 70, FOLD 24. Lead: WAVE SUPR, DET 64, REL 60.
-   * **P02 "lift"**: P01 with open hats doubled, the bass an octave-jump variant, and a CHH roll ratchet on 13-16.
-   * **P03 "break"**: no kick, clap with reverb send locked high, the lead holding MIN9 chords (gate 4 steps), bass on 1 only, and the DJ filter left to the player.
-   * **P04 "fill"**: P01 with a snare on 13-16 ratcheted x2/x3/x4 and an accented kick.
-   * **Song**: P01x4, P02x4, P03x2, P04x1, END. Song mode is OFF at boot.
+2. The device loads `/int/pg/_last.pgv` if it's valid, otherwise the ROM demo ACIDJAM. It is **stopped**, the selected track is BASS, the focus is the bass's **macro 1** (in the demo ACID's **OPEN**; on a CLASSIC bass from an old session its CUT, as before instruments), and the banner shows `SPACE PLAY` (`first-boot.png`). Any key dismisses the banner, and that key also performs its normal action. So the very first SPACE both dismisses and plays.
+   *Why BASS and OPEN.* The acid line is the demo's lead voice and the 303 filter is the most obvious thing to grab: `-`/`=` (and SHIFT+`[` `]`) move OPEN and the squelch answers at once. Pattern 1 gives OPEN no motion, so the player's hand is always heard; it moves **BITE** by itself instead (each bar the notes growl a little harder), so the first visit to SOUND (`9`) shows the instrument page alive: OPEN where the player left it, BITE's slider gliding with the notes, its amber `~` saying the notes carry it (`first-sound.png`). Focusing the moving macro instead would have made the first `=` silent (a move of a macro with motion only sets its base).
+3. **The factory demos** (stage G, docs/STATE.md): ACIDJAM, BASSHAUS and WAREHOUS (`lib/pg/src/pg/demo/`, docs/MANUAL.md 14) play a built-in instrument on every track, no CLASSIC track, with macro positions chosen by measurement so each keeps the sound and balance of its CLASSIC original (`host/tools/demo_compare`). The CLASSIC demos' per-step parameter locks became the notes' own macro values (motion): ACIDJAM's acid line moves OPEN bar by bar in the arrangement patterns and BITE in the jam patterns (P1-P3), BASSHAUS's growl riff gives every note its own DIRT and MOVE, WAREHOUS's rolling bass moves TONE or TOUCH beat by beat and its dub stab PUSH stab by stab. In the jam patterns (P1-P3, P8) the bass's and lead's macro 1 never carries motion, so its keys and the bass sweep stay the player's (`itest_demo` checks both rules).
+   ACIDJAM at power-on: A minor, 124 BPM, swing 54 %, ducker source KICK pulling the bass and stabs; P1 GROOVE: 909 kit (TRIO at 909), off-beat open hat, rim (TRAIL), the ACID line with BITE swelling through each bar, Am9 / Dm9 stabs on HANDS through a dotted-eighth delay. Song mode is OFF at boot; the SONG view holds the chain.
+   (The mockups' "DEMO" pattern, `screens.demo_pattern()`, is not a ROM demo: it is the project the screenshot scripts and UI tests start from, `buildMockup` in `host/common/ui_harness.h`.)
 
 ---
 
@@ -623,10 +612,11 @@ The BPM column is the tempo field of each file's header, read by `io::listProjec
 
 | t | User does | Instrument does |
 |---|---|---|
-| 0 s | Switches on | Banner: "SPACE PLAY". The grid is visibly full of coloured steps. |
-| 3 s | SPACE | P01 plays: kick, hats, acid bass pumping against the kick. The status duck bar flickers cyan on every beat. |
+| 0 s | Switches on | Banner: "SPACE PLAY". The grid is visibly full of coloured steps (`first-boot.png`). |
+| 3 s | SPACE | P01 plays: kick, hats, the acid bass pumping against the kick and growling a little harder through each bar by itself (`first-play.png`). The status duck bar flickers cyan on every beat. |
 | 10 s | Mashes keys; hits `]` | Hats get thin as the DJ high-pass opens; the pop-up shows "DJ FILTER HP30". They press `[` and it sweeps back through OFF into a low-pass. |
-| 18 s | Presses `=` a few times, then holds it | The chip says BASS CUT. The acid line opens up and squelches. |
+| 18 s | Presses `=` a few times, then holds it | The chip says BASS OPEN. The acid line opens up and squelches. |
+| 22 s | Taps `9` | SOUND: the bass's instrument ACID, its picture, OPEN where they left it and BITE's slider moving by itself with the notes (`first-sound.png`). They hold `x` and `z`: OPEN opens and closes; `` ` `` goes home. |
 | 25 s | Taps `a` | Kick plays and gets selected: the grid now shows the 4 kick steps. They tap `7` and a kick appears on step 7. |
 | 35 s | Taps `j`, plays `z`..`,` | Bass notes, always in key. They hold `z` and press `c`: a slide. |
 | 45 s | Holds `/` | Key map of GROOVE. They see "PT+STEP PATTERN". |
