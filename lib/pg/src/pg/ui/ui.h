@@ -46,6 +46,20 @@ inline bool isMacroIndex(int i) { return i >= kMacroIndex0 && i < kMacroIndex0 +
 // The instrument page's picture (UX.md 10.3): the scope's box, inclusive rows.
 constexpr int kScopeX0 = 4, kScopeY0 = 29, kScopeY1 = 72;
 static_assert(Scope::kCols == kScreenW - 2 * kScopeX0, "one trace value per column of the box");
+// Its macro cells: two columns of 112 px.
+constexpr int kMacroCellW = 112;
+constexpr int kMacroCellX[2] = {4, 124};
+
+// The label row of a macro's cell (UX.md 10.3), cell at x cx0: the end labels and
+// the name (fitted, upper case), where the low label ends and the high one starts,
+// the name's centre, and the x of the motion marker (an AMBER diamond left of the
+// name: notes carry their own values of the macro) and of the tilt mark (axis
+// `tiltAx`, right of the name); -1 = not drawn (no motion / no tilt, or no room).
+struct MacroLabels {
+  char name[8], lo[10], hi[10];
+  int loEnd, hiStart, nameX, nameW, markX, tiltX, tiltAx;
+};
+MacroLabels macroLabels(const macro::Macro& mc, int cx0, bool motion, uint8_t tiltMarks);
 
 class Ui {
  public:
@@ -113,6 +127,9 @@ class Ui {
   // while the playing pattern's motion moves it, else macroValue().
   uint8_t motionMask(int t) const;
   int shownMacro(int t, int m) const;
+  // The instrument page's footer explains motion: the focused macro (the chip) of
+  // the shown instrument has motion in the shown pattern and no step is held.
+  bool motionFooter() const;
   bool macroLive(int t, int m) const { return playing_ && ((st_.live[t & 7] >> (m & 3)) & 1u); }
   bool instrumentPage() const;     // SOUND shows the player's page (instrument / classic), not parameter pages
   bool listVisible() const { return listUntil_ != 0; }   // the instrument list overlay
@@ -348,6 +365,7 @@ class Ui {
   void editLock(int dir, int mag, bool shift);
   void stepMacroEdit(int t, Step& s, int m, int dir, int mag, bool shift);
   void clearMotion(int m);
+  void motionHint(int t, int m);
   bool clearStepOwn(int t, Step& s) const;
   void setValue(const ValueRef& ref, int v);
   const ParamInfo* infoFor(const ValueRef& ref) const;
@@ -493,6 +511,7 @@ class Ui {
   uint8_t memoNext_ = 0;
   uint32_t listUntil_ = 0;
   uint32_t macMoveMs_[kTrackMacros] = {};   // last move of each macro of the selected track (0 = none)
+  uint32_t motionHintMs_ = 0;               // when motionHint() last showed its toast (0 = never)
   Scope scope_;
   // where each macro of the shown instrument makes an enum jump (ticks), 0..255
   static constexpr int kMaxTicks = 6;

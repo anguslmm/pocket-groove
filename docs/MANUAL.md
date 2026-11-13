@@ -38,7 +38,7 @@ Headphones first: the jack is driven straight from the codec and the firmware ca
 3. Set the volume: hold the **G0** button (the small button on the top edge) and tap `=` until the level is comfortable; `-` turns it down. Each tap is 2 dB.
 4. Mute tracks: hold `fn`. A strip appears with the eight tracks. Tap `d` to mute the clap, `f` for the closed hats, tap again to bring them back. Release `fn`.
 5. Twist the filter: hold `]` and the whole mix thins out (high-pass); hold `[` and it closes (low-pass). Press `[` and `]` together to switch the filter off.
-6. Make the acid squelch: hold `=` (the bass's OPEN is what `-` `=` move at power-on; the status bar says `BASS OPEN`), then `-` to close it again. Press `9` to see the bass's instrument, ACID: hold `x` to open and `z` to close; the BITE slider under it moves by itself with the notes (its amber `~`: the notes carry it). Press `` ` `` to go back home.
+6. Make the acid squelch: hold `=` (the bass's OPEN is what `-` `=` move at power-on; the status bar says `BASS OPEN`), then `-` to close it again. Press `9` to see the bass's instrument, ACID: hold `x` to open and `z` to close; the BITE slider under it moves by itself with the notes (its amber ◆: the notes carry it). Press `` ` `` to go back home.
 7. Change pattern: hold `opt` and tap `2`. The status bar shows `P01>02`; pattern 2 starts when pattern 1 ends. The factory patterns are four bars long, so the switch can take up to about 8 s.
 8. Press `space` to stop.
 
@@ -236,7 +236,7 @@ A note can carry its own value of each macro. Hold the step key and move a macro
 
 ![While it plays the sliders move by themselves](ux/motion-playing.png)
 
-While it plays, the sliders of macros with motion move by themselves and a white tick marks their base; an amber `~` by a macro's name means notes of this pattern carry its values (also when stopped). Moving such a macro by hand while it plays changes only its base (heard where a pattern has no values).
+While it plays, the sliders of macros with motion move by themselves and a white tick marks their base. An amber ◆ before a macro's name means notes of this pattern carry their own values of it (also when stopped): the same ◆ a step with a value carries. It is not an LFO: the movement is the notes' values, so you change it by changing those. Moving such a macro by hand while it plays changes only its base (heard where a pattern has no values), so the page says so once (`OPEN FOLLOWS NOTES: HOLD STEP+KEY ◆`). While the macro you are moving has motion, the footer lists the three ways to change it: `STEP+KEY ◆` (hold a step and move the macro: that note's value), `REC+MOVE` (record it again, below), `DEL+KEY` (clear it, below).
 
 **Recording motion**: turn REC on (`enter`) while playing and move a macro: it turns red (**live**). You hear your hand, and every note of the track that starts while it is live takes the macro's value. It stays live until you leave it alone for a bar, or turn REC off. `ctrl`+`z` takes back the whole pass (with any notes recorded in it).
 
