@@ -1625,8 +1625,14 @@ void State::motionStep(int t, bool fresh) {
     const uint8_t ended = uint8_t(r.kfMask & ~now & ~r.live);
     r.kfMask = now;
     publishMotion(t);
-    // No motion in this pattern: the base (the glide into the pattern already went there).
-    for (uint8_t b = ended; b; b = uint8_t(b & (b - 1))) startRamp(t, __builtin_ctz(b), proj->tracks[t].macro[__builtin_ctz(b)], 0);
+    // No motion in this pattern: the base (the glide into the pattern already went there;
+    // at Play, from where an earlier motion left it resting).
+    uint8_t toBase = ended;
+    if (motStart)
+      for (int m = 0; m < kTrackMacros; ++m)
+        if (!((now >> m) & 1u) && !((r.live >> m) & 1u) && !((r.moving >> m) & 1u) && r.mTo[m] != float(proj->tracks[t].macro[m]))
+          toBase = uint8_t(toBase | (1u << m));
+    for (uint8_t b = toBase; b; b = uint8_t(b & (b - 1))) startRamp(t, __builtin_ctz(b), proj->tracks[t].macro[__builtin_ctz(b)], 0);
   }
   if (r.live) liveStep(t);
   const uint8_t mask = uint8_t(r.kfMask & ~r.live);

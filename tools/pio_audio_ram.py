@@ -85,7 +85,10 @@ HOT_COMMON = [
     # macro::evaluateFine), once per 11.6 ms per moving track, and the drums'
     # fractional mappings, fed every 11.6 ms, stay in flash: ~2.5 KB of IRAM saved
     # for a cost at 86 Hz that env:profile's MOTION lines measure.
-    r"^pg::engine_detail::State::(fineTick|fineEval|macroPos)\(",
+    r"^pg::engine_detail::State::(fineTick|fineEval)\(",
+    # Where a macro is on its trajectory: publishStatus asks every 4th quantum per
+    # moving track (the page's sliders, MOTION). GCC emits it as an isra clone.
+    r"^_ZNK2pg13engine_detail5State8macroPos",
     r"^pg::Voice::mono\(\) const",
     r"^pg::engine_detail::Delay::readTap\(",
     r"^pg::engine_detail::MasterBus::setParams\(",

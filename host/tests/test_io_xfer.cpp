@@ -354,8 +354,31 @@ void testBase64() {
 
 }  // namespace
 
+// Project versions through the transfer: a version-2 file (the step layout before
+// the repack; the engine's sanitiser repacks it after a load, itest_format) and a
+// version-3 file go in and come out byte for byte, each with its own version.
+void testVersions() {
+  Rig rig;
+  for (int v : {2, 3}) {
+    auto p = iot::newProject();
+    iot::typicalProject(*p, uint32_t(40 + v));
+    p->version = uint8_t(v);
+    std::vector<uint8_t> d(80 * 1024);
+    size_t len = 0;
+    CHECK_ST(encodeToBuffer(*p, "VERS", d.data(), d.size(), &len), Status::Ok);
+    d.resize(len);
+    CHECK(put(rig, "int", "VERS", d) == "SAVED int VERS");
+    CHECK(get(rig, "int", "VERS") == d);
+    auto q = iot::newProject();
+    HeaderInfo hi{};
+    CHECK_ST(loadProject(rig.fs, kMountInt, "VERS", *q, &hi), Status::Ok);
+    CHECK(hi.projectVersion == v && std::memcmp(p.get(), q.get(), sizeof(Project)) == 0);
+  }
+}
+
 int main() {
   testCoexist();
+  testVersions();
   testListGet();
   testPut();
   testPutRefusals();

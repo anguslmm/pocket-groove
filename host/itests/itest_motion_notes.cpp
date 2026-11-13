@@ -211,6 +211,19 @@ void testSingleAndBase() {
   post(setMacroCommand(kBass, 0, 30));   // a move after stop glides to the base again
   quanta(400);
   it::check(g_rec.pos.back() == 30.0f, "after stop a move is heard (%.2f)", double(g_rec.pos.back()));
+  // resting away from the base after Stop, then Play in a pattern without motion: the base
+  play();
+  untilFires(g_rec.fires.size() + 5);
+  post(cmd(CmdType::Stop));
+  quanta(2);
+  const float rest = g_rec.pos.back();
+  for (int s = 0; s < kMaxSteps; ++s) S(0, s).clearExt();
+  play();
+  quanta(400);
+  it::check(rest != 30.0f && g_rec.pos.back() == 30.0f, "play without motion: back at the base (%.2f -> %.2f)",
+            double(rest), double(g_rec.pos.back()));
+  post(cmd(CmdType::Stop));
+  quanta(2);
 }
 
 // ---- next pattern: queued, song slot, with and without keyframes, late ----------------------

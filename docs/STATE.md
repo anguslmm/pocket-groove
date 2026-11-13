@@ -184,9 +184,49 @@ Order of work (owner, updated 2026-11-12):
    (31.7 KB of the segment left for static growth). Expected free heap about 44 KB and
    minimum-ever about 24 KB (was 54 / 34 measured before stages A, B and the scope, which cost
    about 9.6 KB together); NOT MEASURED on the device yet. Stage C (motion) cannot add 16-32 KB
-   of step data: pack the per-note macro values into the existing 8-byte Step instead.
-   LATER STAGES (not built, not designed out): (C) "motion": per-note values of all four macros with glide (see
-   Motion below; the step's single macro lock is the seed of it); (D) tilt as a macro control;
+   of step data: pack the per-note macro values into the existing 8-byte Step instead (done, below).
+   STAGE C DONE (2026-11-13, branch of the motion worktree): NOTES MOVE THE MACROS. Project
+   version 3 packs the step (still 8 bytes, Project unchanged at 67136; static_asserts in
+   project.h): note, flags, vel, gate, prob as before, the chord in the spare bits (flags bits
+   3/6/7, prob bit 7), and the last three bytes are a CLASSIC track's one parameter lock (param,
+   value) or, on an instrument track, four 6-bit macro codes (0 = no own value, 1..63 = 63 levels
+   0..255). Versions 1 and 2 load losslessly (Engine::sanitizeProject repacks; a v2 instrument
+   track's macro lock becomes that macro's value on the note; sound and MIXER LOCKS ON
+   INSTRUMENT TRACKS ARE DROPPED; CLASSIC tracks keep their lock; the demos are bit-identical,
+   itest_golden unchanged). The engine (engine.h "MOTION"): per track and macro the notes with
+   own values are keyframes at their grid time with swing, firing or not; a straight line from
+   one to the next arriving in the quantum it fires, through silence, across the wrap and into
+   what plays next (queued pattern, song slot; none there: the base at the boundary); one
+   keyframe = constant; late queue, edits, tempo and swing re-aim from where it is; Play starts
+   where the loop would be; Stop rests; a move of a macro with motion only sets its base, except
+   while recording (live: from a move until a still bar; every note it passes takes the value).
+   The old macro lock is gone (no locks on instrument tracks). UI: hold a step + macro key =
+   that note's value of that macro (all four on one note; DEL: the focused macro's, then all;
+   STEP EDIT field MOVE, `k` again = next macro), sliders follow the engine while playing (base =
+   white tick), amber ~ = the macro has motion here, red chip = live, hold DEL + macro key =
+   clear its motion (undo), a recording pass is one undo unit. Docs: UX.md 7 and 10.3 "Motion",
+   MANUAL.md 4.4 "Motion" and 10, MACROLAB.md "Motion"; screenshots docs/ux/motion-*.png,
+   groove-motion.png, step-edit-motion.png. Host tests: itest_format (v1/v2 files built byte
+   for byte -> expected v3), itest_motion_notes (exact keyframe values, lines, swing, wrap,
+   queue / song / late / tempo / polymeter / first pass / base / stop / live), itest_ui_instrument
+   (held values, recording pass + undo, clear gesture, sliders following, three key-matrix
+   models), test_io_xfer (v2 and v3 files through the transfer), zipper_motion (two ACID notes a
+   bar apart: cutoff path as smooth as one ideal ramp, within 0.9 cents of it). Firmware (both
+   envs warning-free; before -> after, USB / jack): flash 1106527 -> 1117131 / 1044031 ->
+   1054527, static RAM 199212 -> 199580 / 198668 -> 199036, _heap_start 0x3FCD3B30 ->
+   0x3FCD3FA0 / 0x3FCD1E10 -> 0x3FCD2280, IRAM functions 93 -> 95 / 92 -> 94,
+   .iram0.text 125963 -> 126891 / 119023 -> 119951 (motionStep, per step, and macroPos,
+   for the published positions, joined the placement lists).
+   HARDWARE CHECK (not done): on the device, ACID on the bass, two notes a bar apart with
+   different OPEN (hold step 1, z z z; hold step 9, x x x): the filter should open in one smooth
+   sweep between them with no steps; the sliders should move with it; a recording pass (enter,
+   hold c/v while playing) should come back on the next loop and undo with ctrl+z; AUD load (`r`)
+   with motion on bass and lead at once (a glide is a moving macro: stage B's ~1.3 % per track by
+   estimate); minimum-ever heap (the build moved _heap_start by about 1.1 KB). The owner's ears:
+   whether 63 levels per note are enough, whether one bar is the right "still" time for live, and
+   whether resting at Stop (instead of returning to the base) feels right.
+   LATER STAGES (not built, not designed out): (D) tilt as a macro control (its values reach
+   motion recording through SetMacro like the keys);
    (E) a polished, reactive picture on the instrument page (enum jump ticks, end labels as
    pictures); (F) a sampler instrument; (G) converting the demos from CLASSIC to instruments.
    STANDING RULE (owner, 2026-11-13): development does not wait for macro assessment. The owner
@@ -210,6 +250,7 @@ Motion (decided with the owner 2026-11-12, to be built as part of the macro rede
 new project format, which is fine because the owner writes no real song before the redesign):
 - Today: one parameter lock per step (set by hand, applied at the note), live NOTE recording,
   ratchets stored per step; ALT+pad rolls and parameter movements are not recorded.
+- BUILT as stage C (above; engine.h "MOTION", docs/MACROLAB.md "Motion").
 - Decision: one set of macro values per NOTE (no values on empty steps for now). Between notes
   the value moves in a straight line through time, arriving exactly at the next note's start
   and continuing through silence ("rule A"); so a note held across a sweep plays a ramp. A value
@@ -218,9 +259,8 @@ new project format, which is fine because the owner writes no real song before t
   macro values (keys or tilt) into the notes as the pattern passes.
 - Known limit, accepted: a note followed by a long gap can only glide slowly. If it bites, allow
   values on empty steps later; that would not change how existing recordings play.
-- Engineering this needs: voices that accept smooth parameter changes cheaply (done in
-  stage B: Voice::setParamsFine, the engine's ramps), and RAM for the values (about 16-32 KB for 4 macros on
-  every step of 16 patterns x 8 tracks x 64 steps, against a 34 KB minimum-free margin).
+- Engineering: voices that accept smooth parameter changes cheaply (stage B: Voice::setParamsFine,
+  the engine's ramps) and RAM for the values: none (stage C packed 4 x 6 bits into the 8-byte step).
 - Tilt verified on hardware (hw-spike): fun, steady, no key loss; all four response presets
   useful, so response speed should belong to the control being moved, not be global.
 
@@ -230,7 +270,8 @@ Known follow-ups:
   measurement, a card costs about 25 KB of heap in the default build. RAM options with costs:
   docs/usb-audio.md 6.4.
 - pg::io: FAT (SD) save-replace has a power-cut window inside FatFs rename; make it safe.
-- Per-pattern sound settings and a second p-lock per step (data-model change, v0.2).
+- Per-pattern sound settings (data-model change). (A second p-lock per step: instrument tracks now
+  carry four macro values per note instead; CLASSIC tracks keep one lock.)
 - Autosave while playing, if the measured flash stall allows it.
 - Performance recording: log the timestamped Commands the UI posts and replay them through
   host/common/bounce.h (Pass timeline), so live moves end up in bounces.
