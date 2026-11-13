@@ -75,6 +75,9 @@ class XferOut {
 struct XferEnv {
   uint32_t nowMs = 0;
   bool playing = false;
+  // A microphone recording is streaming into the sample pool (stage F2): every request
+  // that writes flash (PUT, its WRs, SPUT, SRM) is refused with ERR RECORDING, force or not.
+  bool recording = false;
 };
 
 class Xfer {

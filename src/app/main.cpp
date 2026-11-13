@@ -11,6 +11,8 @@
 //             codec volume (I2C), files, serial. Sleeps in keys::waitEvent()
 //             between ~30 fps frames, so keys are handled as they arrive.
 //   pg_sdmount core 1, prio 1, 8 KB, transient (plat::storage), at boot.
+//   pg_mic    core 1, prio 8, 3 KB from the heap, only while a microphone recording runs
+//             (plat::mic: the ring -> the Recorder -> 512-byte flash writes).
 // Big objects are static (.bss/.data): Instrument (+ the engine's state block),
 // Ui, Framebuffer. Nothing large is allocated on the heap or a task stack.
 //
@@ -45,6 +47,7 @@
 #include "../platform/display.h"
 #include "../platform/imu.h"
 #include "../platform/keys.h"
+#include "../platform/mic.h"
 #include "../platform/sample_flash.h"
 #include "../platform/storage.h"
 #include "../platform/system.h"
@@ -397,6 +400,7 @@ uint32_t ourStackSize(const char* name) {
   if (strcmp(name, "pg_imu") == 0) return plat::imu::kTaskStack;
   if (strcmp(name, "loopTask") == 0) return static_cast<uint32_t>(getArduinoLoopTaskStackSize());
   if (strcmp(name, "pg_sdmount") == 0) return 8192;
+  if (strcmp(name, "pg_mic") == 0) return plat::mic::kTaskStack;
   return 0;
 }
 
@@ -565,6 +569,8 @@ void printReport() {
          static_cast<unsigned long>(sh->dataCrc));
     }
   }
+  // ---- microphone (stage F2): registers, GPIO46, the input now (~1.3 s), the last recording
+  plat::mic::report([](const char* t) { sys::serialWrite(t); });
   {
     const pg::io::Xfer::Stats& xs = g_xfer.stats();
     sp("[xfer] lines %lu, gets %lu, puts %lu, errors %lu, timeouts %lu, bad crc %lu, bad lines %lu, overflows %lu\n",
@@ -612,6 +618,7 @@ void serviceXfer() {
   pg::io::XferEnv env;
   env.nowMs = sys::millis();
   env.playing = g_inst.engine().isPlaying();
+  env.recording = g_ui.micBusy() || plat::mic::busy();   // the pool is being written: no other flash writes
   const pg::io::Xfer::Stats before = g_xfer.stats();
   g_xfer.service(env, g_xferOut);
   const pg::io::Xfer::Stats& after = g_xfer.stats();
@@ -958,6 +965,7 @@ void setup() {
   }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
+  g_ui.setMic(&plat::mic::input());   // L on a sampler page (stage F2); it says why when it cannot
   g_xfer.init(&fs, PG_VERSION);
   g_xfer.setSamples(plat::samples::info().ok ? &plat::samples::writer() : nullptr);
   g_sdRecovered = storage::sdState() == storage::SdState::Mounted;   // Ui::boot recovers mounted cards
@@ -1058,7 +1066,7 @@ void loop() {
 
   // Persist the codec volume once it has settled, and only while stopped
   // (a flash write stalls both cores; see storage.h).
-  if (g_volDirty && !g_playing && now - g_volChangedMs > kVolSaveDelayMs) {
+  if (g_volDirty && !g_playing && !g_ui.micBusy() && now - g_volChangedMs > kVolSaveDelayMs) {
     g_volDirty = false;
     if (!app::saveSettings(storage::fs(), g_set)) sp("[fs] firmware settings NOT saved\n");
   }
