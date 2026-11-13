@@ -650,8 +650,9 @@ void miniStrip(Gfx& g, const Ui& ui, int y, int track, int page, int play, int h
 }  // namespace
 
 // ---- the instrument page (UX.md 10.3) -----------------------------------------------
-// Header: track chip, the instrument's name (L), its place in the list; the player's
-// about line; the picture (a live scope of the track's voice, kScopeY0..kScopeY1);
+// Header: track chip, the instrument's name (L), its place in the list; no caption
+// (a set's `about` line is an author's note and is not drawn). The picture (a live
+// scope of the track's voice, kScopeY0..kScopeY1) starts right under the name; then
 // the four macros as horizontal sliders in a 2 x 2 grid, the left hand's pairs
 // (z x, c v) on the left, the right hand's (b n, m ,) on the right. CLASSIC (no
 // instrument) and an unknown id keep the picture and invite a choice below it.
@@ -766,7 +767,7 @@ void Ui::drawInstrument(Framebuffer& fb) {
     // CLASSIC (or an id this firmware lacks): the same picture, and two ways in
     const uint16_t id = instrumentIdOf(t);
     g.text(x + 6, 13, id ? "UNKNOWN" : "CLASSIC", id ? AMBER : TEXT, 2);
-    g.text(4, 27, id ? "NOT IN THIS FIRMWARE: PLAYS AS SAVED." : "PLAYS ITS OWN SAVED SOUND.", TEXT);
+    g.textR(235, 15, id ? "NOT IN FIRMWARE" : "OWN SAVED SOUND", id ? AMBER : DIM);
     drawScope(fb);
     g.text(4, 76, "PICK AN INSTRUMENT", WHITE);
     catInt(buf, n);
@@ -801,10 +802,6 @@ void Ui::drawInstrument(Framebuffer& fb) {
   } else {
     catInt(cat(catInt(buf, idx + 1), "/"), n);
     g.textR(235, 15, buf, DIM);
-  }
-  if (s->tagline[0]) {
-    fitText(buf, s->tagline, 39);
-    g.text(4, 27, buf, TEXT);
   }
   drawScope(fb);
   // the four macros
@@ -903,7 +900,7 @@ void Ui::drawInstrument(Framebuffer& fb) {
 
 // The track's instruments after ; . 9 (for 1.5 s): a column at the picture's right
 // edge, the current one in the middle as a chip, its neighbours (the list wraps)
-// above and below, so the about line under the name stays readable.
+// above and below; the rest of the picture stays in view.
 void Ui::drawInstrumentList(Framebuffer& fb) {
   Gfx g(fb);
   const int t = sel_;

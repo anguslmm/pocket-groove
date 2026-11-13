@@ -43,7 +43,7 @@ constexpr int kListPerMount = 24;
 constexpr int kMacroIndex0 = kParamsPerTrack;
 inline bool isMacroIndex(int i) { return i >= kMacroIndex0 && i < kMacroIndex0 + kTrackMacros; }
 // The instrument page's picture (UX.md 10.3): the scope's box, inclusive rows.
-constexpr int kScopeX0 = 4, kScopeY0 = 37, kScopeY1 = 72;
+constexpr int kScopeX0 = 4, kScopeY0 = 29, kScopeY1 = 72;
 static_assert(Scope::kCols == kScreenW - 2 * kScopeX0, "one trace value per column of the box");
 
 class Ui {
