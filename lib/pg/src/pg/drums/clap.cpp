@@ -26,7 +26,27 @@ const float kBurst[5] = {0.80f, 1.0f, 0.88f, 1.0f, 0.92f};
 inline uint32_t bit(int i) { return 1u << i; }
 }  // namespace
 
-ClapVoice::ClapVoice() : DrumVoice(kParams, kNumParams) {}
+// While a macro moves (DrumVoice::setParamsFine): TONE, RESONANCE, AIR, TAIL
+// and DRIVE follow continuously (the band-pass also inside a ringing hit);
+// DECAY, SPREAD and BURSTS shape the envelope and take their new value at the
+// next hit.
+ClapVoice::ClapVoice() : DrumVoice(kParams, kNumParams) {
+  contMask_ = bit(kTone) | bit(kReso) | bit(kAir) | bit(kTail) | bit(kDrive);
+}
+
+void ClapVoice::updateFine(uint32_t ch) {
+  if (ch & (bit(kTone) | bit(kReso) | bit(kAir))) {
+    toneHz_ = 500.0f * exp2Fast(2.6780719f * unit(pf_[kTone]));   // 500..3200 Hz
+    q_ = 0.7f * exp2Fast(2.6844982f * unit(pf_[kReso]));         // 0.7..4.5
+    airAmt_ = unit(pf_[kAir]);
+    setFilterT<true>();
+  }
+  if (ch & bit(kTail)) tailAmt_ = 0.1f + 0.9f * unit(pf_[kTail]);
+  if (ch & bit(kDrive)) {
+    drive_ = 0.6f * exp2Fast(4.5f * unit(pf_[kDrive]));
+    post_ = driveNorm(drive_, kNominalPeak);
+  }
+}
 
 void ClapVoice::resetState() {
   be_ = te_ = 0.0f;
@@ -40,10 +60,12 @@ void ClapVoice::resetState() {
   level_ = 0.0f;
 }
 
-void ClapVoice::setFilter() {
+template <bool Fast>
+void ClapVoice::setFilterT() {
   // An accented clap is brighter: band a little higher, more air.
   const float fc = clampf(toneHz_ * noteRatio_ * (bright_ > 1.0f ? 1.15f : 1.0f), 200.0f, 6000.0f);
-  svf_.set(fc, q_, fs_);
+  if (Fast) svf_.setFast(fc, q_, fs_);
+  else svf_.set(fc, q_, fs_);
   // White noise (variance 1/3) through a band-pass of peak gain Q has
   // variance ~ (1/3) * pi * Q * fc / fs: normalise to a constant RMS.
   const float var = (1.0f / 3.0f) * kPi * q_ * fc / fs_;
@@ -54,27 +76,28 @@ void ClapVoice::setFilter() {
 void ClapVoice::updateCoefs(uint32_t ch) {
   const float fs = fs_;
   if (ch & (bit(kTone) | bit(kReso) | bit(kAir))) {
-    toneHz_ = expMap(unit(p_[kTone]), 500.0f, 3200.0f);
-    q_ = expMap(unit(p_[kReso]), 0.7f, 4.5f);
-    airAmt_ = unit(p_[kAir]);
+    toneHz_ = expMap(unit(pf_[kTone]), 500.0f, 3200.0f);
+    q_ = expMap(unit(pf_[kReso]), 0.7f, 4.5f);
+    airAmt_ = unit(pf_[kAir]);
     setFilter();
   }
-  if (ch & bit(kDecay)) tailCoef_ = decayCoef(expMap(unit(p_[kDecay]), 0.02f, 0.5f), fs);
+  if (ch & bit(kDecay)) tailCoef_ = decayCoef(expMap(unit(pf_[kDecay]), 0.02f, 0.5f), fs);
   if (ch & bit(kSpread)) {
-    const float gap = expMap(unit(p_[kSpread]), 0.004f, 0.028f);
+    const float gap = expMap(unit(pf_[kSpread]), 0.004f, 0.028f);
     spacing_ = gap * fs;
     // Each burst falls to about 20% by the time the next one lands.
     burstCoef_ = decayCoef(gap / 1.6f, fs);
   }
-  if (ch & bit(kTail)) tailAmt_ = 0.1f + 0.9f * unit(p_[kTail]);
+  if (ch & bit(kTail)) tailAmt_ = 0.1f + 0.9f * unit(pf_[kTail]);
   if (ch & bit(kBursts)) numBursts_ = p_[kBursts];
   if (ch & bit(kDrive)) {
-    drive_ = 0.6f * powf(2.0f, 4.5f * unit(p_[kDrive]));
+    drive_ = 0.6f * powf(2.0f, 4.5f * unit(pf_[kDrive]));
     post_ = driveNorm(drive_, kNominalPeak);
   }
 }
 
 void ClapVoice::noteOn(const NoteEvent& e) {
+  applyPending();
   level_ = kLevel * velocityGain(e.vel) * (e.accent ? 1.3f : 1.0f);
   beginHit(true, level_);
   const float nr = noteRatio(int(e.note), 24);

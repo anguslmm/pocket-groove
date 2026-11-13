@@ -5,6 +5,7 @@
 #pragma once
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 namespace pg {
 namespace drums {
@@ -35,6 +36,37 @@ inline float saturate(float x) {
 
 inline float unit(uint8_t v) { return float(v) * (1.0f / 127.0f); }    // 0..127 -> 0..1
 inline float centred(uint8_t v) { return float(v) * (1.0f / 128.0f); } // 64 -> exactly 0.5
+// The same of a float parameter (DrumVoice::pf_): for float(byte) exactly the byte's value.
+inline float unit(float v) { return v * (1.0f / 127.0f); }
+inline float centred(float v) { return v * (1.0f / 128.0f); }
+
+// ---- cheap control-rate math for parameters in motion (DrumVoice::updateFine) ----
+// No libm: polynomials good to about 1e-6 relative, so a value moved by a macro
+// and the same value set as a byte sound the same (the byte path keeps libm).
+
+// 2^x for x in about [-60, 60]: degree-5 polynomial on the fraction (as lead_math.h).
+inline float exp2Fast(float x) {
+  const float xs = x + 64.0f;
+  const int32_t i = int32_t(xs);
+  const float f = xs - float(i);
+  const float p = 1.0f + f * (0.693147600f + f * (0.240206867f + f * (0.0556586646f +
+                  f * (0.00919680204f + f * 0.00178966508f))));
+  const uint32_t bits = uint32_t(i - 64 + 127) << 23;
+  float s;
+  std::memcpy(&s, &bits, sizeof s);
+  return p * s;
+}
+// sin and cos of x in [0, 1.5] by their Taylor series (to x^11 / x^12).
+inline float sinSmall(float x) {
+  const float x2 = x * x;
+  return x * (1.0f - x2 * (1.0f / 6.0f - x2 * (1.0f / 120.0f - x2 * (1.0f / 5040.0f - x2 * (1.0f / 362880.0f -
+              x2 * (1.0f / 39916800.0f))))));
+}
+inline float cosSmall(float x) {
+  const float x2 = x * x;
+  return 1.0f - x2 * (0.5f - x2 * (1.0f / 24.0f - x2 * (1.0f / 720.0f - x2 * (1.0f / 40320.0f - x2 * (1.0f / 3628800.0f -
+                x2 * (1.0f / 479001600.0f))))));
+}
 
 // Exponential map of t in 0..1 onto lo..hi.
 inline float expMap(float t, float lo, float hi) { return lo * powf(hi / lo, t); }
@@ -46,6 +78,9 @@ inline float onePoleCoef(float hz, float fs) { return 1.0f - expf(-2.0f * kPi * 
 inline float oscEps(float hz, float fs) {
   return 2.0f * sinf(kPi * clampf(hz, 1.0f, 0.24f * fs) / fs);
 }
+// The same three without libm (parameters in motion).
+inline float onePoleCoefFast(float hz, float fs) { return 1.0f - exp2Fast(-2.0f * kPi * 1.44269504f * hz / fs); }
+inline float oscEpsFast(float hz, float fs) { return 2.0f * sinSmall(kPi * clampf(hz, 1.0f, 0.24f * fs) / fs); }
 // 32-bit phase increment for the integer square oscillators.
 inline uint32_t phaseInc(float hz, float fs) {
   return uint32_t(clampf(hz / fs, 0.0f, 0.49f) * 4294967296.0f);
@@ -111,6 +146,14 @@ struct Svf {
   float s1 = 0.0f, s2 = 0.0f;
   void set(float hz, float q, float fs) {
     g = tanf(kPi * clampf(hz, 20.0f, 0.45f * fs) / fs);
+    const float k = 1.0f / clampf(q, 0.3f, 20.0f);
+    gk = g + k;
+    d = 1.0f / (1.0f + g * gk);
+  }
+  // The same without libm (tan from the sin / cos series; the angle is at most 1.42).
+  void setFast(float hz, float q, float fs) {
+    const float x = kPi * clampf(hz, 20.0f, 0.45f * fs) / fs;
+    g = sinSmall(x) / cosSmall(x);
     const float k = 1.0f / clampf(q, 0.3f, 20.0f);
     gk = g + k;
     d = 1.0f / (1.0f + g * gk);

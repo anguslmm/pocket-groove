@@ -29,6 +29,7 @@
 // 1200-baud touch of `pio run -t upload` also reboots into download mode.
 //
 // This file includes only platform and pg headers: no Arduino / M5 / ESP-IDF.
+#include <esp_heap_caps.h>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdio>
@@ -71,7 +72,17 @@ namespace storage = plat::storage;
 // ---- static objects ------------------------------------------------------------
 pg::Instrument g_inst;          // ~70 KB + the engine's static state block
 pg::ui::Ui g_ui;
-pg::Framebuffer g_fb;           // 32.4 KB
+// The 32.9 KB frame buffer lives on the heap, taken once before anything else
+// allocates. Static data plus the code placed in IRAM had filled the linker's
+// data segment (dram0_0_seg, 341.7 KB); the heap continues above that segment,
+// where static data cannot go, so this moves the buffer to where the free RAM
+// is. Total RAM use is unchanged.
+pg::Framebuffer* allocFramebuffer() {
+  void* p = heap_caps_calloc(1, sizeof(pg::Framebuffer), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+  if (!p) abort();
+  return static_cast<pg::Framebuffer*>(p);
+}
+pg::Framebuffer& g_fb = *allocFramebuffer();
 app::Overlays g_ov;
 app::Settings g_set;
 pg::io::Xfer g_xfer;            // USB project transfer (~0.4 KB)

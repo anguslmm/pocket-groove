@@ -43,7 +43,10 @@ enum class CmdType : uint8_t {
   SetInstrument,    // a = track, instrument id and the four macro positions: build it with
                     //   setInstrumentCommand(). Id 0 = none (CLASSIC: the sound parameters stay
                     //   as they are now and play as stored). See "Instruments" below.
-  SetMacro,         // a = track, b = macro 0..3, c = position 0..255
+  SetMacro,         // a = track, b = macro 0..3, c = position 0..255; the macro moves there along
+                    //   a straight line in a ramp time (step.lockParam | step.lockValue << 8 quanta;
+                    //   0 = the default glide, kMacroRampMs; 1 = jump). Build it with
+                    //   setMacroCommand(). See "MACRO MOTION" below.
   RefreshInstruments, // a = track (0xFF = every track): look the bound ids up again in the
                     //   library (macro::findInstrument) and re-derive. The host's overlay (the lab)
                     //   sends it after replacing a set; the old set's memory must stay valid until
@@ -64,6 +67,34 @@ enum class CmdType : uint8_t {
 // lock's value for the lock's scope (evaluated at the step); a lock of a sound
 // parameter (1..24) is ignored (the instrument owns them); mixer locks work.
 // On a CLASSIC track macro locks are ignored and everything else is as before.
+//
+// MACRO MOTION (docs/MACROLAB.md "What a moving parameter sounds like"): the
+// Project holds each macro's position as a byte, and the stored sound
+// parameters are always the 7-bit evaluation at those bytes. What the voice
+// hears follows a trajectory instead: per track and macro the engine keeps a
+// current position that moves to a new SetMacro target along a straight line
+// in the command's ramp time (default kMacroRampMs, longer than the gap between
+// the UI's key repeats on the device, so a held key or a stream of tilt values
+// joins into one continuous movement; a new target retargets from wherever the
+// macro is). While any macro of a track moves, the engine evaluates the
+// instrument without rounding (macro::evaluateFine) once per kFineEvalQuanta,
+// where the macros will be at the end of that interval, and every kFineQuanta
+// passes the voice fractional parameters interpolated in between
+// (Voice::setParamsFine; drums every kFineEvalQuanta), and the mixer a
+// fractional level and sends. When the movement ends the values run into the
+// stored bytes (kMacroSettleMs) and the track returns to the 7-bit path, bit for
+// bit what a static project plays; it enters the fractional path the same way
+// (the first kMacroSettleMs run from the bytes it was playing). Jumps, never ramps: an instrument change (or a
+// project loaded or edited by any other route), a ramp of 1, a macro lock
+// starting or ending at a step (the note it fires snaps anyway; a note still
+// ringing on a legato slide or another lead voice hears the jump through the
+// voice's own de-click smoothing), enum and semitone parameters (they take the
+// value the set gives at the current position, so they switch where the set
+// says). CLASSIC tracks and tracks whose macros stand still never leave the
+// 7-bit path.
+constexpr int kMacroRampMs = 72;      // default glide of a SetMacro
+constexpr int kMacroSettleMs = 50;    // run into / out of the fractional path
+constexpr uint16_t kMacroJump = 1;    // ramp: arrive at the next quantum
 
 
 struct Command {
@@ -76,6 +107,9 @@ struct Command {
 // SetInstrument: a = track; the id in step.lockParam (low byte) / step.lockValue
 // (high byte), the positions in step.note, flags, vel, gate (macros 0..3).
 Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4]);
+// SetMacro with an explicit ramp (quanta; 0 = kMacroRampMs). The "motion" stage
+// sets ramps that arrive exactly at a note (ramp = quanta until then).
+Command setMacroCommand(int track, int macro, uint8_t position, uint16_t rampQuanta = 0);
 
 struct EngineStatus {
   bool     playing;

@@ -11,6 +11,7 @@ DrumVoice::DrumVoice(const ParamInfo* table, int numParams)
     : table_(table), numParams_(numParams > kMaxParams ? kMaxParams : numParams) {
   for (int i = 0; i < kMaxParams; ++i) raw_[i] = p_[i] = 0;
   for (int i = 0; i < numParams_; ++i) raw_[i] = p_[i] = table_[i].def;
+  for (int i = 0; i < kMaxParams; ++i) pf_[i] = float(p_[i]);
 }
 
 void DrumVoice::init(float sampleRate) {
@@ -21,6 +22,9 @@ void DrumVoice::init(float sampleRate) {
   choking_ = false;
   chokeGain_ = 1.0f;
   resid_ = residRamp_ = lastOut_ = 0.0f;
+  fine_ = false;
+  pend_ = touched_ = 0;
+  for (int i = 0; i < kMaxParams; ++i) pf_[i] = float(p_[i]);
   resetState();
   updateCoefs(0xFFFFFFFFu);
 }
@@ -28,21 +32,49 @@ void DrumVoice::init(float sampleRate) {
 void DrumVoice::setParams(const uint8_t* soundParams) {
   // Called every quantum: the common "nothing changed" case is one 12-byte
   // compare (unused slots of raw_ are 0, as the engine sends them).
-  if (std::memcmp(soundParams, raw_, kMaxParams) == 0) return;
-  uint32_t changed = 0;
+  if (!fine_ && std::memcmp(soundParams, raw_, kMaxParams) == 0) return;
+  // Back from fractions: everything they touched (and every latched value still
+  // waiting for a hit) is recomputed from the bytes.
+  const bool wasFine = fine_;
+  uint32_t changed = wasFine ? (touched_ | pend_) : 0u;
+  fine_ = false;
+  touched_ = pend_ = 0;
   for (int i = 0; i < numParams_; ++i) {
     const uint8_t v = soundParams[i];
-    if (v != raw_[i]) {
+    if (v != raw_[i] || wasFine) {
       raw_[i] = v;
       const ParamInfo& pi = table_[i];
       const uint8_t c = v < pi.min ? pi.min : (v > pi.max ? pi.max : v);
-      if (c != p_[i]) {
+      if (c != p_[i] || (wasFine && float(c) != pf_[i])) {
         p_[i] = c;
+        pf_[i] = float(c);
         changed |= 1u << i;
       }
     }
   }
   if (changed) updateCoefs(changed);
+}
+
+void DrumVoice::setParamsFine(const float* v) {
+  if (!fine_) {
+    fine_ = true;
+    touched_ = pend_ = 0;
+  }
+  uint32_t cont = 0;
+  for (int i = 0; i < numParams_; ++i) {
+    const ParamInfo& pi = table_[i];
+    const float x = clampf(v[i], float(pi.min), float(pi.max));
+    if (x == pf_[i]) continue;
+    pf_[i] = x;
+    p_[i] = uint8_t(int(x + 0.5f));
+    raw_[i] = p_[i];
+    if ((contMask_ >> i) & 1u) cont |= 1u << i;
+    else pend_ |= 1u << i;
+  }
+  if (cont) {
+    touched_ |= cont;
+    updateFine(cont);
+  }
 }
 
 void DrumVoice::choke() {

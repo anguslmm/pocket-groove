@@ -87,7 +87,7 @@ Order of work (owner, updated 2026-11-12):
    Found on the way: the engine's delay and reverb returns produce subnormal floats on default
    settings (one-pole states decaying in silence); harmless on the host so far, not checked on
    the ESP32-S3.
-   Facts found for the redesign (docs/MACROLAB.md, last section; host/tools/zipper_probe):
+   Facts found for the redesign (host/tools/zipper_probe; stage B, below, fixed what they found):
    parameters are 7-bit (one bass CUT value = 73 cents of cutoff, lead 83). Smoothing: bass
    cutoff CV ~1.2 ms and level-type params ~1.6 ms one-poles, the rest unsmoothed; lead ~5 ms on
    cutoff/reso/shape/width/drive/osc mix, the rest unsmoothed; drums none at all (a change
@@ -139,9 +139,53 @@ Order of work (owner, updated 2026-11-12):
    RAM +1424 B (USB 228212 -> 229636, jack 227668 -> 229092: ring 1 KB, tap state, the UI's
    scope state); flash +9.3 KB (1085859 -> 1095187, 1023283 -> 1032703); IRAM placement
    unchanged (85 / 84 functions, checks OK).
-   LATER STAGES (not built, not designed out): (B) finer-than-7-bit, smoothed parameter motion
-   for what macros sweep (MACROLAB.md "What a moving parameter sounds like"), cheap per-quantum
-   updates in the drums; (C) "motion": per-note values of all four macros with glide (see
+   STAGE B DONE (2026-11-13, branch of the macro-motion worktree): MACROS MOVE CONTINUOUSLY.
+   The engine keeps a trajectory per track and macro: a SetMacro ramps to its target in 72 ms
+   (longer than the 33/66 ms gaps between key repeats on the device, so a held key, the lab's
+   sliders and XY pad and later tilt join into one movement; setMacroCommand takes an explicit
+   ramp, for the motion stage's "arrive at the note"). While a macro moves the instrument is
+   evaluated unrounded every 11.6 ms where the macros will be at the end of that interval, and
+   the voices get fractional parameters every 1.45 ms (drums every 11.6 ms), the mixer a
+   fractional level and sends; entering and leaving take 50 ms from / into the stored bytes,
+   then the track is on the 7-bit path again, bit for bit. Stored and shown values stay 7-bit.
+   Bass: every non-enum parameter continuous (its mapping has no libm); lead: the 14 tone
+   parameters continuous through cheap mappings, times and enums stepped as before; drums:
+   pitch, filter, drive and mix amounts continuous (polynomials, no libm per tick), envelope
+   times and the perc model latched at the next hit (libm once per hit). Jumps: instrument
+   changes, ramp 1, macro locks (a lock wins over a moving macro), enums and semitones.
+   Details: MACROLAB.md "What a moving parameter sounds like", engine.h "MACRO MOTION", the
+   voice headers. Proof (host): ctest zipper_motion (held-key sweeps of bass ACID OPEN, lead
+   HANDS OPEN and kick BOOM SIZE over a roll through the engine: the voice's own cutoff /
+   pitch path moves at most 0.9 / 0.9 / 2.7 cents per quantum against 19 / 5.8 / 17.5 on the
+   7-bit path, as smooth as one ideal ramp; the bass's harmonics too); itest_motion (bytes
+   when still, no jump on entering, steady glide, exact return, jumps, lock wins, rebind,
+   ramp timing); itest_golden and macro_audit unchanged. Cost: bench_motion (two macros on
+   each of bass and lead sweeping on the busy pattern): callgrind ratio 1.052 stereo / 1.056
+   mono, about 2.7 % / 2.4 % of a core on the ESP32-S3 by estimate (2.1..3.3); nothing moving:
+   +5 instructions per frame (0.1 %). The set is evaluated from flash 86 times a second per
+   moving track; the per-tick part, the bass and lead mappings are in IRAM. Firmware (both
+   envs warning-free): IRAM functions 85 -> 93 (USB) / 84 -> 92 (jack), .iram0.text +3.9 KB
+   (121471 -> 125399, 114535 -> 118467), static RAM +2.5 KB (228212 -> 230700, 227668 ->
+   230156), flash +11 KB (1085859 -> 1097103, 1023283 -> 1034595): about 6.4 KB less heap.
+   HARDWARE CHECK (not done): flash env:profile-ram (the shipping IRAM placement; env:profile
+   is the all-flash A/B) and read the MOTION lines (RUN mot-still vs
+   RUN mot-sweep at 44.1 and 32 kHz: the "% of a core" figure should be under ~3, and the
+   sweep's max block should not stand out); then on the instrument hold z/x on ACID's OPEN
+   over a held bass note and compare with stage A (no staircase should be heard), sweep the
+   lab's XY pad, and check the AUD load (`r`) and the minimum-ever heap with two macros
+   moving (the build adds about 6 KB of static RAM + IRAM, so expect the 34 KB minimum to
+   drop by about that).
+   RAM WALL (found 2026-11-13 when stage B and the scope were merged): the USB build's static
+   data + IRAM overflowed the linker's data segment (dram0_0_seg, 341.7 KB) by 1.2 KB. Static
+   growth costs heap 1:1 until that segment is full, and then the link fails; the rest of the
+   heap lies above the segment where static data cannot go. Fix: the firmware's 32.9 KB frame
+   buffer is now allocated from the heap before anything else (src/app/main.cpp), which frees
+   that much of the segment; total RAM use is unchanged. USB build now: _heap_start 0x3FCD3B30
+   (31.7 KB of the segment left for static growth). Expected free heap about 44 KB and
+   minimum-ever about 24 KB (was 54 / 34 measured before stages A, B and the scope, which cost
+   about 9.6 KB together); NOT MEASURED on the device yet. Stage C (motion) cannot add 16-32 KB
+   of step data: pack the per-note macro values into the existing 8-byte Step instead.
+   LATER STAGES (not built, not designed out): (C) "motion": per-note values of all four macros with glide (see
    Motion below; the step's single macro lock is the seed of it); (D) tilt as a macro control;
    (E) a polished, reactive picture on the instrument page (enum jump ticks, end labels as
    pictures); (F) a sampler instrument; (G) converting the demos from CLASSIC to instruments.
@@ -174,8 +218,8 @@ new project format, which is fine because the owner writes no real song before t
   macro values (keys or tilt) into the notes as the pattern passes.
 - Known limit, accepted: a note followed by a long gap can only glide slowly. If it bites, allow
   values on empty steps later; that would not change how existing recordings play.
-- Engineering this needs: voices that accept smooth parameter changes cheaply (some drums
-  recompute expf/powf on every change), and RAM for the values (about 16-32 KB for 4 macros on
+- Engineering this needs: voices that accept smooth parameter changes cheaply (done in
+  stage B: Voice::setParamsFine, the engine's ramps), and RAM for the values (about 16-32 KB for 4 macros on
   every step of 16 patterns x 8 tracks x 64 steps, against a 34 KB minimum-free margin).
 - Tilt verified on hardware (hw-spike): fun, steady, no key loss; all four response presets
   useful, so response speed should belong to the control being moved, not be global.

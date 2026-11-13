@@ -37,6 +37,25 @@ class Voice {
   // params (p-locks already applied). Must be cheap when nothing changed.
   virtual void setParams(const uint8_t* soundParams) = 0;
 
+  // Fractional parameters (docs/MACROLAB.md "What a moving parameter sounds
+  // like"): while an instrument's macro moves, the engine calls this instead of
+  // setParams, at its control rate (every kFineQuanta quanta for the synths,
+  // every kFineEvalQuanta for the drums), with the track's 24 sound params as
+  // floats within their ranges (enums and semitone intervals whole numbers).
+  // Must be cheap when nothing changed (the values may repeat). The voice keeps
+  // these values until the next call or the next setParams, which returns it to
+  // the 7-bit path (and must then re-map whatever the fractional values touched,
+  // so the result is exactly what setParams alone gives). A voice that has no
+  // fractional path rounds and plays the bytes (this default).
+  virtual void setParamsFine(const float* soundParams) {
+    uint8_t p[kSoundParams];
+    for (int i = 0; i < kSoundParams; ++i) {
+      const float x = soundParams[i];
+      p[i] = uint8_t(x > 0.0f ? (x < 255.0f ? int(x + 0.5f) : 255) : 0);
+    }
+    setParams(p);
+  }
+
   virtual void setTempo(float /*bpm*/) {}
 
   virtual void noteOn(const NoteEvent& e) = 0;

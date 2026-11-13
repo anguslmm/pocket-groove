@@ -21,6 +21,10 @@
 //   FXE      delay / reverb cost in the engine (own with sends vs without)
 //   FXI      delay / reverb / master alone (warm, cold)
 //   CURVE    total vs number of voices allowed to sound (1, 2, 4, 8): the cache test
+//   MOTION   macro motion (engine.h "MACRO MOTION"): ACIDJAM with the bass on ACID and
+//            the lead on HANDS, every macro standing (RUN mot-still) against two
+//            macros of each sweeping all the time (RUN mot-sweep): the difference as
+//            a share of one core, and the worst blocks of the sweep
 //   TAIL     cost of each voice over its decay after one note, and of the engine after
 //            Stop (FX tails): a rise at the end = denormals
 //   LIVE     the real audio task + I2S for 20 s per configuration (DMA 4/8, UI on/off,
@@ -58,6 +62,7 @@
 #include "pg/engine/reverb.h"
 #include "pg/instrument/instrument.h"
 #include "pg/lead/lead_tables.h"
+#include "pg/macro/macro.h"
 #include "pg/ui/gfx.h"
 #include "pg/ui/ui.h"
 
@@ -188,6 +193,12 @@ class Probe final : public pg::Voice {
     const uint32_t dt = cyc() - t0;
     qCyc += dt; st.pSum += dt; ++st.pN; if (dt > st.pMax) st.pMax = dt;
   }
+  void setParamsFine(const float* p) override {   // macro motion: counted with setParams
+    const uint32_t t0 = cyc();
+    in->setParamsFine(p);
+    const uint32_t dt = cyc() - t0;
+    qCyc += dt; st.pSum += dt; ++st.pN; if (dt > st.pMax) st.pMax = dt;
+  }
   void setTempo(float b) override { in->setTempo(b); }
   void noteOn(const pg::NoteEvent& e) override {
     if (!gate) return;
@@ -282,6 +293,7 @@ struct RunCfg {
   int uiMode;
   int tailSec;              // after the bars: Stop and render this long (TAIL buckets of 1 s)
   int leadChord = -1;       // >= 0: every lead step plays this ChordType (0 = single note)
+  int motion = 0;           // 1: bass ACID + lead HANDS bound, still; 2: the same with two macros of each sweeping
 };
 
 constexpr int kBins = 1024, kBinCyc = 2048;   // block histogram: 2048-cycle bins up to 2.1 M
@@ -299,6 +311,23 @@ struct RunRes {
 };
 RunRes g_res;
 int g_rate = 44100;
+
+const pg::macro::MacroSet* byName(int track, const char* name) {
+  for (int i = 0; i < pg::macro::instrumentCount(track); ++i)
+    if (strcmp(pg::macro::instrumentAt(track, i)->name, name) == 0) return pg::macro::instrumentAt(track, i);
+  return nullptr;
+}
+
+// MOTION runs: one UI frame's macro moves (every 33 ms), as a held key or tilt
+// would send them: OPEN and BITE of the bass, OPEN and PUSH of the lead, four
+// triangles over the whole range, out of phase, with the default glide.
+void motionFrame(int frame) {
+  for (int k = 0; k < 4; ++k) {
+    const int ph = (frame * 4 + k * 70) % 510;
+    const int v = ph < 255 ? ph : 509 - ph;
+    g_inst.engine().post(pg::setMacroCommand(k < 2 ? pg::kTrackBass : pg::kTrackLead, k & 1, static_cast<uint8_t>(v)));
+  }
+}
 
 void setupProject(int demo, int pattern, const RunCfg* c) {
   pg::Engine& eng = g_inst.engine();
@@ -326,6 +355,14 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
   }
   p.songMode = 0;
   eng.sanitizeProject(p);
+  if (c && c->motion) {
+    // Macro motion (engine.h "MACRO MOTION"): the bass and the lead play instruments.
+    const uint8_t bassPos[4] = {102, 60, 0, 128}, leadPos[4] = {77, 60, 0, 128};
+    const pg::macro::MacroSet* acid = byName(pg::kTrackBass, "ACID");
+    const pg::macro::MacroSet* hands = byName(pg::kTrackLead, "HANDS");
+    if (acid) eng.post(pg::setInstrumentCommand(pg::kTrackBass, acid->id, bassPos));
+    if (hands) eng.post(pg::setInstrumentCommand(pg::kTrackLead, hands->id, leadPos));
+  }
   pg::Command q{};
   q.type = pg::CmdType::QueuePattern;
   q.a = static_cast<uint8_t>(pattern);
@@ -369,7 +406,14 @@ void runEngine(const RunCfg& c) {
   const uint32_t blocksPerSec = g_rate / audio::kBlockFrames;
   g_uiMode = c.uiMode;
   uint32_t since = 255;
+  const uint32_t uiFrame = static_cast<uint32_t>(g_rate) * 33 / 1000;
+  uint32_t nextUi = 0;
+  int uiCount = 0;
   for (uint32_t b = 0; b < blocks + tailBlocks; ++b) {
+    if (c.motion == 2 && b * audio::kBlockFrames >= nextUi) {
+      motionFrame(uiCount++);
+      nextUi += uiFrame;
+    }
     if (b == blocks && tailBlocks) {
       pg::Command s{};
       s.type = pg::CmdType::Stop;
@@ -1068,6 +1112,30 @@ void profileTask(void*) {
     snprintf(st, sizeof(st), "%dHZ: BUSIEST PATTERN", g_rate);
     setStatus(st);
     runEngine(BZ); printRun(BZ); printRunDetail(BZ);
+
+    // Macro motion (engine.h "MACRO MOTION"): ACIDJAM with the bass on ACID and the
+    // lead on HANDS, once with every macro standing and once with two macros of
+    // each sweeping all the time (a new target every 33 ms, the default glide).
+    {
+      RunCfg MS{"mot-still", 0, 0, 8, all, false, false, false, 0, 0, -1, 1};
+      RunCfg MW{"mot-sweep", 0, 0, 8, all, false, false, false, 0, 0, -1, 2};
+      snprintf(st, sizeof(st), "%dHZ: MACRO MOTION", g_rate);
+      setStatus(st);
+      runEngine(MS); printRun(MS);
+      const uint64_t s0 = g_res.sum, n0 = g_res.n;
+      const uint32_t max0 = g_res.max;
+      runEngine(MW); printRun(MW); printRunDetail(MW);
+      const uint64_t s1 = g_res.sum, n1 = g_res.n;
+      const int64_t extra = (n1 ? static_cast<int64_t>(s1 / n1) : 0) - (n0 ? static_cast<int64_t>(s0 / n0) : 0);
+      const int64_t cpb = static_cast<int64_t>(audio::kBlockFrames) * 240000000ll / g_rate;   // cycles per block = 100 %
+      const int64_t pct10 = cpb ? extra * 1000 / cpb : 0;
+      const int64_t a10 = pct10 < 0 ? -pct10 : pct10;
+      rp("MOTION %dHz sweep - still: %lld cycles per %d-frame block = %s%lld.%lld %% of a core (budget ~3 %%) | "
+         "max block c/f still %lu sweep %lu\n",
+         g_rate, static_cast<long long>(extra), audio::kBlockFrames, pct10 < 0 ? "-" : "",
+         static_cast<long long>(a10 / 10), static_cast<long long>(a10 % 10),
+         static_cast<unsigned long>(max0 / audio::kBlockFrames), static_cast<unsigned long>(g_res.max / audio::kBlockFrames));
+    }
 
     RunCfg T{"tail", 0, 0, 2, all, false, false, false, 0, 12};
     snprintf(st, sizeof(st), "%dHZ: TAILS / DENORMALS", g_rate);

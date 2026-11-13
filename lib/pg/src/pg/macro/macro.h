@@ -206,6 +206,30 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
 uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
                   uint8_t* out);
 
+// Steps 1-4 of the evaluation (base, morphs, targets, trims) for every parameter,
+// unclamped and unrounded: v[0..31]. enumMask bit p: parameter p is an enum (morphs
+// switch it instead of blending). Returns set.ownedMask(). evaluate() is this
+// followed by step 5 (clamp, round).
+uint32_t evaluateRaw(const MacroSet& set, uint32_t enumMask, const float* positions, const uint8_t* under,
+                     float* v);
+
+// Fractional evaluation for a macro in motion (docs/MACROLAB.md "What a moving
+// parameter sounds like"): the engine passes the voices these values while a
+// position moves, the stored parameters stay what evaluate() gives. Ranges and
+// the parameters that only jump come from the caller (the engine caches them per
+// track), so this needs no ParamInfo. out[p] = under[p] for parameters the set
+// does not own; owned ones are clamped to lo..hi and, where stepMask has the bit
+// (enums, semitone intervals), rounded exactly as evaluate() rounds; the others
+// keep their fraction. For whole-number results out[p] == evaluate()'s out[p].
+struct FineRanges {
+  uint32_t enumMask;                 // as evaluateRaw
+  uint32_t stepMask;                 // rounded (jumps): enums | semitone parameters
+  const uint8_t* lo;                 // the sound params (kSoundParams entries each); the mixer rows are 0..127
+  const uint8_t* hi;
+};
+uint32_t evaluateFine(const MacroSet& set, const FineRanges& ranges, const float* positions, const uint8_t* under,
+                      float* out);
+
 // ---- instruments (docs/MACROLAB.md "Instruments") ------------------------------------------
 // A track slot holds one macro set, its instrument. A project names it by a
 // 16-bit id derived from the voice and the set's name (FNV-1a of "voice:NAME",
@@ -233,6 +257,10 @@ void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def
 // reverb, duck: kMixRows entries), as the engine keeps them.
 constexpr int kMixRows = 5;
 void combineMixerRows(const uint8_t* player, const uint8_t* instRows, const uint8_t* defRows, uint8_t* out);
+// The same rule unrounded, for fractional instrument rows (a macro in motion):
+// level, delay and reverb (out[0..2]), each clamped to 0..127. player = the
+// player's five rows, instRows the instrument's evaluated rows.
+void combineMixerFine(const uint8_t* playerRows, const float* instRows, const uint8_t* defRows, float* out);
 
 // The instrument library: the built-in sets (generated from macros/ into
 // builtin_data.cpp by host/tools/macro_builtin, in the order macros/builtin.txt

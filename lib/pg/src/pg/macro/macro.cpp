@@ -36,22 +36,44 @@ float milliToFloat(int32_t m) {
   return neg ? -v : v;
 }
 
-float curveAt(const Point* pts, int n, Interp interp, float x) {
+namespace {
+// Point decoding: exact (the parser's floats, what evaluate() has always used), or
+// Fast for the fractional path, which multiplies by 0.001 instead of dividing by
+// 1000 (within an ulp; a float division is a dozen instructions on the device).
+template <bool Fast>
+inline float posOf(Point p) {
+  if (!Fast) return pointPos(p);
+  const int32_t m = pointPosMilli(p);
+  return m >= 1000 ? 1.0f : float(m) * 0.001f;
+}
+template <bool Fast>
+inline float valOf(Point p) {
+  return Fast ? float(pointValMilli(p)) * 0.001f : pointVal(p);
+}
+
+template <bool Fast>
+float curveT(const Point* pts, int n, Interp interp, float x) {
   if (n <= 0) return 0.0f;
   x = clamp01(x);
-  if (x >= pointPos(pts[n - 1])) return pointVal(pts[n - 1]);
-  const float p0 = pointPos(pts[0]);
-  if (x < p0) return pointVal(pts[0]);
+  if (x >= posOf<Fast>(pts[n - 1])) return valOf<Fast>(pts[n - 1]);
+  const float p0 = posOf<Fast>(pts[0]);
+  if (x < p0) return valOf<Fast>(pts[0]);
   // the last point at or left of x; pos[i + 1] > x >= pos[i], so the segment has width
   int i = n - 2;
-  float pi = pointPos(pts[i]);
-  while (i > 0 && pi > x) pi = pointPos(pts[--i]);
-  const float vi = pointVal(pts[i]);
+  float pi = posOf<Fast>(pts[i]);
+  while (i > 0 && pi > x) pi = posOf<Fast>(pts[--i]);
+  const float vi = valOf<Fast>(pts[i]);
   if (interp == Interp::Step) return vi;
-  float t = (x - pi) / (pointPos(pts[i + 1]) - pi);
+  float t = (x - pi) / (posOf<Fast>(pts[i + 1]) - pi);
   if (interp == Interp::Smooth) t = t * t * (3.0f - 2.0f * t);
-  return vi + (pointVal(pts[i + 1]) - vi) * t;
+  return vi + (valOf<Fast>(pts[i + 1]) - vi) * t;
 }
+
+template <bool Fast>
+uint32_t evalRawT(const MacroSet& set, uint32_t enumMask, const float* positions, const uint8_t* under, float* v);
+}  // namespace
+
+float curveAt(const Point* pts, int n, Interp interp, float x) { return curveT<false>(pts, n, interp, x); }
 
 void MacroSet::clear() { std::memset(this, 0, sizeof(*this)); }
 
@@ -90,12 +112,36 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
 
 uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
                   uint8_t* out) {
-  const uint32_t owned = set.ownedMask();
+  uint32_t enums = 0;
+  for (int p = 0; p < kParamsPerTrack; ++p)
+    if (info[p] && info[p]->fmt == ParamFormat::Enum) enums |= 1u << p;
   float v[kParamsPerTrack];
+  const uint32_t owned = evaluateRaw(set, enums, positions, under, v);
+  // 5. clamp and round
   for (int p = 0; p < kParamsPerTrack; ++p) {
     out[p] = under[p];
-    v[p] = float(((set.baseMask >> p) & 1) ? set.base[p] : under[p]);
+    if (!((owned >> p) & 1)) continue;
+    const ParamInfo* in = info[p];
+    float lo = 0.0f, hi = 127.0f;
+    if (in) lo = float(in->min), hi = float(in->max);
+    float x = v[p];
+    if (!(x >= lo)) x = lo;   // also catches NaN
+    if (x > hi) x = hi;
+    out[p] = uint8_t(int(x + 0.5f));
   }
+  return owned;
+}
+
+uint32_t evaluateRaw(const MacroSet& set, uint32_t enumMask, const float* positions, const uint8_t* under,
+                     float* v) {
+  return evalRawT<false>(set, enumMask, positions, under, v);
+}
+
+namespace {
+template <bool Fast>
+uint32_t evalRawT(const MacroSet& set, uint32_t enumMask, const float* positions, const uint8_t* under, float* v) {
+  const uint32_t owned = set.ownedMask();
+  for (int p = 0; p < kParamsPerTrack; ++p) v[p] = float(((set.baseMask >> p) & 1) ? set.base[p] : under[p]);
   const int nm = set.numMacros < kMaxMacros ? set.numMacros : kMaxMacros;
   float pos[kMaxMacros] = {0.0f, 0.0f, 0.0f, 0.0f};
   for (int m = 0; m < nm; ++m) pos[m] = clamp01(positions[m]);
@@ -108,12 +154,12 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
     for (int k = 0; k < nmo; ++k) {
       const Morph& mo = set.morphs[k];
       const float x = mo.macro < nm ? pos[mo.macro] : 0.0f;
-      amt[k] = mo.n ? clamp01(curveAt(set.points + mo.first, mo.n, Interp(mo.interp), x)) : x;
+      amt[k] = mo.n ? clamp01(curveT<Fast>(set.points + mo.first, mo.n, Interp(mo.interp), x)) : x;
       sum += amt[k];
     }
     const float norm = sum > 1.0f ? 1.0f / sum : 1.0f;
     float start[kParamsPerTrack];
-    std::memcpy(start, v, sizeof(v));
+    std::memcpy(start, v, sizeof(start));
     float best[kParamsPerTrack];   // enum: the winning line's amount so far (-1 = none)
     for (int p = 0; p < kParamsPerTrack; ++p) best[p] = -1.0f;
     for (int k = 0; k < nmo; ++k) {
@@ -124,8 +170,7 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
       for (int e = 0; e < pa.n; ++e) {
         const PatchValue& pv = set.patchValues[pa.first + e];
         if (pv.param >= kParamsPerTrack) continue;
-        const ParamInfo* in = info[pv.param];
-        if (in && in->fmt == ParamFormat::Enum) {
+        if ((enumMask >> pv.param) & 1u) {
           const int sw = pv.sw != kNoSwitch ? pv.sw : mo.sw != kNoSwitch ? mo.sw : kDefaultSwitch;
           if (amt[k] * 100.0f >= float(sw) && amt[k] >= best[pv.param]) {
             best[pv.param] = amt[k];
@@ -145,7 +190,7 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
     for (int j = 0; j < mac.n && mac.first + j < nt; ++j) {
       const Target& t = set.targets[mac.first + j];
       if (t.param >= kParamsPerTrack) continue;
-      const float c = set.curve(t, pos[m]);
+      const float c = curveT<Fast>(set.points + t.first, t.n, t.interp(), pos[m]);
       const uint8_t by = t.by();
       const float s = by < nm ? pos[by] : 1.0f;
       float& x = v[t.param];
@@ -165,22 +210,26 @@ uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions,
       const Trim& tr = set.trims[k];
       const float x = tr.macro < nm ? pos[tr.macro] : 0.0f;
       const float s = tr.by < nm ? pos[tr.by] : 1.0f;
-      db += curveAt(set.points + tr.first, tr.n, Interp(tr.interp), x) * s;
+      db += curveT<Fast>(set.points + tr.first, tr.n, Interp(tr.interp), x) * s;
     }
     // 10^(db / 60) = 2^(db * log2(10) / 60)
     v[kMixLevel] *= exp2Small(db * (3.32192809f / 60.0f));
   }
+  return owned;
+}
+}  // namespace
 
-  // 5. clamp and round
+uint32_t evaluateFine(const MacroSet& set, const FineRanges& r, const float* positions, const uint8_t* under,
+                      float* out) {
+  const uint32_t owned = evalRawT<true>(set, r.enumMask, positions, under, out);
   for (int p = 0; p < kParamsPerTrack; ++p) {
-    if (!((owned >> p) & 1)) continue;
-    const ParamInfo* in = info[p];
-    float lo = 0.0f, hi = 127.0f;
-    if (in) lo = float(in->min), hi = float(in->max);
-    float x = v[p];
+    if (!((owned >> p) & 1)) { out[p] = float(under[p]); continue; }
+    const float lo = p < kSoundParams ? float(r.lo[p]) : 0.0f, hi = p < kSoundParams ? float(r.hi[p]) : 127.0f;
+    float x = out[p];
     if (!(x >= lo)) x = lo;   // also catches NaN
     if (x > hi) x = hi;
-    out[p] = uint8_t(int(x + 0.5f));
+    if ((r.stepMask >> p) & 1u) x = float(int(x + 0.5f));   // enums and semitones jump, as in evaluate()
+    out[p] = x;
   }
   return owned;
 }
@@ -239,6 +288,15 @@ void combineMixerRows(const uint8_t* player, const uint8_t* inst, const uint8_t*
   out[kMixDelaySend] = dly;
   out[kMixReverbSend] = rev;
   out[kMixDuck] = player[kMixDuck];
+}
+
+void combineMixerFine(const uint8_t* player, const float* inst, const uint8_t* def, float* out) {
+  auto clamp127 = [](float v) { return v > 0.0f ? (v < 127.0f ? v : 127.0f) : 0.0f; };
+  constexpr int L = 0, D = kMixDelaySend - kMixLevel, R = kMixReverbSend - kMixLevel;
+  const float d = float(def[L]);
+  out[0] = clamp127(def[L] > 0 ? float(player[L]) * inst[L] / d : float(player[L]));
+  out[1] = clamp127(float(player[D]) + inst[D] - float(def[D]));
+  out[2] = clamp127(float(player[R]) + inst[R] - float(def[R]));
 }
 
 void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out) {

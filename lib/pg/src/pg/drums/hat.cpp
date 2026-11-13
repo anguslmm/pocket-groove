@@ -33,11 +33,17 @@ constexpr float kClosedLevel = 0.15f;
 constexpr float kOpenLevel = 0.13f;
 // TR-808 cymbal oscillator bank, relative to its lowest (205.3 Hz).
 const float kRatio[6] = {1.0f, 1.4827f, 1.8003f, 2.5460f, 2.6303f, 3.8967f};
+const float kLog2Ratio[6] = {0.0f, 0.5682267f, 0.8482373f, 1.3482324f, 1.3952274f, 1.9622529f};   // log2(kRatio)
 inline uint32_t bit(int i) { return 1u << i; }
 }  // namespace
 
+// While a macro moves (DrumVoice::setParamsFine): TUNE, SPREAD, TONE, COLOUR,
+// METAL and SNAP follow continuously (the bank's pitches and the filter also
+// inside a ringing hit, which is how an open hat sweeps); DECAY is the envelope
+// and takes its new value at the next hit.
 HatVoice::HatVoice(bool open)
     : DrumVoice(open ? kOpenParams : kClosedParams, kNumParams), open_(open) {
+  contMask_ = bit(kTune) | bit(kSpread) | bit(kTone) | bit(kColour) | bit(kMetal) | bit(kSnap);
   // Spread the starting phases so the bank is not correlated at power-up.
   for (int i = 0; i < 6; ++i) ph_[i] = 0x9E3779B9u * uint32_t(i + 1);
   noise_.s = open ? 0x7A3C59E1u : 0x13579BDFu;
@@ -53,28 +59,33 @@ void HatVoice::resetState() {
   bright_ = 1.0f;
 }
 
-void HatVoice::setPitch() {
-  const float base = 205.3f * powf(2.0f, -0.6f + 2.2f * centred(p_[kTune])) * noteRatio_;
-  const float spread = 0.55f + 0.9f * centred(p_[kSpread]);
+template <bool Fast>
+void HatVoice::setPitchT() {
+  const float tune = -0.6f + 2.2f * centred(pf_[kTune]);
+  const float base = 205.3f * (Fast ? exp2Fast(tune) : powf(2.0f, tune)) * noteRatio_;
+  const float spread = 0.55f + 0.9f * centred(pf_[kSpread]);
   float density = 0.0f;  // edges per sample = RMS^2 of the differentiated bank
   for (int i = 0; i < 6; ++i) {
-    inc_[i] = phaseInc(base * powf(kRatio[i], spread), fs_);
+    inc_[i] = phaseInc(base * (Fast ? exp2Fast(spread * kLog2Ratio[i]) : powf(kRatio[i], spread)), fs_);
     density += float(inc_[i]) * (2.0f / 4294967296.0f);
   }
   // Same loudness whatever the tuning, spread, note or sample rate.
   metalNorm_ = clampf(sqrtf(0.1766f / (density + 1.0e-6f)), 0.3f, 3.0f);
 }
 
-void HatVoice::setFilter() {
-  const float t = unit(p_[kTone]);
-  const float fc = clampf(expMap(t, 3000.0f, 12000.0f) * bright_, 1000.0f, 0.42f * fs_);
-  const float c = unit(p_[kColour]);
-  const float q = expMap(c, 0.6f, 5.0f);
-  svf_.set(fc, q, fs_);
+template <bool Fast>
+void HatVoice::setFilterT() {
+  const float t = unit(pf_[kTone]);
+  const float fc = clampf((Fast ? 3000.0f * exp2Fast(2.0f * t) : expMap(t, 3000.0f, 12000.0f)) * bright_, 1000.0f,
+                          0.42f * fs_);
+  const float c = unit(pf_[kColour]);
+  const float q = Fast ? 0.6f * exp2Fast(3.0588937f * c) : expMap(c, 0.6f, 5.0f);
+  if (Fast) svf_.setFast(fc, q, fs_);
+  else svf_.set(fc, q, fs_);
   bpMix_ = 0.3f + 0.6f * c;
   // One-pole low-pass a little above the high-pass: the band falls gently
   // towards Nyquist instead of being white (which reads as fizz, not metal).
-  tiltK_ = 1.0f - onePoleCoef(1.3f * fc, fs_);
+  tiltK_ = 1.0f - (Fast ? onePoleCoefFast(1.3f * fc, fs_) : onePoleCoef(1.3f * fc, fs_));
   // Resonance and cutoff change how much gets through: hold the level steady.
   gainComp_ = sqrtf(1.5f / q) * (1.35f - 0.5f * t);
 }
@@ -84,21 +95,33 @@ void HatVoice::updateCoefs(uint32_t ch) {
   if (ch & (bit(kTune) | bit(kSpread))) setPitch();
   if (ch & (bit(kTone) | bit(kColour))) setFilter();
   if (ch & bit(kDecay)) {
-    const float t = unit(p_[kDecay]);
+    const float t = unit(pf_[kDecay]);
     const float tau = open_ ? expMap(t, 0.04f, 1.0f) : expMap(t, 0.004f, 0.12f);
     cs_ = decayCoef(tau, fs);
     cf_ = decayCoef(open_ ? 0.006f : 0.0025f, fs);
   }
   if (ch & bit(kMetal)) {
-    const float m = unit(p_[kMetal]);
+    const float m = unit(pf_[kMetal]);
     // Roughly equal-power crossfade (the two sources are uncorrelated).
     metalAmt_ = 1.3f * m * (1.6f - 0.6f * m);
     noiseAmt_ = (1.0f - m) * (1.0f + 0.6f * m);
   }
-  if (ch & bit(kSnap)) snapAmt_ = 2.0f * unit(p_[kSnap]);
+  if (ch & bit(kSnap)) snapAmt_ = 2.0f * unit(pf_[kSnap]);
+}
+
+void HatVoice::updateFine(uint32_t ch) {
+  if (ch & (bit(kTune) | bit(kSpread))) setPitchT<true>();
+  if (ch & (bit(kTone) | bit(kColour))) setFilterT<true>();
+  if (ch & bit(kMetal)) {
+    const float m = unit(pf_[kMetal]);
+    metalAmt_ = 1.3f * m * (1.6f - 0.6f * m);
+    noiseAmt_ = (1.0f - m) * (1.0f + 0.6f * m);
+  }
+  if (ch & bit(kSnap)) snapAmt_ = 2.0f * unit(pf_[kSnap]);
 }
 
 void HatVoice::noteOn(const NoteEvent& e) {
+  applyPending();
   const bool wasActive = active_;
   beginHit(false, 1.0f);  // no state reset, so no de-click offset is needed
   const float nr = noteRatio(int(e.note), 24);

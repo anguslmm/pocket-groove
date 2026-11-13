@@ -36,6 +36,9 @@ const ParamInfo kParams[PercVoice::kNumParams] = {
 inline uint32_t bit(int i) { return 1u << i; }
 }  // namespace
 
+// While a macro moves (DrumVoice::setParamsFine) every parameter is latched: it
+// takes its new value at the next hit. One change recomputes the whole model
+// (some 15 libm calls), which is fine once per hit and too dear per control tick.
 PercVoice::PercVoice() : DrumVoice(kParams, kNumParams) {}
 
 void PercVoice::resetState() {
@@ -57,9 +60,9 @@ void PercVoice::updateCoefs(uint32_t) {
 
 void PercVoice::computeModel() {
   const float fs = fs_;
-  const float tune = unit(p_[kTune]), dcy = unit(p_[kDecay]), tone = unit(p_[kTone]);
-  const float bendT = unit(p_[kBend]), harmC = centred(p_[kHarm]), nois = unit(p_[kNoise]);
-  const float drv = unit(p_[kDrive]);
+  const float tune = unit(pf_[kTune]), dcy = unit(pf_[kDecay]), tone = unit(pf_[kTone]);
+  const float bendT = unit(pf_[kBend]), harmC = centred(pf_[kHarm]), nois = unit(pf_[kNoise]);
+  const float drv = unit(pf_[kDrive]);
   const float acc = accentMul_;  // 1, or > 1 for an accented hit: brighter
   float g = 0.5f * powf(2.0f, 4.5f * drv);
   float nominal = 0.9f;
@@ -130,12 +133,12 @@ void PercVoice::computeModel() {
       modelLevel_ = 0.24f;
       break;
     case kCowbell: {
-      const float fa = clampf(540.0f * powf(2.0f, 2.0f * centred(p_[kTune]) - 1.0f) * noteRatio_,
+      const float fa = clampf(540.0f * powf(2.0f, 2.0f * centred(pf_[kTune]) - 1.0f) * noteRatio_,
                               40.0f, 0.2f * fs);
       const float fb = clampf(fa * (1.18f + 0.6f * harmC), 40.0f, 0.3f * fs);
       eps1_ = fa / fs * 4294967296.0f;  // phase increments, as floats
       eps2_ = fb / fs * 4294967296.0f;
-      bend_ = 0.5f * (centred(p_[kBend]) - 0.5f);
+      bend_ = 0.5f * (centred(pf_[kBend]) - 0.5f);
       pitchCoef_ = decayCoef(0.03f, fs / float(kQuantum));
       svf_.set(expMap(tone, 1200.0f, 5500.0f) * acc, 1.3f, fs);
       c1_ = decayCoef(expMap(dcy, 0.015f, 0.5f), fs);
@@ -197,6 +200,7 @@ void PercVoice::computeModel() {
 }
 
 void PercVoice::noteOn(const NoteEvent& e) {
+  applyPending();
   const bool wasActive = active_;
   const float nr = noteRatio(int(e.note), 24);
   const float acc = e.accent ? 1.3f : 1.0f;
