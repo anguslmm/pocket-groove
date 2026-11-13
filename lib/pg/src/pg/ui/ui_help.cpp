@@ -52,6 +52,9 @@ constexpr KeyTable kTables[] = {
     {"NAME ENTRY",
      "ES" "1 " "2 " "3 " "4 " "5 " "6 " "7 " "8 " "9 " "0 " "- " "  " "BS" "IS" "Q " "W " "E " "R " "T " "Y " "U " "I " "O " "P " "  " "  " "  " "  " "  " "A " "S " "D " "F " "G " "H " "J " "K " "L " "  " "  " "OK" "  " "  " "  " "Z " "X " "C " "V " "B " "N " "M " "  " "  " "  " "_ ",
      "etttttttttttorvttttttttttoooootttttttttooGoootttttttooot"},
+    {"INSTRUMENT",
+     "ES" "1 " "2 " "3 " "4 " "5 " "6 " "7 " "8 " "NI" "MX" "- " "+ " "RL" "BP" "9 " "10" "11" "12" "13" "14" "15" "16" "FX" "SG" "LP" "HP" "PJ" "MU" "SH" "KK" "SN" "CP" "CH" "OH" "PC" "BS" "LD" "  " "\x84 " "PG" "\x82 " "CT" "PT" "RL" "1-" "1+" "2-" "2+" "3-" "3+" "4-" "4+" "\x85 " "? " "\x80 ",
+     "essssssssvvaarwssssssssvvccvmmpppppppporgRmmmaaaaaaaarwG"},
     {"FN LAYER",
      "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "  " "FN" "  " "MU" "MU" "MU" "MU" "MU" "MU" "MU" "MU" "  " "  " "  " "  " "  " "  " "  " "SO" "SO" "SO" "SO" "SO" "SO" "SO" "SO" "  " "  " "  ",
      "oooooooooooooooooooooooooooomoppppppppooooooonnnnnnnnooo"},
@@ -74,6 +77,9 @@ constexpr KeyTable kTables[] = {
     {"SHIFT SONG",
      "  " "IN" "IN" "IN" "IN" "IN" "IN" "IN" "IN" "  " "  " "x8" "x8" "  " "  " "IN" "IN" "IN" "IN" "IN" "IN" "IN" "IN" "  " "  " "BC" "BC" "  " "  " "SH" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "  " "  " "  " "  " "  " "  " "  " "AC" "AC" "AC" "AC" "AC" "AC" "AC" "AC" "  " "  " "RS",
      "ossssssssooaaoossssssssooccoomppppppppooooooonnnnnnnnooG"},
+    {"SHIFT INST",
+     "  " "LN" "LN" "LN" "LN" "LN" "LN" "LN" "LN" "  " "  " "x8" "x8" "  " "  " "LN" "LN" "LN" "LN" "LN" "LN" "LN" "LN" "  " "  " "BC" "BC" "  " "  " "SH" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "  " "  " "AP" "  " "  " "  " "  " "1-" "1+" "2-" "2+" "3-" "3+" "4-" "4+" "  " "  " "RS",
+     "ossssssssooaaoossssssssooccoompppppppprogoooaaaaaaaaaooG"},
 };
 constexpr bool tablesOk() {
   for (const KeyTable& t : kTables) {
@@ -96,8 +102,9 @@ constexpr bool headerFits() {
 }
 static_assert(headerFits(), "help header: the table name runs into the modifier hint");
 
-enum TableId { kTGroove, kTStep, kTWrite, kTSound, kTMix, kTFx, kTSong, kTProject, kTText,
-               kTFn, kTShift, kTCtrl, kTOpt, kTAlt, kTTab, kTShiftSong };
+// (the layers start at kTFn: explainText() relies on that order)
+enum TableId { kTGroove, kTStep, kTWrite, kTSound, kTMix, kTFx, kTSong, kTProject, kTText, kTInst,
+               kTFn, kTShift, kTCtrl, kTOpt, kTAlt, kTTab, kTShiftSong, kTShiftInst };
 
 // Legend colour switches inside strings
 #define UP_ICON_TXT "\x84\x85"
@@ -155,12 +162,17 @@ const char* const kLegends[][5] = {
      CG "OK" CD " SAVE   " CT "ES" CD " CANCEL",
      CD "SPACE TYPES _ HERE",
      CA "NAMES: UP TO 8 CHARACTERS"},
+    {CA "1-..4+" CD " MACRO DOWN/UP. HOLD: SWEEP",
+     CW "BOTH KEYS" CD " OF A PAIR: ITS DEFAULT",
+     CT UP_ICON_TXT CD " " CT "NI" CD " INSTRUMENT. CTRL+Z GOES BACK",
+     CW "HOLD STEP" CD " + MACRO KEY = LOCK THERE",
+     CA "-+" CD " THE LAST MACRO, FROM ANY VIEW"},
     {CW "FN" CD "+PAD: MUTE ON/OFF",
      CW "FN" CD "+NOTE KEY: SOLO THAT TRACK",
      CD "SAME KEY AGAIN: RESTORE MUTES", "", ""},
     {CW "LN" CD " PATTERN LENGTH  " CW "SL" CD " SILENT SELECT",
      CW "AC" CD " ACCENT  " CA "x8" CD " COARSE VALUE",
-     CC "BC" CD " BASS CUTOFF SWEEP  " CT "AP" CD " ADD PAGE",
+     CC "BC" CD " BASS SWEEP  " CT "AP" CD " ADD PAGE",
      CT "CB" CD " CHORD BACK  " CG "RS" CD " RESTART", ""},
     {CA "UN" CD " UNDO/REDO " CA "CU CO PA" CD " CUT COPY PASTE",
      CD "+SHIFT: THE WHOLE PATTERN",
@@ -177,8 +189,12 @@ const char* const kLegends[][5] = {
      CD "TAP TAB 3X: TAP TEMPO", "", ""},
     {CW "IN" CD " INSERT PATTERN BEFORE THE CURSOR",
      CA "x8" CD " REPEATS BY 8  " CW "SL" CD " SILENT SELECT",
-     CC "BC" CD " BASS CUTOFF SWEEP  " CG "RS" CD " RESTART",
+     CC "BC" CD " BASS SWEEP  " CG "RS" CD " RESTART",
      CW "AC" CD " ACCENT", ""},
+    {CA "1-..4+" CD " MACRO, COARSE: 16 OF 255",
+     CW "LN" CD " PATTERN LENGTH  " CW "SL" CD " SILENT SELECT",
+     CC "BC" CD " BASS SWEEP  " CT "AP" CD " ADD PAGE",
+     CG "RS" CD " RESTART", ""},
 };
 #undef CW
 #undef CD
@@ -241,10 +257,11 @@ int Ui::helpTable(bool layers) const {
   if (layers && isHeld(kKAlt)) return kTAlt;
   if (layers && isHeld(kKCtrl)) return kTCtrl;
   if (layers && isHeld(kKTab)) return kTTab;
-  if (layers && isHeld(kKShift)) return view_ == View::Song ? kTShiftSong : kTShift;
+  if (layers && isHeld(kKShift))
+    return view_ == View::Song ? kTShiftSong : (view_ == View::Sound && instrumentPage()) ? kTShiftInst : kTShift;
   if (heldStep_ >= 0 && view_ == View::Groove) return kTStep;
   switch (view_) {
-    case View::Sound: return kTSound;
+    case View::Sound: return instrumentPage() ? kTInst : kTSound;
     case View::Mix: return kTMix;
     case View::Fx: return kTFx;
     case View::Song: return kTSong;
@@ -339,6 +356,23 @@ static bool explainLayer(const Ui& ui, int table, int k, char* title, const char
         return true;
       }
       return false;   // TAB leaves every other key alone
+    case kTShiftInst:
+      if (note >= 0) {
+        const pg::macro::MacroSet* s = ui.instrumentOf(ui.selTrack());
+        if (!s || note / 2 >= s->numMacros) {
+          cat(title, "SHIFT+MACRO KEY: NOT USED");
+          *l1 = s ? "THIS INSTRUMENT HAS NO SUCH MACRO." : "PICK AN INSTRUMENT FIRST: . OR 9.";
+          return true;
+        }
+        char* o = cat(title, "SHIFT+");
+        *o++ = char(kNoteKeys[note]);
+        *o = 0;
+        cat(cat(cat(o, ": "), s->macros[note / 2].name), (note & 1) ? " +16" : " -16");
+        *l1 = "COARSE: 16 OF 255 PER TAP OR REPEAT.";
+        *l2 = "A STEP HELD: THE LOCK, COARSE.";
+        return true;
+      }
+      [[fallthrough]];
     case kTShift:
     case kTShiftSong:
       if (step >= 0 && v == View::Song) {
@@ -408,6 +442,56 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       default: break;
     }
   }
+  if (table == kTInst) {
+    const pg::macro::MacroSet* s = ui.instrumentOf(ui.selTrack());
+    if (note >= 0) {
+      char* o = title;
+      *o++ = char(kNoteKeys[note]);
+      *o = 0;
+      if (!s) {
+        cat(o, ": NO INSTRUMENT YET");
+        *l1 = ". OR 9 PICKS ONE; ITS MACROS ARE THE";
+        *l2 = "KEYS Z TO , (A PAIR EACH).";
+        return;
+      }
+      const int m = note / 2;
+      if (m >= s->numMacros) {
+        cat(o, ": NOT USED");
+        *l1 = "THIS INSTRUMENT HAS FEWER MACROS.";
+        return;
+      }
+      cat(cat(cat(o, ": "), s->macros[m].name), (note & 1) ? " UP" : " DOWN");
+      *l1 = "TAP NUDGES, HOLD SWEEPS, SHIFT: COARSE.";
+      *l2 = "BOTH KEYS: DEFAULT. STEP HELD: LOCK.";
+      return;
+    }
+    switch (k) {
+      case kKSemicolon:
+        cat(title, "PREVIOUS INSTRUMENT");
+        *l1 = "STEPS THROUGH THIS TRACK'S LIST,";
+        *l2 = "AUDIBLE AT ONCE. CTRL+Z: BACK.";
+        return;
+      case kKDot:
+        cat(title, "NEXT INSTRUMENT");
+        *l1 = "STEPS THROUGH THIS TRACK'S LIST,";
+        *l2 = "AUDIBLE AT ONCE. CTRL+Z: BACK.";
+        return;
+      case kK9:
+        cat(title, "SOUND: NEXT INSTRUMENT");
+        *l1 = "THE SELECTED TRACK'S INSTRUMENT.";
+        *l2 = "AGAIN: THE NEXT ONE (; BACK).";
+        return;
+      case kKDel:
+        cat(title, "REMOVE LOCK");
+        *l1 = "WITH A STEP HELD: REMOVES ITS LOCK.";
+        return;
+      case kKL:
+        cat(title, ui.devMode() ? "DEV: PARAMETER PAGES" : "NOT USED HERE");
+        if (ui.devMode()) *l1 = "DEVELOPER MODE: BARE PARAMETERS.";
+        return;
+      default: break;
+    }
+  }
   if (note >= 0 && (table == kTSound || table == kTMix || table == kTFx)) {
     const ValueRef r = table == kTSound ? ValueRef{false, uint8_t(ui.selTrack()), uint8_t(ui.soundPage(ui.selTrack()) * 8 + note)}
                        : table == kTMix  ? ValueRef{false, uint8_t(ui.selTrack()), kMixRowParam[note < kNumMixRows ? note : 0]}
@@ -468,8 +552,8 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       {kKTab, "TEMPO", "HOLD: -/= BPM, ;/. SWING.", "TAP 3 TIMES: TAP TEMPO."},
       {kKO, "FX VIEW", "DUCKER, DELAY, REVERB, MASTER.", "AGAIN: NEXT TAB."},
       {kKP, "SONG VIEW", "CHAIN PATTERNS INTO A SONG.", ""},
-      {kKLBracket, "DJ FILTER DOWN", "HOLD: LOW-PASS SWEEP. BOTH: OFF.", "SHIFT: BASS CUTOFF."},
-      {kKRBracket, "DJ FILTER UP", "HOLD: HIGH-PASS SWEEP. BOTH: OFF.", "SHIFT: BASS CUTOFF."},
+      {kKLBracket, "DJ FILTER DOWN", "HOLD: LOW-PASS SWEEP. BOTH: OFF.", "SHIFT: BASS MACRO 1 (CLASSIC: CUT)."},
+      {kKRBracket, "DJ FILTER UP", "HOLD: HIGH-PASS SWEEP. BOTH: OFF.", "SHIFT: BASS MACRO 1 (CLASSIC: CUT)."},
       {kKBackslash, "PROJECT VIEW", "LOAD, SAVE AND DELETE PROJECTS.", "CTRL+S SAVES FROM ANY VIEW."},
       {kKFn, "FN", "HOLD: MUTE STRIP. +PAD: MUTE.", "+NOTE KEY: SOLO."},
       {kKShift, "SHIFT", "+STEP LENGTH  +PAD SILENT SELECT", "+NOTE ACCENT  +-/= 8X"},
