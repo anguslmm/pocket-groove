@@ -1555,7 +1555,9 @@ void Ui::editField(int dir, int mag, bool shift) {
   switch (stepField_) {
     case kFVel: s.vel = uint8_t(clampi(s.vel + dir * big, 1, 127)); break;
     case kFGate:
-      if (pitched(t)) s.gate = uint8_t(clampi(s.gate + dir * big, 1, 64));   // a sampler's gate ends the chop
+      // A sampler's gate ends the chop. 0.25 .. 63.75 steps (the byte): a long
+      // recorded gate is nudged, never clamped back to 16 steps.
+      if (pitched(t)) s.gate = uint8_t(clampi(s.gate + dir * big, 1, 255));
       else s.note = uint8_t(clampi(s.note + dir * (shift ? 12 : mag), 36, 84));   // PTCH 60 +- 24
       break;
     case kFProb: s.setProb(uint8_t(clampi((s.prob() + 2) / 5 * 5 + dir * 5 * (shift ? 4 : mag), 0, 100))); break;

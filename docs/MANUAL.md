@@ -178,7 +178,7 @@ The key map says "with SHIFT one octave"; the octave is `ctrl`+`;`/`.` now (ghos
 | `9` `0` `o` | Switch view and keep holding: note values or locks (chapter 10). |
 | `` ` `` | Release the step and go home. |
 
-Field ranges: VEL 1-127 (`shift` ±8); GATE 0.25-16 steps in quarter steps (default 0.5); PTCH -24..+24 semitones; PROB 0-100 % in 5 % steps (`shift` ±20 %); RTCH x1-x4 hits inside the step; CHRD OFF, OCT, 5TH, MAJ, MIN, MAJ7, MIN7, DOM7, SUS4, MIN9.
+Field ranges: VEL 1-127 (`shift` ±8); GATE 0.25-63.75 steps in quarter steps (default 0.5; the bar under the value fills at 4 steps; gates past 16 steps usually come from live record); PTCH -24..+24 semitones; PROB 0-100 % in 5 % steps (`shift` ±20 %); RTCH x1-x4 hits inside the step; CHRD OFF, OCT, 5TH, MAJ, MIN, MAJ7, MIN7, DOM7, SUS4, MIN9.
 
 A step that was off and gets edited stays on. A short tap with no edit on a step that was on turns it off. `enter`, `tab`, `space`, `[` `]` and the modifier combos still work while a step is held (the key map shows `enter` and `tab` as unused; the code toggles record and opens the tempo box).
 
@@ -200,7 +200,7 @@ Step-write is record mode while stopped (`enter` with the transport stopped). Th
 
 Everything else works as in GROOVE (pads select and play, `;` `.` octave, `l` chord mode).
 
-**Live record** is record mode while playing (`enter` while playing, solid red dot). Pads record onto their own track, notes onto the selected track, each quantised to the nearest step. On BASS and LEAD a note pressed while the previous is still held records a slide, the time you hold a note becomes its gate, and `shift`+note records an accent. Step keys still toggle steps.
+**Live record** is record mode while playing (`enter` while playing, solid red dot). Pads record onto their own track, notes onto the selected track, each quantised to the nearest step. On BASS and LEAD the time you hold a note becomes its gate (keys that land on the same step, such as a chord played by hand, count until the last one is let go), and `shift`+note records an accent. A note pressed while the previous is still held records a slide: the previous step gets SLD and the gate that reaches the new note, however far away it is (across pages and the loop point too), so held legato notes play back as one connected line. A recorded gate is at most the loop it lives in (the shorter of the track and pattern length, and at most 63.75 steps): a note can ring through the loop point into the next pass but ends by the time its own step comes round again. While you still hold a note longer than the loop, its freshly recorded step does not retrigger under your finger. Step keys still toggle steps.
 
 ### 4.4 SOUND (`9`): the instrument
 
@@ -448,7 +448,7 @@ The screenshot above came from this sequence on an empty project: `enter`, `z`, 
 ### 6.3 Live record
 
 1. Press `space`, then `enter` (solid red dot).
-2. Play the note keys along with the loop. Notes land on the nearest sixteenth; how long you hold sets the gate; legato (pressing the next key before releasing the last) records a slide; `shift` records an accent.
+2. Play the note keys along with the loop. Notes land on the nearest sixteenth; how long you hold sets the gate; legato (pressing the next key before releasing the last) records a slide, and the earlier note keeps sounding until the next one, however long that is; `shift` records an accent. A note held past the end of the loop rings into the next pass (at most one loop long).
 3. Press `enter` to stop recording. Didn't like it? `ctrl`+`x` clears the track (and `ctrl`+`z` brings it back).
 
 **Bass slides and glide.** A slide holds the note and glides into the next step's pitch without retriggering. The glide time is SLID on SOUND page 3 (`9` `9` `9`... then `z`). Accents use the ACC amount on page 1.

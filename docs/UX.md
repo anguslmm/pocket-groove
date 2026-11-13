@@ -136,7 +136,7 @@ All of this is UI-thread state except where it says Project. Nothing here is sav
 * **Synth track selected:** key *k* (0..7) plays scale degree *k* above the root at `octave[sel]`. With `kGScaleRoot`=A, MIN and octave 1, the keys play A1 B1 C2 D2 E2 F2 G2 A2. Pentatonic scales run on into the next octave, and CHRO gives 8 semitones. MIDI note = `12*(octave+1) + root + degreeOffset`, clamped to 0..127.
 * **Lead:** the note becomes a chord according to `chordMode` (section 9.3).
 * **Drum track selected:** key *k* plays that drum at **velocity** 16, 32, 48, 64, 80, 96, 112 or 127 (natural pitch). Drum pitch is a per-step field (section 7), not a live control.
-* **Legato = slide.** If a note key is still held when the next one is pressed on BASS or LEAD, the new `NoteOn` carries `kStepSlide` (glide, no retrigger). That's how you play and record acid slides without a modifier.
+* **Legato = slide.** If a note key is still held when the next one is pressed on BASS or LEAD, the new `NoteOn` carries `kStepSlide` (glide, no retrigger). That's how you play and record acid slides without a modifier. In live record the slide is written on the PREVIOUS step (with a gate reaching the new note), not on the new one: a step's SLD means "this note runs into the next".
 * SHIFT+note = the same with `kStepAccent`.
 * `;` / `.` = octave up/down for the selected synth track. A toast shows "OCT 2". It does nothing on drums.
 * `l` = next chord mode (lead), and SHIFT+`l` = previous. On other tracks `l` does nothing.
@@ -309,7 +309,7 @@ ALT+pad held retriggers that track at `rollRate`, locked to the grid, at the vel
 Holding DEL while playing in GROOVE clears (`SetStep` with kStepOn cleared) each step of the selected track as the playhead enters it, watched from `status.step[sel]`. The first erase stores an undo snapshot. A small red "ERASE" chip replaces the footer context while DEL is held. When stopped and not in step-write, DEL does nothing.
 
 ### 8.6 Live record
-REC while playing turns on `SetRecord 1`, the status dot is solid red, and the selected track's pads get a thin red top edge. Pads record their own track, and note keys record the selected track (quantised by the engine). Legato gives a slide (see CCR-2), and SHIFT gives an accent. Steps can still be toggled.
+REC while playing turns on `SetRecord 1`, the status dot is solid red, and the selected track's pads get a thin red top edge. Pads record their own track, and note keys record the selected track (quantised by the engine). Held time becomes the gate (from the first key that landed on the step to the release of the last of them). Legato gives a slide (see CCR-2): the previous step gets SLD and a gate that reaches the new note (any distance, across pages and the loop point). Recorded gates are capped at the step's loop (min of track and pattern length, 63.75 steps at most), and a step held longer than the loop is not retriggered under the finger. SHIFT gives an accent. Steps can still be toggled.
 
 ---
 

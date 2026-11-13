@@ -174,19 +174,20 @@ static void testRecordLegatoGate() {
   const double L = rig.stepLen();
   rig.post(CmdType::SetRecord, 0, 0, 1);
   rig.post(CmdType::Play);
-  // Note A on step 2, held into note B on step 4 (legato), B released after 1.5 steps.
+  // Note A on step 2, held into note B on step 4 (legato): A gets the slide and the gate
+  // that reaches B (2 steps); B released after 1.5 steps.
   rig.runSamples(long(2.0 * L) + 32);
   rig.post(noteOnCmd(kTrackBass, 45, 100));
   rig.runSamples(long(4.0 * L) + 32 - rig.time);
   rig.post(noteOnCmd(kTrackBass, 48, 100));
   rig.runSamples(long(4.6 * L) - rig.time);
-  rig.post(cmd(CmdType::NoteOff, kTrackBass, 45));          // A released late: changes nothing
+  rig.post(cmd(CmdType::NoteOff, kTrackBass, 45));          // A released late: changes nothing more
   rig.runSamples(long(5.5 * L) + 32 - rig.time);
   rig.post(cmd(CmdType::NoteOff, kTrackBass, 48));
   rig.run(2);
   const Step& a = rig.step(0, kTrackBass, 2);
   const Step& b = rig.step(0, kTrackBass, 4);
-  CHECKF((a.flags() & kStepSlide) && a.note == 45 && a.gate == kDefaultStep.gate, "legato: step A flags %02x gate %d", a.flags(), a.gate);
+  CHECKF((a.flags() & kStepSlide) && a.note == 45 && a.gate == 8, "legato (gate reaching B, 2 steps): step A flags %02x gate %d", a.flags(), a.gate);
   CHECKF(!(b.flags() & kStepSlide) && b.note == 48 && b.gate == 6, "step B flags %02x gate %d (expected 6 quarter-steps)", b.flags(), b.gate);
   // Short tap: min 1 quarter-step. Detached notes: no slide.
   rig.runSamples(long(8.0 * L) + 32 - rig.time);
