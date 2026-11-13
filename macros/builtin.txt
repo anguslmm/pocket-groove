@@ -1,0 +1,17 @@
+# The built-in instruments: which .pgm files are compiled into the firmware, and
+# in what order the SOUND page steps through them. One line per voice: the voice,
+# then its files (relative to macros/). The FIRST file of each line is the
+# instrument a new project starts with on that track. Every .pgm under macros/
+# must be listed here (the generator fails otherwise).
+#
+# After changing this file or any listed .pgm, regenerate the table and commit it:
+#   cmake --build build/host --target macro_builtin && build/host/macro_builtin
+# (ctest check_builtin fails while the checked-in table is stale; docs/MACROLAB.md)
+kick   kick/boom.pgm kick/trio.pgm kick/push.pgm
+snare  snare/crack.pgm snare/wood.pgm snare/bite.pgm
+clap   clap/hype.pgm clap/swarm.pgm
+chh    chh/tick.pgm chh/alloy.pgm
+ohh    ohh/blast.pgm ohh/swish.pgm
+perc   perc/tap.pgm perc/trail.pgm
+bass   bass/acid.pgm bass/poles.pgm bass/surge.pgm bass/road.pgm bass/dice.pgm
+lead   lead/hands.pgm lead/keys.pgm lead/drift.pgm lead/voyage.pgm lead/swap.pgm

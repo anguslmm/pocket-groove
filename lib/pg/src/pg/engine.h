@@ -40,7 +40,31 @@ enum class CmdType : uint8_t {
   WritePattern,     // a = pattern, ptr = const Pattern* to copy in (paste / undo)
                     //   For both: the engine copies during a later quantum; the buffer must stay
                     //   valid and unmodified until status().writesDone has incremented.
+  SetInstrument,    // a = track, instrument id and the four macro positions: build it with
+                    //   setInstrumentCommand(). Id 0 = none (CLASSIC: the sound parameters stay
+                    //   as they are now and play as stored). See "Instruments" below.
+  SetMacro,         // a = track, b = macro 0..3, c = position 0..255
+  RefreshInstruments, // a = track (0xFF = every track): look the bound ids up again in the
+                    //   library (macro::findInstrument) and re-derive. The host's overlay (the lab)
+                    //   sends it after replacing a set; the old set's memory must stay valid until
+                    //   instrumentRefreshes() has counted this command (applied or discarded).
 };
+
+// INSTRUMENTS (docs/MACROLAB.md): a track whose TrackSettings name an
+// instrument (a macro set found by macro::findInstrument) has its sound
+// parameters 0..23 derived by the engine: macro::evaluate(set, positions,
+// under = the voice's defaults), written into Project params, whenever the id
+// or a position changes (the engine compares the Project bytes with what it
+// derived from once per quantum, so a project edited or loaded by any route
+// is followed; evaluation itself runs only on a change, at a quantum edge).
+// The mixer rows stay the player's and combine with the instrument's level and
+// sends (macro::combineMixer). An id the library does not know plays the
+// stored parameters (as CLASSIC) and is kept. Locks on such a track: a macro
+// lock (Step::lockParam 33..36) plays the instrument with that macro at the
+// lock's value for the lock's scope (evaluated at the step); a lock of a sound
+// parameter (1..24) is ignored (the instrument owns them); mixer locks work.
+// On a CLASSIC track macro locks are ignored and everything else is as before.
+
 
 struct Command {
   CmdType type;
@@ -48,6 +72,10 @@ struct Command {
   Step    step;
   const void* ptr;   // WriteTrack / WritePattern only
 };
+
+// SetInstrument: a = track; the id in step.lockParam (low byte) / step.lockValue
+// (high byte), the positions in step.note, flags, vel, gate (macros 0..3).
+Command setInstrumentCommand(int track, uint16_t id, const uint8_t positions[4]);
 
 struct EngineStatus {
   bool     playing;
@@ -63,6 +91,7 @@ struct EngineStatus {
   float    peakL, peakR;       // post-master peak since last status() call, 0..1+
   float    duckGain;           // current ducker gain 0..1 (1 = not ducking), for the UI meter
   uint32_t revision;           // bumps whenever the Project is modified
+  uint8_t  instrumentRefreshes; // increments (wraps) per RefreshInstruments consumed (applied or discarded)
 };
 
 class Engine {
@@ -105,6 +134,7 @@ class Engine {
   bool post(const Command& c);       // false if the queue is full
   EngineStatus status();             // snapshot; resets peak hold
   bool isPlaying() const;            // transport running? No side effects (status() resets the peak hold)
+  uint8_t instrumentRefreshes() const;   // as in status(), without its side effects
 
   // Stop touching the Project (output silence) so the UI thread can load a
   // new one into the same memory. suspend() returns once the audio thread has

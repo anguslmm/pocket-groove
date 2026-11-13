@@ -36,6 +36,12 @@ foreach(dir ${PG_COMPONENT_DIRS})
   endif()
 endforeach()
 
+# The engine derives an instrument's parameters with pg::macro (evaluate, the
+# built-in library): its tests link the macro component too.
+if(TARGET pg_engine AND TARGET pg_macro)
+  target_link_libraries(pg_engine PUBLIC pg_macro)
+endif()
+
 file(GLOB test_srcs CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_*.cpp)
 foreach(src ${test_srcs})
   get_filename_component(name ${src} NAME_WE)
@@ -106,6 +112,9 @@ if(TARGET macro_audit)
   set(why_silent "HARD  silent at GONE=0.00")
   set(why_clips "HARD  clips .stem peak above 0 dBFS. at HOT=1.00")
   set(why_typo "typo.pgm:5: unknown parameter 'cutx' for bass")
+  # The built-in instrument table (lib/pg/src/pg/macro/builtin_data.cpp) must be what
+  # host/tools/macro_builtin makes of macros/ now; it also fails on id collisions.
+  add_test(NAME check_builtin COMMAND macro_builtin --check WORKING_DIRECTORY ${PG_ROOT})
   foreach(bad silent clips typo)
     add_test(NAME macro_audit_catches_${bad}
              COMMAND macro_audit --hard host/tests/macro_bad/${bad}.pgm

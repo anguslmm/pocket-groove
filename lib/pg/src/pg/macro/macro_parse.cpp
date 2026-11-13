@@ -659,7 +659,9 @@ bool parse(const char* text, size_t len, const ParamTable& params, MacroSet* out
     if (nw == 0) continue;
     if (!ps.statement(w, nw)) return false;
   }
-  return ps.finish();
+  if (!ps.finish()) return false;
+  out->id = out->name[0] ? setId(out->track, out->name) : kNoInstrument;
+  return true;
 }
 
 // ---- writer ------------------------------------------------------------------------------

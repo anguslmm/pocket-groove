@@ -85,8 +85,12 @@ int MacroSet::findPatch(const char* nm) const {
 
 uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* positions, const uint8_t* under,
                   uint8_t* out) {
+  return evaluate(set, params.info[set.track < kNumTracks ? set.track : 0], positions, under, out);
+}
+
+uint32_t evaluate(const MacroSet& set, TrackParams info, const float* positions, const uint8_t* under,
+                  uint8_t* out) {
   const uint32_t owned = set.ownedMask();
-  const int track = set.track < kNumTracks ? set.track : 0;
   float v[kParamsPerTrack];
   for (int p = 0; p < kParamsPerTrack; ++p) {
     out[p] = under[p];
@@ -120,7 +124,7 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
       for (int e = 0; e < pa.n; ++e) {
         const PatchValue& pv = set.patchValues[pa.first + e];
         if (pv.param >= kParamsPerTrack) continue;
-        const ParamInfo* in = params.info[track][pv.param];
+        const ParamInfo* in = info[pv.param];
         if (in && in->fmt == ParamFormat::Enum) {
           const int sw = pv.sw != kNoSwitch ? pv.sw : mo.sw != kNoSwitch ? mo.sw : kDefaultSwitch;
           if (amt[k] * 100.0f >= float(sw) && amt[k] >= best[pv.param]) {
@@ -170,9 +174,9 @@ uint32_t evaluate(const MacroSet& set, const ParamTable& params, const float* po
   // 5. clamp and round
   for (int p = 0; p < kParamsPerTrack; ++p) {
     if (!((owned >> p) & 1)) continue;
-    const ParamInfo* info = params.info[track][p];
+    const ParamInfo* in = info[p];
     float lo = 0.0f, hi = 127.0f;
-    if (info) lo = float(info->min), hi = float(info->max);
+    if (in) lo = float(in->min), hi = float(in->max);
     float x = v[p];
     if (!(x >= lo)) x = lo;   // also catches NaN
     if (x > hi) x = hi;
@@ -207,6 +211,33 @@ int enumJumps(const MacroSet& set, const ParamTable& params, int m, const float*
     std::memcpy(prev, cur, sizeof(cur));
   }
   return found;
+}
+
+uint16_t setId(int track, const char* name) {
+  uint32_t h = 2166136261u;
+  auto mix = [&](char c) { h = (h ^ uint8_t(c)) * 16777619u; };
+  for (const char* s = trackName(track); *s; ++s) mix(*s);
+  mix(':');
+  for (const char* s = name; *s; ++s) mix(*s >= 'a' && *s <= 'z' ? char(*s - 'a' + 'A') : *s);
+  return uint16_t((h >> 16) ^ (h & 0xFFFFu));
+}
+
+uint8_t posToByte(float p) {
+  const float x = clamp01(p) * float(kPosMax) + 0.5f;
+  return uint8_t(int(x));
+}
+
+void combineMixer(const uint8_t* player, const uint8_t* inst, const uint8_t* def, uint8_t* out) {
+  auto clamp127 = [](int v) { return uint8_t(v < 0 ? 0 : (v > 127 ? 127 : v)); };
+  const int d = def[kMixLevel];
+  const int lvl = d > 0 ? (int(player[kMixLevel]) * int(inst[kMixLevel]) + d / 2) / d : player[kMixLevel];
+  const uint8_t dly = clamp127(int(player[kMixDelaySend]) + int(inst[kMixDelaySend]) - int(def[kMixDelaySend]));
+  const uint8_t rev = clamp127(int(player[kMixReverbSend]) + int(inst[kMixReverbSend]) - int(def[kMixReverbSend]));
+  out[kMixLevel] = clamp127(lvl);
+  out[kMixPan] = player[kMixPan];
+  out[kMixDelaySend] = dly;
+  out[kMixReverbSend] = rev;
+  out[kMixDuck] = player[kMixDuck];
 }
 
 }  // namespace macro
