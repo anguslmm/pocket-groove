@@ -99,6 +99,16 @@ target_compile_options(test_desktop_mic PRIVATE ${PG_FLAGS})
 set_target_properties(test_desktop_mic PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 add_test(NAME test_desktop_mic COMMAND test_desktop_mic ${CMAKE_BINARY_DIR}/desktop_test_mic WORKING_DIRECTORY ${PG_ROOT})
 
+# Resampling's desktop path (host_resample.h + samples.cpp: no SDL, no input device).
+find_package(Threads REQUIRED)
+add_executable(test_desktop_resample tests/test_desktop_resample.cpp samples.cpp)
+target_include_directories(test_desktop_resample PRIVATE ${DESK_DIR} ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_desktop_resample PRIVATE ${PG_LIBS} ${PG_LIBS} Threads::Threads)
+target_compile_options(test_desktop_resample PRIVATE ${PG_FLAGS})
+set_target_properties(test_desktop_resample PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+add_test(NAME test_desktop_resample COMMAND test_desktop_resample ${CMAKE_BINARY_DIR}/desktop_test_resample
+         WORKING_DIRECTORY ${PG_ROOT})
+
 # Listen's rate match against simulated clocks (header-only, no SDL needed by the test itself).
 add_executable(test_desktop_listen tests/test_desktop_listen.cpp)
 target_include_directories(test_desktop_listen PRIVATE ${DESK_DIR})
