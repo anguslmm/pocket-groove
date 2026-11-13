@@ -15,6 +15,7 @@
 //              RamFlash image: the header (name, length, peak, gain), a reboot finds it
 //   playback   the committed recording through SamplerVoice plays at the level a put
 //              sample of the same sound plays at (the header's gain), within 0.5 dB
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -346,6 +347,22 @@ void testFlashAndPlayback() {
   check(w.remove(3) == SampleWriter::kOk && w.erased(3) && !pool.user(3, &ref), "rm: empty and erased");
 }
 
+// The writer thread's cost (host figure; the device runs it on core 1) and the RAM a
+// recording takes besides the ring and the task's stack.
+void bench() {
+  std::printf("bench\n");
+  RamSink sink;
+  Recorder r;
+  const std::vector<int16_t> x = scene(441000, 30.0, 0.0, 22050, 400000, 6000.0);
+  r.start(&sink);
+  const auto t0 = std::chrono::steady_clock::now();
+  feedAll(r, x);
+  const double ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count();
+  std::printf("  Recorder::feed: %.1f ns per input sample (44.1 kHz) on this host; sizeof(Recorder) %zu B\n",
+              ns / double(x.size()), sizeof(Recorder));
+  check(r.state() == RecState::Full, "bench recorded");
+}
+
 }  // namespace
 
 int main() {
@@ -354,6 +371,7 @@ int main() {
   testSettle();
   testStates();
   testFlashAndPlayback();
+  bench();
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;
 }

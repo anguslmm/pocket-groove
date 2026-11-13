@@ -765,6 +765,19 @@ bool micBegin(MicRing* ring) {
     i2s_channel_register_event_callback(s.rx, &cbs, nullptr);   // not fatal: only the counter
     s.rxInit = true;
   }
+  // The ADC, once per boot: its power-up (0x0E: PGA and modulator on) shares the
+  // codec's analog reference with the playing DAC, so the output is faded around it
+  // (~40 ms) rather than risk a click. The codec runs from TX's BCLK, already there.
+  if (!s.adcOn) {
+    rampVolume(s.cfg.volumeReg, 0x00);
+    const bool ok = writeAdcRegs();
+    rampVolume(0x00, s.cfg.volumeReg);
+    if (!ok) {
+      setError("mic: ES8311 ADC registers not written");
+      return false;
+    }
+    s.adcOn = true;
+  }
   // GPIO46: M5.begin() left it an output driven high; IDF 5.5's I2S setup only enables
   // the input. Output driver off, the I2S input routing kept (hardware-notes 11.6/11.7).
   gpio_set_direction(static_cast<gpio_num_t>(kPinDin), GPIO_MODE_INPUT);
@@ -774,15 +787,6 @@ bool micBegin(MicRing* ring) {
   if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) {   // INVALID_STATE: already running
     setError("mic: i2s_channel_enable", e);
     return false;
-  }
-  if (!s.adcOn) {
-    const bool ok = writeAdcRegs();
-    if (!ok) {
-      i2s_channel_disable(s.rx);
-      setError("mic: ES8311 ADC registers not written");
-      return false;
-    }
-    s.adcOn = true;
   }
   ring->head.store(0);
   ring->tail.store(0);

@@ -124,7 +124,9 @@ uint32_t latencyFrames();
 // micBegin() also writes the codec's ADC registers (the set mic-matrix config 6
 // recorded with on the device, MINUS everything that touches the DAC side: no reset
 // pulse, no analog power cycle, no clock or divider rewrite; so the playing output
-// keeps its level and does not click) and the ADC stays powered after that.
+// keeps its level) and the ADC stays powered after that. That first time the output
+// is faded out and back in around the writes (~40 ms, once per boot): the ADC's power-up
+// shares the analog reference with the DAC, and a dip is better than a click.
 // Every micBegin() switches GPIO46's output driver off (M5.begin() leaves it
 // driven high, which the RX samples as a constant -1).
 //
