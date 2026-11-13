@@ -171,7 +171,7 @@ uint32_t g_holdPct10 = 0, g_holdMaxPct10 = 0, g_holdMs = 0, g_holds = 0;
 
 void sp(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
 void sp(const char* fmt, ...) {
-  char buf[200];
+  char buf[320];   // the [usb] packets line is about 260 characters
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(buf, sizeof(buf), fmt, ap);

@@ -24,6 +24,7 @@ namespace audio {
 using RenderFn = void (*)(int16_t* interleavedStereo, int frames, void* user);
 
 constexpr int kBlockFrames = 128;
+constexpr unsigned kWarmupBlocks = 32;   // blocks after a start / statistics reset left out of the load figures (93 ms)
 constexpr uint32_t kTaskStackBytes = 6144;   // the audio task's stack
 
 enum class Backend : uint8_t { DirectI2S = 0, M5Speaker = 1 };

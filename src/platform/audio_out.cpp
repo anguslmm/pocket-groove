@@ -201,24 +201,31 @@ void audioTask(void*) {
     s.render(out, kBlockFrames, s.user);
     const uint32_t dt = esp_cpu_get_cycle_count() - t0;
 
-    s.lastCyc = dt;
-    if (dt > s.maxCyc) s.maxCyc = dt;
-    if (dt > s.winMaxCyc.load(std::memory_order_relaxed)) s.winMaxCyc.store(dt, std::memory_order_relaxed);
-    if (dt > s.recentCur) s.recentCur = dt;
-    if (++s.recentCount >= s.cfg.sampleRate / kBlockFrames) {   // ~1 s windows
-      s.recentCount = 0;
-      s.recentPrev = s.recentCur;
-      s.recentCur = 0;
-    }
+    // The first blocks after a start or a statistics reset run cold (flash cache,
+    // first touch of every table): one took 8.1 ms on the device and, as the seed of
+    // the running average, showed as "peak 259 %" in the next report. They are not
+    // counted in the load figures; the gap / underrun counters below still see them.
+    const bool warm = s.blocks >= kWarmupBlocks;
     const uint32_t gapCyc = havePrev ? t0 - prevStart : 0;
-    const float avg = s.avgCyc;
-    s.avgCyc = (avg == 0.0f) ? static_cast<float>(dt) : avg + (static_cast<float>(dt) - avg) * (1.0f / 64.0f);
-    if (dt > s.repMaxCyc.load(std::memory_order_relaxed)) s.repMaxCyc.store(dt, std::memory_order_relaxed);
-    {
-      const uint32_t a = static_cast<uint32_t>(s.avgCyc);
-      if (a > s.repMaxAvgCyc.load(std::memory_order_relaxed)) s.repMaxAvgCyc.store(a, std::memory_order_relaxed);
+    s.lastCyc = dt;
+    if (warm) {
+      if (dt > s.maxCyc) s.maxCyc = dt;
+      if (dt > s.winMaxCyc.load(std::memory_order_relaxed)) s.winMaxCyc.store(dt, std::memory_order_relaxed);
+      if (dt > s.recentCur) s.recentCur = dt;
+      if (++s.recentCount >= s.cfg.sampleRate / kBlockFrames) {   // ~1 s windows
+        s.recentCount = 0;
+        s.recentPrev = s.recentCur;
+        s.recentCur = 0;
+      }
+      const float avg = s.avgCyc;
+      s.avgCyc = (avg == 0.0f) ? static_cast<float>(dt) : avg + (static_cast<float>(dt) - avg) * (1.0f / 64.0f);
+      if (dt > s.repMaxCyc.load(std::memory_order_relaxed)) s.repMaxCyc.store(dt, std::memory_order_relaxed);
+      {
+        const uint32_t a = static_cast<uint32_t>(s.avgCyc);
+        if (a > s.repMaxAvgCyc.load(std::memory_order_relaxed)) s.repMaxAvgCyc.store(a, std::memory_order_relaxed);
+      }
+      if (dt > period) s.lateBlocks = s.lateBlocks + 1;
     }
-    if (dt > period) s.lateBlocks = s.lateBlocks + 1;
     if (havePrev) {
       const uint32_t gap = t0 - prevStart;
       if (gap > s.maxPeriodCyc) s.maxPeriodCyc = gap;

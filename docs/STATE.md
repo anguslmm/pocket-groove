@@ -167,6 +167,18 @@ Order of work (owner, updated 2026-11-12):
    envs warning-free): IRAM functions 85 -> 93 (USB) / 84 -> 92 (jack), .iram0.text +3.9 KB
    (121471 -> 125399, 114535 -> 118467), static RAM +2.5 KB (228212 -> 230700, 227668 ->
    230156), flash +11 KB (1085859 -> 1097103, 1023283 -> 1034595): about 6.4 KB less heap.
+MEASURED ON THE DEVICE 2026-11-13 (owner's `r` report, USB audio build with the SD probe fix, no
+card, a song playing, USB streaming, 33 s after boot): heap free 37132, min-ever 37084, largest
+block 27636 (was 34 K free / 13 K min before the fix: the SD mount was the low point, confirmed);
+AUD 41 % now, longest block 2471 of 2902 us, 0 underruns, 0 late in the window; core 0 busy 28 %,
+core 1 22 %; stacks free: loop 8564 of 12288, audio 3904 of 6144, keys 3004 of 4096, IMU 2016 of
+3072 (short run: no save / load / transfer yet, so do not shrink on these); IMU 12-byte read 459 us
+avg, 5.2 % of core 1 at 100 Hz while held; gravity lying flat: z +1017 mg (x, y ~0); ERR_REG 0x80
+(the auxiliary-interface bit; no aux sensor is fitted); sample pool mapped. Earlier the same day,
+before the fix, with the STUTTER song: AUD about 50 %. The report's "peak 259 %" was the running
+average seeded by one cold 8.1 ms block right after the statistics reset: the first 32 blocks are
+no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list: tilt direction
+(steps 5, 6), save / load / transfer stack marks (step 8), sampler put timing (step 7).
    HARDWARE CHECK: DEVICE CHECK below, steps 3 and 10.
    RAM WALL (found 2026-11-13 when stage B and the scope were merged): the USB build's static
    data + IRAM overflowed the linker's data segment (dram0_0_seg, 341.7 KB) by 1.2 KB. Static
