@@ -62,6 +62,8 @@ except ImportError:  # pragma: no cover - the launcher prints the fix
     serial = None
 
 ESPRESSIF_VID = 0x303A
+# The Daisy Seed target (daisy/, docs/DAISY.md): libDaisy's CDC device, "Daisy Seed Built In".
+DAISY_VID, DAISY_PID = 0x0483, 0x5740
 USJ_PID = 0x1001                  # the chip's USB-Serial/JTAG (and the variant's TinyUSB PID, same number)
 PRODUCT = "Pocket Groove"         # USB product string of the USB audio build
 BAUD = 115200                     # NEVER 1200: that reboots the USB audio build into its bootloader
@@ -144,7 +146,7 @@ def find_port(ports=None):
         if serial is None:
             raise PgError("pyserial is missing")
         ports = serial.tools.list_ports.comports()
-    ports = [p for p in ports if p.vid == ESPRESSIF_VID]
+    ports = [p for p in ports if p.vid == ESPRESSIF_VID or (p.vid == DAISY_VID and p.pid == DAISY_PID)]
     # macOS lists each device twice (/dev/cu.* and /dev/tty.*): use cu.*, which does not wait for carrier.
     ports.sort(key=lambda p: (not p.device.startswith("/dev/cu."), p.device))
     seen, uniq = set(), []

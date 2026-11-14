@@ -1,0 +1,372 @@
+#!/usr/bin/env python3
+"""tools/pg-daisy: drive the Daisy Seed build of Pocket Groove from the computer
+(stage 0: the Seed has no keys and no screen yet; docs/DAISY.md "Stage 0").
+
+    tools/pg-daisy log                 everything the device prints (Ctrl-C ends)
+    tools/pg-daisy report              the 'r' report (paste it back when asked)
+    tools/pg-daisy tap KEY [KEY ...]   tap keys by legend (q spc ent sft fn G0 ...)
+    tools/pg-daisy down KEY / up KEY   hold / release one
+    tools/pg-daisy script FILE         a desktop key script (host/ui_scripts/*.txt);
+                                       its "shot NAME" lines save NAME.png (--out DIR)
+    tools/pg-daisy shot FILE.png       the screen now, as a PNG (--scale N)
+    tools/pg-daisy mirror              a window showing the screen live; its keyboard
+                                       plays the device (key down and up, like the
+                                       desktop app); needs tkinter. Without it: keys
+    tools/pg-daisy keys                the terminal as a keyboard: each character taps
+                                       its key; Ctrl-G holds / releases G0, Ctrl-F fn,
+                                       Ctrl-T ctl, Ctrl-O opt, Ctrl-A alt; an upper-case
+                                       letter is SHIFT + the letter; Ctrl-R report;
+                                       Ctrl-S screenshot; Esc or Ctrl-C quits
+    tools/pg-daisy bootloader          restart into the Daisy bootloader (to flash)
+
+The serial protocol (one port, shared with tools/pg's transfer lines "~PGX"):
+'>' + a key-script command per line (">tap q 40", ">down sft", ">wait 100",
+">release", ">shot NAME", ">sync TAG"), single letters (r report, h help, f one
+frame, m mirror on/off, S save /int now, B / R + y restart), and the screen comes
+back as "~PGF" lines (daisy/core/fb_stream.h). The port is found by USB id (libDaisy's
+0483:5740, as tools/pg does), or --port / $PG_PORT. Python 3 with pyserial.
+"""
+import argparse
+import base64
+import os
+import struct
+import sys
+import time
+import zlib
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+import pg  # noqa: E402  (find_port, PgError)
+
+try:
+    import serial  # noqa: E402
+except ImportError:  # pragma: no cover
+    serial = None
+
+LEGENDS = set("` 1 2 3 4 5 6 7 8 9 0 - = del tab q w e r t y u i o p [ ] \\ fn sft a s d f g h j k l ; ' ent "
+              "ctl opt alt z x c v b n m , . / spc G0".split())
+
+
+class Device:
+    def __init__(self, port, echo=None):
+        if serial is None:
+            raise pg.PgError("pyserial is missing (pip install pyserial)")
+        self.s = serial.Serial(port, 115200, timeout=0.05)
+        self.buf = b""
+        self.echo = echo
+        self.frame = None   # the screen: {"w", "h", "px": bytearray, "pal": [...]} once one arrived
+        self.frames = 0
+        self.last_name = None
+
+    def close(self):
+        self.s.close()
+
+    def send(self, text):
+        self.s.write(text.encode("ascii"))
+        self.s.flush()
+
+    def key(self, cmd):
+        self.send(">%s\n" % cmd)
+
+    def lines(self, seconds):
+        """Yields received lines for `seconds` (screen lines are decoded, not yielded)."""
+        end = time.time() + seconds
+        while time.time() < end:
+            data = self.s.read(4096)
+            if data:
+                self.buf += data
+            while b"\n" in self.buf:
+                line, self.buf = self.buf.split(b"\n", 1)
+                text = line.decode("ascii", "replace").rstrip("\r")
+                if text.startswith("~PGF "):
+                    self._screen(text)
+                    continue
+                if self.echo:
+                    self.echo(text)
+                yield text
+
+    def pump(self, seconds):
+        for _ in self.lines(seconds):
+            pass
+
+    def wait_for(self, pred, seconds):
+        for line in self.lines(seconds):
+            if pred(line):
+                return line
+        return None
+
+    def _screen(self, text):
+        parts = text.split(" ")
+        kind = parts[1]
+        if kind == "B":
+            w, h = int(parts[3]), int(parts[4])
+            if not self.frame or self.frame["w"] != w:
+                self.frame = {"w": w, "h": h, "px": bytearray(w * h), "pal": [0] * 256, "dirty": set()}
+            self.last_name = parts[7] if len(parts) > 7 else "-"
+        elif kind == "P" and self.frame:
+            raw = base64.b64decode(parts[2])
+            self.frame["pal"] = [raw[2 * i] | raw[2 * i + 1] << 8 for i in range(256)]
+        elif kind == "R" and self.frame:
+            y = int(parts[2])
+            row = base64.b64decode(parts[3])
+            w = self.frame["w"]
+            self.frame["px"][y * w:(y + 1) * w] = row
+            self.frame["dirty"].add(y)
+        elif kind == "E":
+            self.frames += 1
+
+    def sync(self, tag="s", seconds=5.0):
+        """Waits until the device has run everything queued before this point."""
+        self.key("sync %s" % tag)
+        return self.wait_for(lambda l: l.strip() == "[key] sync %s" % tag, seconds) is not None
+
+    def shot(self, name="frame", seconds=5.0):
+        before = self.frames
+        self.key("shot %s" % name)
+        end = time.time() + seconds
+        while time.time() < end and self.frames == before:
+            self.pump(0.05)
+        return self.frames > before
+
+
+def rgb(c):
+    r, g, b = (c >> 11) & 31, (c >> 5) & 63, c & 31
+    return (r * 255 // 31, g * 255 // 63, b * 255 // 31)
+
+
+def write_png(path, frame, scale=1):
+    w, h = frame["w"], frame["h"]
+    pal = [rgb(c) for c in frame["pal"]]
+    raw = bytearray()
+    for y in range(h):
+        row = bytearray()
+        for x in range(w):
+            row += bytes(pal[frame["px"][y * w + x]]) * scale
+        for _ in range(scale):
+            raw += b"\x00" + row
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    with open(path, "wb") as f:
+        f.write(b"\x89PNG\r\n\x1a\n")
+        f.write(chunk(b"IHDR", struct.pack(">IIBBBBB", w * scale, h * scale, 8, 2, 0, 0, 0)))
+        f.write(chunk(b"IDAT", zlib.compress(bytes(raw), 6)))
+        f.write(chunk(b"IEND", b""))
+
+
+def run_script(dev, path, out, scale):
+    """A desktop key script, line by line: keys go to the device, waits happen here (so a
+    long script never fills the device's queue), shots are saved as PNGs."""
+    n = 0
+    with open(path) as fh:
+        lines = fh.readlines()
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        words = line.split()
+        verb = words[0]
+        if verb == "wait":
+            dev.pump(int(words[1]) / 1000.0)
+        elif verb in ("down", "up", "tap"):
+            dev.key(line)
+            if verb == "tap":
+                dev.pump((int(words[2]) if len(words) > 2 else 40) / 1000.0)
+        elif verb == "shot":
+            name = words[1] if len(words) > 1 else "shot%d" % n
+            dev.sync("pre-%s" % name)
+            if dev.shot(name):
+                os.makedirs(out, exist_ok=True)
+                write_png(os.path.join(out, name + ".png"), dev.frame, scale)
+                print("saved %s" % os.path.join(out, name + ".png"))
+            else:
+                print("no frame for %s" % name)
+        elif verb in ("battery", "sd", "boot", "demo", "empty", "sdl", "focuslost", "app", "quit"):
+            continue   # the desktop's / ui_shot's own lines
+        else:
+            dev.key(line)
+        n += 1
+    dev.sync("end")
+    dev.key("release")
+
+
+TERMINAL = {"\r": "ent", "\n": "ent", " ": "spc", "\x7f": "del", "\x08": "del", "\t": "tab"}
+STICKY = {"\x07": "G0", "\x06": "fn", "\x14": "ctl", "\x0f": "opt", "\x01": "alt"}
+
+
+def keys_terminal(dev):
+    import termios
+    import tty
+    import select
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    held = set()
+    print("keys: type to tap; Ctrl-G G0, Ctrl-F fn, Ctrl-T ctl, Ctrl-O opt, Ctrl-A alt (hold / release); "
+          "upper case = shift; Ctrl-R report, Ctrl-S screenshot; Esc quits\r")
+    try:
+        tty.setraw(fd)
+        while True:
+            r, _, _ = select.select([fd], [], [], 0.02)
+            dev.pump(0.0)
+            if not r:
+                continue
+            ch = os.read(fd, 1).decode("latin-1")
+            if ch in ("\x1b", "\x03"):
+                break
+            if ch in STICKY:
+                k = STICKY[ch]
+                dev.key(("up " if k in held else "down ") + k)
+                held.symmetric_difference_update({k})
+                sys.stdout.write("[%s %s]\r\n" % (k, "held" if k in held else "released"))
+                continue
+            if ch == "\x12":
+                dev.send("r")
+                continue
+            if ch == "\x13":
+                if dev.shot("keys"):
+                    name = time.strftime("pg-daisy-%H%M%S.png")
+                    write_png(name, dev.frame, 3)
+                    sys.stdout.write("saved %s\r\n" % name)
+                continue
+            k = TERMINAL.get(ch, ch.lower())
+            if k not in LEGENDS:
+                continue
+            if ch.isupper():
+                dev.key("down sft")
+                dev.key("tap %s" % k)
+                dev.key("up sft")
+            else:
+                dev.key("tap %s" % k)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        dev.key("release")
+
+
+TK_KEYS = {"space": "spc", "Return": "ent", "BackSpace": "del", "Tab": "tab", "Shift_L": "sft", "Shift_R": "sft",
+           "Control_L": "ctl", "Control_R": "ctl", "Alt_L": "alt", "Alt_R": "alt", "Option_L": "opt",
+           "Option_R": "opt", "Meta_L": "opt", "Super_L": "fn", "F1": "G0", "grave": "`", "minus": "-",
+           "equal": "=", "bracketleft": "[", "bracketright": "]", "backslash": "\\", "semicolon": ";",
+           "apostrophe": "'", "comma": ",", "period": ".", "slash": "/"}
+
+
+def mirror(dev, scale):
+    try:
+        import tkinter as tk
+    except ImportError:
+        print("pg-daisy: no tkinter here (macOS Homebrew: brew install python-tk); using the terminal")
+        dev.send("m")
+        return keys_terminal(dev)
+    root = tk.Tk()
+    root.title("Pocket Groove (Daisy) - F1 = G0")
+    img = tk.PhotoImage(width=240 * scale, height=135 * scale)
+    tk.Label(root, image=img, bd=0).pack()
+    held = set()
+
+    def legend(ev):
+        k = TK_KEYS.get(ev.keysym, ev.keysym.lower() if len(ev.keysym) == 1 else None)
+        return k if k in LEGENDS else None
+
+    def press(ev):
+        k = legend(ev)
+        if k and k not in held:
+            held.add(k)
+            dev.key("down %s" % k)
+
+    def release(ev):
+        k = legend(ev)
+        if k and k in held:
+            held.discard(k)
+            dev.key("up %s" % k)
+
+    root.bind("<KeyPress>", press)
+    root.bind("<KeyRelease>", release)
+    dev.send("m")   # the device streams the rows the UI changes
+
+    def tick():
+        dev.pump(0.005)
+        f = dev.frame
+        if f and f["dirty"]:
+            pal = ["#%02x%02x%02x" % rgb(c) for c in f["pal"]]
+            for y in sorted(f["dirty"]):
+                row = "{" + " ".join(pal[f["px"][y * 240 + x]] for x in range(240) for _ in range(scale)) + "}"
+                for k in range(scale):
+                    img.put(row, to=(0, y * scale + k))
+            f["dirty"].clear()
+        root.after(15, tick)
+
+    root.after(15, tick)
+    try:
+        root.mainloop()
+    finally:
+        dev.send("m")
+        dev.key("release")
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(prog="tools/pg-daisy", description=__doc__.split("\n")[0])
+    ap.add_argument("--port", help="serial port (default: the Daisy by USB id, or $PG_PORT)")
+    ap.add_argument("--out", default="shots", help="where script shots go (default ./shots)")
+    ap.add_argument("--scale", type=int, default=3, help="PNG / window scale (default 3)")
+    ap.add_argument("cmd")
+    ap.add_argument("args", nargs="*")
+    a = ap.parse_args(argv)
+    try:
+        port = a.port or os.environ.get("PG_PORT") or pg.find_port()
+        dev = Device(port)
+    except (pg.PgError, OSError) as e:
+        print("pg-daisy: %s" % e)
+        return 1
+    try:
+        c = a.cmd
+        if c == "log":
+            dev.echo = print
+            try:
+                while True:
+                    dev.pump(1.0)
+            except KeyboardInterrupt:
+                return 0
+        elif c == "report":
+            dev.send("r")
+            out = []
+            for line in dev.lines(5.0):
+                if "REPORT BEGIN" in line:
+                    out = [line]
+                elif out:
+                    out.append(line)
+                    if "REPORT END" in line:
+                        break
+            print("\n".join(out) if out else "pg-daisy: no report (is this the Daisy's port?)")
+            return 0 if out else 1
+        elif c in ("tap", "down", "up"):
+            for k in a.args:
+                dev.key("%s %s" % (c, k))
+            dev.sync("cli")
+        elif c == "script":
+            run_script(dev, a.args[0], a.out, a.scale)
+        elif c == "shot":
+            if not dev.shot("cli"):
+                print("pg-daisy: no frame came back")
+                return 1
+            write_png(a.args[0] if a.args else "pg-daisy.png", dev.frame, a.scale)
+        elif c == "keys":
+            dev.echo = lambda l: sys.stdout.write(l + "\r\n")
+            keys_terminal(dev)
+        elif c == "mirror":
+            mirror(dev, a.scale)
+        elif c == "bootloader":
+            dev.send("B")
+            time.sleep(0.2)
+            dev.send("y")
+            print("pg-daisy: the Seed restarts into its bootloader (its LED pulses): flash now")
+        else:
+            ap.print_help()
+            return 2
+        return 0
+    finally:
+        dev.close()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

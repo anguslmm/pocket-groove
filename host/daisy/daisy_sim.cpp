@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -111,13 +112,18 @@ std::vector<uint8_t> g_poolStage(4096);
 std::vector<uint8_t> g_txMem(layout::kTxRing);
 App g_app;   // one per program (the engine's state is a single static block)
 
+// Written whole to a temporary file, then renamed: a kill mid-write never leaves half an image.
 void saveFlash(const std::string& path) {
   if (path.empty()) return;
-  FILE* f = std::fopen(path.c_str(), "wb");
+  const std::string tmp = path + ".tmp";
+  FILE* f = std::fopen(tmp.c_str(), "wb");
   if (!f) return;
-  std::fwrite(g_flash.data(), 1, g_flash.size(), f);
-  std::fclose(f);
+  const bool ok = std::fwrite(g_flash.data(), 1, g_flash.size(), f) == g_flash.size();
+  if (std::fclose(f) == 0 && ok) std::rename(tmp.c_str(), path.c_str());
 }
+
+volatile std::sig_atomic_t g_stop = 0;
+void onSignal(int) { g_stop = 1; }
 
 }  // namespace
 
@@ -141,6 +147,8 @@ int main(int argc, char** argv) {
       std::fclose(f);
     }
   }
+  std::signal(SIGTERM, onSignal);
+  std::signal(SIGINT, onSignal);
   SimHal hal;
   hal.tx.attach(g_txMem.data(), uint32_t(g_txMem.size()));
   if (useStdio) {
@@ -189,7 +197,7 @@ int main(int argc, char** argv) {
   const uint64_t periodUs = uint64_t(kBlock) * 1000000u / kRate;
   uint64_t nextBlock = nowUs64();
   uint32_t lastSave = nowMs();
-  for (;;) {
+  while (!g_stop) {
     // The "interrupt": every block that is due (the sim's output goes nowhere).
     int n = 0;
     while (nowUs64() >= nextBlock && n++ < 8) {
