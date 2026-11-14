@@ -41,6 +41,14 @@ The core at 48 kHz (2026-11-14, merged to main as 9e12a5d): 48 kHz is a first-cl
 Host-verified (101/101; new itest_rate48, itest_rate48_record, itest_golden48, macro_audit_48k),
 Cardputer firmware builds clean with its static RAM unchanged. Entry "48 KHZ CORE BUILT" below.
 
+The Daisy target (2026-11-14, branch of the daisy worktree; NOTHING HAS RUN ON A SEED): daisy/
+builds a stage 0 firmware for the Seed3 with arm-none-eabi-gcc, warning-free, image 430 of 480 KB
+(stage 1: 467). Control over USB serial (tools/pg-daisy: keys in the desktop's key-script format,
+report, screen mirror), tools/pg on the same port, four pots on the macros, the demo plays by
+itself. Host-verified: ctest -L daisy (core, /int with power cuts, sample pool, display path,
+BMI270) and tools/test_pg_daisy.py against the firmware's App in daisy_sim. docs/DAISY.md has the
+flashing steps and the first-power-on checklist. Entry "DAISY TARGET BUILT" below.
+
 
 v0.1 complete and host-verified: 55/55 host tests pass; both firmware envs build clean.
 Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
@@ -863,6 +871,39 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    control rate (kFineQuanta, kFineEvalQuanta) is in quanta (8 % faster at 48); the sampler's
    kMinRegion (64 samples of the sample) and minimum retrigger period (64 engine samples) are
    counts; the hats' squares alias; the host's MemoryPool slots stay kSlotMaxSamples (2.86 s at 48).
+   DAISY TARGET BUILT (2026-11-14, branch of the daisy worktree; host and cross-compile only,
+    NOTHING HAS RUN ON A SEED): POCKET GROOVE FOR THE DAISY SEED, STAGES 0 AND 1. docs/DAISY.md is
+    the whole story (memory map, pin map, flashing, the Labor wiring, the checklist, risks).
+    - BUILD: daisy/Makefile (make -C daisy [STAGE=1]) on lib/pg unchanged; libDaisy 1289a00 fetched
+      and built by tools/daisy-setup.sh into the ignored daisy/libDaisy (pinned in
+      daisy/libdaisy.lock); BOOT_SRAM linker script daisy/pg_daisy.lds. One .bin: the 480 KB image
+      the Daisy bootloader copies (0x78000 bytes exactly, read in its binary) + a ROM part at QSPI
+      0x900B8000 (PG_BULK_ATTR = the ROM sounds and the instrument library, 192 KB, copied to
+      SDRAM at boot). Image 430.2 KB (stage 0) / 466.7 KB (stage 1); DTCM: the engine's state
+      77 KB + 24 KB stack; D2: the App (instrument, UI, framebuffer) 129 KB; SDRAM 9 MB used.
+    - RUNS AS: the audio interrupt (96-frame blocks, 48 kHz stereo, int16 -> float) + a main-loop
+      scheduler of state machines (daisy/core, daisy/app: portable, the same App runs in
+      host/daisy/daisy_sim). /int is a RAM file system with A/B flash snapshots; the sample pool an
+      SDRAM image with a background flash copy; both survive firmware updates.
+    - STAGE 0 (Seed3 + TPA6132 or the Labor): line out, USB serial for everything (keys as '>' key-
+      script lines, 'r' report with load / longest block / underruns / memory map / board version,
+      'f' / 'm' screen frames, tools/pg transfers incl. samples), four pots move the selected track's
+      macros with pickup, the demo plays at boot, LED patterns, fault record over reset.
+    - STAGE 1 (compile-checked): a panel-agnostic display path (HX8357D 480x320 at scale 2 or
+      ST7789 240x135 at 1; configuration, not constants), the BMI270 Qwiic board with Bosch's
+      configuration file (BSD-3-Clause, extracted to the ignored daisy/vendor/), microSD on SDMMC +
+      FatFS, G0, battery. No key matrix (layout on hold); a pointer hook for touch. NOT BUILT: line-in
+      recording (MicInput over pg's Recorder at 48 kHz), touch, pads.
+    - TESTS: ctest -L daisy: test_daisy_core, test_daisy_fs (pg::io on the RAM FS, a power cut at
+      every flash operation of a snapshot), test_daisy_pool (SampleWriter / FlashPool over the
+      mirror, power cuts mid-copy), test_daisy_panel (pixels equal the Cardputer path's at scale 1
+      and 2), test_daisy_bmi270 (register model), test_pg_daisy (tools/pg-daisy and tools/pg against
+      daisy_sim, restart persistence). Host suite and the Cardputer env unchanged and passing.
+    - LOAD (ESTIMATE): 10-35 % of the M7 at 48 kHz (Cardputer's measured 41-50 % at 44.1 scaled,
+      and the callgrind counts); the report will measure it.
+    - CORE SEAMS proposed (none made): a float engine output, a section macro for UI / demo text,
+      an XferEnv flag for platforms whose flash writes do not stall, pointer events in the UI.
+    NEXT (owner): order of docs/DAISY.md section 5 on the Seed3 when it arrives; paste the report.
    RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
    device). Measured on the owner's device just before (current main, USB build, a song with
    STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at
