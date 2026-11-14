@@ -263,6 +263,21 @@ Tilt never changes your sound for good: the macros' positions, your notes and th
 - On a CLASSIC track tilt does nothing (a short message says so).
 - On the desktop app (no tilt sensor) hold G0 (F1 or Esc) and move the mouse instead: right is rolling right, up is tipping away.
 
+#### Velocity
+
+Every note has a velocity (STEP EDIT's VEL, 1 to 127; new steps get 100; the drum note row plays 16 to 127; a pad plays as hard as you hit it). It sets how loud the note is, and some instruments also let it change the sound of that note: on CRACK a harder hit is a harder, bent snare; on ALLOY a soft hit is choked and a hard one rings; on TAP a hard hit is an open slap; on PLUCK a harder strike snaps brighter. A note at 100 sounds the way the instrument page shows it; harder notes push the macro one way, softer ones the other. While it plays you see the handle jump with each note; the macro's position stays where you set it.
+
+#### Pads
+
+On a device with velocity-sensitive pads (the prototype has four; the desktop app has F5 to F8, below) the pads play notes as hard as you hit them, and pressing a held pad harder moves a macro of its track, like a small tilt for that one sound.
+
+- **Drums** (how the pads start): the four pads are KICK, SNARE, closed HAT and PERC.
+- **Notes**: the pads play the selected track, up its scale from the first note, like the note keys (on a drum track: the drum tuned up the scale). Holding one pad and hitting another on BASS or LEAD slides into it.
+- The pads' job switch (on the desktop: F4) changes between the two; a short message says `PADS: DRUMS` or `PADS: NOTES`.
+- **Pressure**: press a held pad harder and a macro of its track's instrument follows (TAP: the pitch bends like a talking drum; ACID: it bites; HANDS: the chord opens); let go and it glides back. A resting finger moves nothing. Pressure is never saved or recorded; it adds to a tilt when both move the same macro.
+- **Recording**: with REC on while playing, pad hits are recorded like played notes, each with its velocity.
+- On the desktop app: F5 to F8 are pads 1 to 4 and the mouse's height over the screen is how hard you hit and press (top edge: as hard as possible, bottom edge: barely). Hold the key and move the mouse up to press harder.
+
 ### 4.5 MIX (`0`)
 
 ![MIX key map](manual/keys-mix.png)

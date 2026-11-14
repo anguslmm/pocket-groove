@@ -12,6 +12,7 @@
 voice snare
 name CRACK
 about "A 909-ish snare. Pitch it, rattle it."
+vel TOUCH 0.5                 # a harder hit is a harder snare (SOFT .. HARD)
 base body=52
 
 macro PITCH 0.5 "LOW" "HIGH" "low fat body .. high piccolo crack"

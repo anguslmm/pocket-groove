@@ -26,8 +26,15 @@ enum Binding : int16_t {
   kActLabUp = 108,     // Cmd+Up: the focused macro +5 % (+1 % with Shift); repeats
   kActLabDown = 109,   // Cmd+Down: -5 % (-1 % with Shift); repeats
   kActLabMacro1 = 110, // Cmd+1 .. Cmd+4: focus macro 1 .. 4 (kActLabMacro1 + i)
-  kActLast = 113,
+  kActLabLast = 113,
+  // The pads (pg/ui/pads.h, docs/DESKTOP.md "Pads"): held keys, not actions that fire
+  // once: the app handles their down and up itself (the mouse's height is the force).
+  kActPad1 = 114,      // F5 .. F8: pads 1 .. 4 (kActPad1 + i)
+  kActPadJob = 118,    // F4: the pads' job, drums / notes
+  kActLast = 118,
 };
+constexpr int kDeskPads = 4;
+inline bool isPadBinding(int b) { return b >= kActPad1 && b < kActPad1 + kDeskPads; }
 inline bool actionRepeats(int b) { return b == kActLabUp || b == kActLabDown; }
 
 struct KeyMap {

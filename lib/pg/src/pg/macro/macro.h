@@ -177,10 +177,36 @@ struct TiltAssign {
   uint8_t response;   // 0..3
 };
 
+// Velocity and pressure (docs/MACROLAB.md "Velocity and pressure").
+// VELOCITY: MacroSet::vel[m] is how far a note's velocity moves macro m for that
+// note (`vel MACRO AMOUNT`): hundredths of the macro's whole travel at velocity 127,
+// signed, -100..100; 0 = no vel line. The note at the default velocity kVelRef
+// (100, kDefaultStep) moves nothing; 127 moves the full amount, velocity 1 the
+// full amount the other way, linear on each side (velShape). The engine adds it
+// to what the macro would otherwise be, per note, at the note-on (engine.h
+// "VELOCITY").
+// PRESSURE: MacroSet::press says which macro the pressure on held pads moves
+// (`press MACRO [response]`), packed as a tilt byte (kTiltGiven | response << 4 |
+// macro; 0 = not given: the macro tilt X moves, or with `tilt x none` the one tilt
+// Y moves, smooth). The UI applies it as a momentary offset (pg/ui/pads.h).
+constexpr int kVelRef = 100;          // the default step velocity: no offset
+constexpr int kVelMaxAmount = 100;    // hundredths
+// -1 at velocity 1, 0 at kVelRef, +1 at 127, linear on each side (exactly 0 at kVelRef).
+inline float velShape(int vel) {
+  return vel >= kVelRef ? float(vel - kVelRef) * (1.0f / float(127 - kVelRef))
+                        : float(vel - kVelRef) * (1.0f / float(kVelRef - 1));
+}
+struct PressAssign {
+  int8_t macro;       // -1 = pressure moves nothing
+  uint8_t response;   // 0..3, as tilt's names (pg/ui/pads.h: what each means for pressure)
+};
+
 struct MacroSet {
   uint8_t track;   // TrackId
   uint8_t numMacros, numTargets, numPoints, numPatches, numPatchValues, numMorphs, numTrims;
   uint8_t tilt[2];              // per axis, see kTiltGiven (0 = the default)
+  int8_t vel[kMaxMacros];       // per macro: velocity amount, hundredths (0 = none); see kVelRef
+  uint8_t press;                // see PressAssign (0 = the default)
   uint16_t id;                 // setId(track, name): how a project names this instrument; 0 = no name yet
   char name[kSetNameLen + 1];   // may be empty: the lab names it after the file
   char about[kAboutLen + 1];    // the file's first comment line (minus "NAME -- "), may be empty: the lab's
@@ -204,6 +230,13 @@ struct MacroSet {
   float curve(const Target& t, float x) const { return curveAt(points + t.first, t.n, t.interp(), x); }
   // What tilt axis a (0 = X, 1 = Y) moves in this set, defaults applied.
   TiltAssign tiltAssign(int a) const;
+  // What pad pressure moves, defaults applied.
+  PressAssign pressAssign() const;
+  bool hasVel() const { return (vel[0] | vel[1] | vel[2] | vel[3]) != 0; }
+  // Macro m's velocity offset for a note of velocity `v`, in position units (of 255).
+  float velOffset(int m, int v) const {
+    return vel[m] ? float(vel[m]) * (255.0f / 100.0f) * velShape(v) : 0.0f;
+  }
 };
 
 // The parameter metadata (Engine::trackParamInfo for every track and index;

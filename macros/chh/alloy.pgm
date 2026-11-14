@@ -11,6 +11,7 @@
 voice chh
 name ALLOY
 about "From seed shaker to metal bell."
+vel DAMP -0.4                 # a soft hit is choked, a hard one rings
 base snap=40 tone=80
 
 macro WD-MTL 0.6 "WOOD" "METAL"

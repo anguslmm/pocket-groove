@@ -52,6 +52,9 @@ const Bind kDefaultBindings[] = {
     {SDL_SCANCODE_ESCAPE, kKG0},   // G0 without fn on Apple keyboards (F-keys are media keys there)
     {SDL_SCANCODE_F9, kActRecord},
     {SDL_SCANCODE_F2, kActStats},
+    {SDL_SCANCODE_F5, kActPad1}, {SDL_SCANCODE_F6, int16_t(kActPad1 + 1)},
+    {SDL_SCANCODE_F7, int16_t(kActPad1 + 2)}, {SDL_SCANCODE_F8, int16_t(kActPad1 + 3)},
+    {SDL_SCANCODE_F4, kActPadJob},
     // Second keys for the same Cardputer key (after the canonical ones, so the
     // script player presses the canonical key). Right Control where a keyboard
     // has one; the keypad Enter (fn+Return on a MacBook); ISO keyboards: the
@@ -141,6 +144,11 @@ const char* bindingName(int b) {
     static const char* const m[4] = {"lab-1", "lab-2", "lab-3", "lab-4"};
     return m[b - kActLabMacro1];
   }
+  if (isPadBinding(b)) {
+    static const char* const m[kDeskPads] = {"pad1", "pad2", "pad3", "pad4"};
+    return m[b - kActPad1];
+  }
+  if (b == kActPadJob) return "padjob";
   if (b >= 0 && b < kNumKeyIds) return keyLegend(b);
   return "none";
 }

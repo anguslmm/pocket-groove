@@ -17,6 +17,7 @@
 #include "../sampler/sampler.h"
 #include "format.h"
 #include "ghost.h"
+#include "pads.h"
 #include "scope.h"
 
 namespace pg {
@@ -267,6 +268,21 @@ class Ui {
   static constexpr uint32_t kTiltKeepMs = 100;     // an unchanged input is re-sent this often (recording)
   static constexpr int kTiltScale = 160;           // position units (of 255) at an axis's full range
 
+  // ---- pads (UX.md 10.3 "Pads"; the contract is pads.h) ----------------------
+  void padDown(int pad, float velocity, uint32_t nowMs);
+  void padPressure(int pad, float pressure, uint32_t nowMs);
+  void padUp(int pad, uint32_t nowMs);
+  void setPadJob(PadJob job);       // silent
+  void togglePadJob();              // the other job, with a toast: PADS: DRUMS / PADS: NOTES
+  PadJob padJob() const { return padJob_; }
+  // What a hit on `pad` would play now: the track (-1 = nothing) and the note.
+  int padTrack(int pad) const;
+  int padNote(int pad) const;
+  bool padHeld(int pad) const;
+  // Track t's pressure offset as last sent (1/16 position units) and the macro it moves (-1 none).
+  int pressOffset(int t) const;
+  int pressMacro(int t) const;
+
  private:
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
   enum Act : uint8_t {
@@ -295,7 +311,7 @@ class Ui {
   void selectTrack(int t);
   void stepDown(int k, int idx16, bool shift, bool ctrl);
   void stepUp(int k);
-  void padDown(int k, int t, bool shift);
+  void trackKeyDown(int k, int t, bool shift);   // a track key (4.3: the keyboard's pads)
   void noteDown(int k, int n, bool shift);
   void semicolonDot(int dir, bool octave);
   void pageKey(bool shift);
@@ -334,6 +350,12 @@ class Ui {
   void tiltSend(bool force);
   void tiltLetGo(uint32_t nowMs);
   bool tiltShows(int t, int m) const;   // the page shows macro m of track t where the engine has it
+  // The momentary offset of macro m of track t (tilt + pad pressure) to the engine.
+  void sendOffset(int t, int m, uint32_t rampMs);
+  int tiltPart(int t, int m) const;
+  // pads (ui_pads.cpp)
+  void pressUpdate(int t, bool force);
+  void pressTick();
   uint8_t tiltMarks(int t, int m) const;   // bit a: tilt axis a moves macro m of track t's instrument
 
   // clipboard and undo (ui_edit.cpp)
@@ -575,6 +597,18 @@ class Ui {
     uint32_t downMs, sentMs, showUntil;
   };
   TiltState tilt_ = {};
+  // pads (ui_pads.cpp)
+  PadJob padJob_ = PadJob::Drums;
+#if PG_MAX_PADS > 0
+  struct PadSlot { int8_t track; uint8_t note, down, press; };   // press 0..255
+  PadSlot pads_[kMaxPads] = {};
+  int16_t pressSent_[kNumTracks] = {};    // 1/16 units, as last sent
+  int16_t pressWant_[kNumTracks] = {};    // not yet sent (rate limit)
+  int8_t pressMac_[kNumTracks] = {-1, -1, -1, -1, -1, -1, -1, -1};
+  uint8_t pressResp_[kNumTracks] = {};
+  uint32_t pressMs_[kNumTracks] = {};     // when the last offset went out
+  uint8_t pressDirty_ = 0;                // bit t: pressWant_[t] waits for kPressEveryMs
+#endif
 
   // feedback
   char toast_[40] = {};

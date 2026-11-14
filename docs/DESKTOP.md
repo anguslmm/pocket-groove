@@ -78,8 +78,10 @@ Keys are mapped by **position**, not by the letter printed on them, so the layou
 | Listen to the connected device | Cmd+L | LISTEN |
 | the Stems list | Cmd+B | STEMS |
 | macro lab (with `--lab` only): mark good / bad, previous / next set, macro +- , macro 1..4 | Cmd+G / Cmd+D, Cmd+Left / Right, Cmd+Up / Down, Cmd+1..4 | the lab panel ([MACROLAB.md](MACROLAB.md)) |
+| pads 1..4 (held; the mouse's height is the force, [Pads](#pads)) | F5, F6, F7, F8 | |
+| the pads' job: drums / notes | F4 | |
 
-On a MacBook or Apple keyboard the top row is brightness, volume and media keys: there, F1 / F2 / F9 need the keyboard's `fn` (globe) key held (or *Use F1, F2, etc. keys as standard function keys* in System Settings > Keyboard). Escape, Cmd+R and Cmd+I work without it.
+On a MacBook or Apple keyboard the top row is brightness, volume and media keys: there, F1 / F2 / F4..F9 need the keyboard's `fn` (globe) key held (or *Use F1, F2, etc. keys as standard function keys* in System Settings > Keyboard). Escape, Cmd+R and Cmd+I work without it.
 
 Command (⌘) never reaches the instrument as a key. Cmd+R, Cmd+I, Cmd+L and Cmd+B are the app's shortcuts (none of those letters is played, on the press or the release); everything else with Command is macOS's (Cmd+Q quits, Cmd+Tab switches apps, Cmd+H hides, Cmd+M minimises, Cmd+W closes) or nothing. Pressing Command releases every key the app holds, so Cmd+Tab in the middle of a chord leaves nothing stuck. When the window loses focus, every held key is released too (no stuck notes, no stuck modifiers). Holding a key does not auto-repeat in the OS sense: the instrument does its own repeat on `-` / `=` as on the device.
 
@@ -190,6 +192,17 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 - A device project is pulled first (into `bounces/NAME/NAME.pgv`, next to its stems; `./projects` is not touched), then rendered with the bounce's defaults (the song chain, dry stems + returns + mix, 32-bit float, 44.1 kHz: MANUAL.md chapter 15) into `bounces/NAME/` (the device's session: `bounces/SESSION/`, the desktop's: `bounces/DESKTOP-SESSION/`). Progress shows under the list; when it is done the folder opens in Finder and the list says where the files are. For other bounce options use `tools/pg bounce` in a terminal.
 - It runs `tools/pg --json` in the background (`ls`, `bounce`), so it needs what `tools/pg` needs: Python 3 with pyserial (PlatformIO's Python has it; MANUAL.md chapter 15) and, the first time, a minute to build the renderer. The window and the sound never wait for it.
 - Errors are shown in the list in plain words: device not found, port busy (close the serial monitor), a project that does not load, pyserial missing. The device is found over USB serial, so this works with the jack-only firmware too.
+
+## Pads
+
+The prototype's velocity-sensitive pads (docs/UX.md 10.3 "Pads") without the hardware: **F5, F6, F7, F8** are pads 1 to 4, and the **mouse's height over the device screen** is the force: the top edge is 1 (the hardest hit, full pressure), the bottom edge 0, clamped outside the screen. The force when the key goes down is the hit's velocity (linear, 0..1 to 1..127); while the key is held the force is the pad's pressure, read every 5 ms, so moving the mouse up presses harder. The keys go through the same calls a device makes (`Ui::padDown` / `padPressure` / `padUp`, `lib/pg/src/pg/ui/pads.h`).
+
+- **F4** switches the pads' job: drums (pads 1-4 are KICK, SNARE, CHH, PERC) or notes (the selected track, up the scale); the toast says which.
+- To hear velocity: put the mouse low and hit F6 in the drums job (a soft snare), then high (a hard one). With CRACK on the snare the hard hit is also a harder, bent sound; on ALLOY (CHH) the soft hit is choked.
+- To hear pressure: select PERC with TAP (or the bass with ACID), F4 to notes, hold F5 with the mouse low, then move it up: TAP's pitch bends, ACID bites. Let go and it glides back.
+- Tilt and pressure at once: hold G0 as well (F1 / Esc); the mouse then moves both (tilt from where it was at the G0 press, pressure from its height).
+- `pad1` .. `pad4` and `padjob` can be rebound in a key map file (`pad1 = Keypad 1`). A Command shortcut on the same key leaves the plain key a pad.
+- Key scripts (`--script`): `sdl down F5` / `sdl up F5` hit and release a pad, `app mouse X Y` sets the force (canvas pixels: Y 0 is the top), `app print-pads` prints the job, the held pads, the tracks' trigger counts and the selected track's pressure macro, offset and heard positions (the desktop test, part 10).
 
 ## The macro lab
 

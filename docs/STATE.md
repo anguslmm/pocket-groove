@@ -69,6 +69,24 @@ itself. Host-verified: ctest -L daisy (core, /int with power cuts, sample pool, 
 BMI270) and tools/test_pg_daisy.py against the firmware's App in daisy_sim. docs/DAISY.md has the
 flashing steps and the first-power-on checklist. Entry "DAISY TARGET BUILT" below.
 
+Velocity and pressure for the pads (2026-11-14, branch of the pads worktree; NOT LISTENED TO, no
+pad hardware wired). (Correction to PROTOTYPE HARDWARE above: a step already had a velocity, 1..127,
+and the voices already scaled level by it.) New: (1) `vel MACRO AMOUNT` lines in a .pgm: a note's
+velocity also moves that macro for that note, 0 at velocity 100 (the default step), the amount at
+127, the same the other way at 1, taken at the note-on and held to the track's next note, on top
+of base, motion and tilt; steps, ratchets, rolls, live notes and pad hits alike (engine.h
+"VELOCITY"). (2) `press MACRO [response]`: pad pressure as a momentary offset through tilt's
+per-macro offset (they add); default the macro tilt X moves. (3) The pad input,
+lib/pg/src/pg/ui/pads.h: Ui::padDown(pad, velocity 0..1, ms), padPressure(pad, 0..1, ms),
+padUp(pad, ms), setPadJob / togglePadJob (drums: KICK SNARE CHH PERC [CLAP OHH]; notes: the
+selected track up the scale); hits go through Ui::noteOn, so live record records them with their
+velocity. (4) Desktop: F5..F8 pads, the mouse's height the force, F4 the job (docs/DESKTOP.md
+"Pads"). (5) vel on CRACK, ALLOY, TAP, PLUCK; press on TAP, ACID, HANDS (only sets the demos do not
+play at varied velocities got vel lines: itest_golden / itest_golden48 unchanged). Cardputer: built
+with PG_MAX_PADS=0, static RAM unchanged (202,284 USB, 201,764 non-USB), flash +1,064 / +1,088.
+Host-verified: ctest 110 of 110 (new test_macro_vel, itest_velocity, itest_pads; desktop part 10).
+docs/MACROLAB.md "Velocity and pressure", UX.md 10.3 "Velocity" / "Pads", MANUAL.md.
+
 
 v0.1 complete and host-verified: 55/55 host tests pass; both firmware envs build clean.
 Nothing has run on real hardware yet. Waiting on the user for: smoke-test report

@@ -109,8 +109,8 @@ void Ui::tiltSend(bool force) {
   }
   for (int a = 0; a < 2; ++a) {
     if (tilt_.macro[a] < 0) continue;
-    send(macroOffsetCommand(tilt_.track, tilt_.macro[a], want[a], uint16_t(kTiltRampMs), tilt_.moved));
     tilt_.sent[a] = want[a];
+    sendOffset(tilt_.track, tilt_.macro[a], kTiltRampMs);   // with pad pressure on that macro, if any
   }
   tilt_.sentMs = now_;
 }
@@ -131,12 +131,12 @@ void Ui::tiltInput(float x, float y, uint32_t nowMs) {
 // The gesture ends (release or cancel): the offsets glide back, live ends.
 void Ui::tiltLetGo(uint32_t nowMs) {
   if (!tilt_.engaged) return;
+  tilt_.engaged = false;   // first: what goes out now is the pressure's part alone, without the hold
   for (int a = 0; a < 2; ++a) {
     if (tilt_.macro[a] < 0) continue;
-    send(macroOffsetCommand(tilt_.track, tilt_.macro[a], 0, uint16_t(kTiltReturnMs), false));
     tilt_.sent[a] = 0;
+    sendOffset(tilt_.track, tilt_.macro[a], kTiltReturnMs);
   }
-  tilt_.engaged = false;
   tilt_.showUntil = (nowMs + kTiltReturnMs + 120) | 1u;   // the handles follow the glide back
   ++serial_;
 }
@@ -153,6 +153,28 @@ void Ui::tiltCancel(uint32_t nowMs) {
   if (!tilt_.down) return;
   tiltLetGo(nowMs);
   tilt_.cancelled = true;   // G0 stays down for the volume keys; the next press tilts again
+}
+
+// Tilt's part of macro m of track t's offset (1/16 units): what the engaged gesture last sent.
+int Ui::tiltPart(int t, int m) const {
+  if (!tilt_.engaged || tilt_.track != t) return 0;
+  int v = 0;
+  for (int a = 0; a < 2; ++a)
+    if (tilt_.macro[a] == m) v += tilt_.sent[a];
+  return v;
+}
+
+// The engine keeps one offset per macro (engine.h "TILT OFFSET"); tilt and pad pressure
+// both feed it, so it always gets their sum. The hold flag (recording) is tilt's: a
+// moved, engaged tilt on that macro. Pressure never records.
+void Ui::sendOffset(int t, int m, uint32_t rampMs) {
+  if (t < 0 || t >= kNumTracks || m < 0 || m >= kTrackMacros) return;
+  int total = tiltPart(t, m);
+  const bool hold = tilt_.engaged && tilt_.track == t && tilt_.moved && (tilt_.macro[0] == m || tilt_.macro[1] == m);
+#if PG_MAX_PADS > 0
+  if (pressMac_[t] == m) total += pressSent_[t];
+#endif
+  send(macroOffsetCommand(t, m, total, uint16_t(rampMs), hold));
 }
 
 bool Ui::tiltShows(int t, int m) const {

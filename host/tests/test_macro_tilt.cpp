@@ -164,7 +164,7 @@ void testFormat() {
 void testSize() {
   std::printf("size\n");
   std::printf("  sizeof(MacroSet) = %zu\n", sizeof(MacroSet));
-  CHECK(sizeof(MacroSet) <= 1900);   // 1896 before the tilt bytes: +2, rounded up by the alignment
+  CHECK(sizeof(MacroSet) <= 1904);   // 1896 before the tilt bytes: +2; then +5 for vel and press (test_macro_vel), rounded by the alignment
 }
 
 }  // namespace
