@@ -1,11 +1,13 @@
-// An SPI display for the Daisy (stage 1; the panel is not chosen yet: docs/DAISY.md
-// "Display"). The UI draws into its 240x135 8-bit framebuffer (pg/platform.h); this
-// sends the rows the UI reports dirty to a MIPI-DCS panel (ST7789, HX8357D: both use
-// CASET 0x2A / RASET 0x2B / RAMWR 0x2C and RGB565 big-endian over 4-wire SPI), scaled
-// by an integer factor and placed at an offset, so the same code drives the
-// Cardputer's 1.14" 240x135 at scale 1 or a 3.5" 480x320 at scale 2 (480x270, 25
-// rows spare above and below). The panel's size, controller, offsets and scale are
-// configuration (PanelConfig), not constants: nothing else in the target knows them.
+// An SPI display for the Daisy (stage 1: the Adafruit 2090, 2.8" 320x240 ILI9341, is
+// the default; docs/DAISY.md "Display"). The UI draws into its 240x135 8-bit
+// framebuffer (pg/platform.h); this sends the rows the UI reports dirty to a
+// MIPI-DCS panel (ILI9341, ST7789, HX8357D: all use CASET 0x2A / RASET 0x2B / RAMWR
+// 0x2C and RGB565 big-endian over 4-wire SPI), scaled by an integer factor and
+// placed at an offset, so the same code drives the 2090 at scale 1 (centred, a
+// black border of 40 / 52 pixels), the Cardputer's 1.14" 240x135 at scale 1 or a
+// 3.5" 480x320 at scale 2 (480x270, 25 rows spare above and below). The panel's
+// size, controller, offsets and scale are configuration (PanelConfig), not
+// constants: nothing else in the target knows them.
 //
 // The expander is the Cardputer's (src/platform/display.cpp): each strip of rows is
 // palette-expanded into a buffer in the panel's byte order (palette[index] with the
@@ -37,7 +39,7 @@ class SpiPanelBus {
   ~SpiPanelBus() = default;
 };
 
-enum class PanelController : uint8_t { ST7789, HX8357D };
+enum class PanelController : uint8_t { ST7789, HX8357D, ILI9341 };
 
 struct PanelConfig {
   PanelController controller = PanelController::ST7789;
@@ -53,6 +55,14 @@ struct PanelConfig {
   static PanelConfig st7789_240x135();
   // Adafruit 5846 class (HX8357D 3.5" 480x320): the UI at scale 2, centred.
   static PanelConfig hx8357d_480x320();
+  // Adafruit 2090 (ILI9341 2.8" 320x240, the stage 1 default): the UI at scale 1,
+  // centred (x 40..279, y 52..186), the rest cleared once by begin(). Landscape:
+  // MADCTL 0x28 = MV | BGR (Adafruit_ILI9341's rotation 1), or turned over (180
+  // degrees) 0xE8 = MY | MX | MV | BGR (its rotation 3). BGR: the panel's colour
+  // filter order, as Adafruit sets it for every rotation; no inversion.
+  static PanelConfig ili9341_320x240(bool turnedOver = false);
+  static constexpr uint8_t kIliMadctl = 0x28, kIliMadctlTurned = 0xE8;
+  const char* name() const;
 };
 
 class Panel {
@@ -63,10 +73,15 @@ class Panel {
 
   // strips: 2 * kStripBytes of DMA-able memory (the Daisy: not cached, D2).
   void init(const PanelConfig& cfg, SpiPanelBus* bus, uint8_t* strips);
-  // Blocking: software reset (the 6113 and 5846 have no reset pin wired), sleep out,
-  // pixel format, orientation, inversion, clear to black, display on (~300 ms).
+  // Blocking: software reset (no reset pin is wired), the controller's own setup
+  // (ILI9341: Adafruit_ILI9341's power / VCOM / gamma table), sleep out, pixel
+  // format, orientation, inversion, clear the whole panel to black, display on
+  // (~300 ms; ILI9341 ~450 ms). The last frame presented is sent again (a re-begin
+  // after a rotation change shows the UI at once).
   void begin();
   const PanelConfig& config() const { return cfg_; }
+  // A new orientation (MADCTL): applied by the next begin().
+  void setMadctl(uint8_t m) { cfg_.madctl = m; }
 
   // Queue UI rows [y0, y1) of fb (merged with rows already queued).
   void present(const pg::Framebuffer& fb, int y0, int y1);

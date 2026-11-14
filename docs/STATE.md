@@ -41,6 +41,26 @@ The core at 48 kHz (2026-11-14, merged to main as 9e12a5d): 48 kHz is a first-cl
 Host-verified (101/101; new itest_rate48, itest_rate48_record, itest_golden48, macro_audit_48k),
 Cardputer firmware builds clean with its static RAM unchanged. Entry "48 KHZ CORE BUILT" below.
 
+Daisy stage 1 for the parts on order (2026-11-14, branch of a stage-1 worktree; NOTHING HAS RUN
+ON A SEED; daisy/, host/daisy/, tools/ only, lib/pg and src/ untouched): the Adafruit 2090
+(ILI9341 320x240) is stage 1's default panel, the UI at scale 1 centred at (40,52), Adafruit's
+init table, MADCTL 0x28 (0xE8 turned over, saved setting), SPI 12.5 MHz; its FT6206 touch on
+I2C1 next to the BMI270 behind a stuck-bus guard, reported ([touch]) and mirrored (~PGT lines,
+a dot in tools/pg-daisy mirror), not yet consumed by the UI; four force-sensor pads on A5..A8
+(daisy/core/pads.h: conductance, scanned at 500 Hz in the audio interrupt, velocity from the
+rise over a 2-scan window, hysteresis, crosstalk rejection, per-pad calibration over serial
+saved in /int/pg/daisy.cfg; each pad plays kick/snare/clap/closed hat through the engine's
+NoteOn in ONE function, App::padEvent, to switch to the core's pad API after the merge); line-in
+recording (daisy/core/line_mic.h: hold L on a sampler page, 48 kHz stored, (L+R)/2 or L alone
+when R is silent, survives a restart; commits its own header because the core's
+SampleWriter::commitRecording writes 22,050 Hz: a seam to add); FPSCR flush-to-zero /
+default-NaN set before main and checked in the audio interrupt ([fpu] line). libDaisy is now
+built -Os (rerun tools/daisy-setup.sh): images stage 0 431.6 KB (58.5 KB free), stage 1 463.1
+KB (27.7 KB free), zero warnings. Host 111/111 (new test_daisy_pads, _touch, _linein, _stage1;
+tools/test_pg_daisy.py records in daisy_sim --line-in). Cardputer build unchanged.
+docs/DAISY.md sections 5 (stage 1 checklist steps 10-16), 8, 10 (wiring, algorithms), 14 (seams,
+risks).
+
 The Daisy target (2026-11-14, branch of the daisy worktree; NOTHING HAS RUN ON A SEED): daisy/
 builds a stage 0 firmware for the Seed3 with arm-none-eabi-gcc, warning-free, image 430 of 480 KB
 (stage 1: 467). Control over USB serial (tools/pg-daisy: keys in the desktop's key-script format,

@@ -13,6 +13,8 @@
 # either: the struct layouts in its headers must match the library's).
 
 STAGE ?= 0
+# stage 1's display: 0 the Adafruit 2090 (ILI9341 320x240), 1 an HX8357D 480x320, 2 the ST7789 240x135
+PANEL ?= 0
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 LIBDAISY ?= $(ROOT)/daisy/libDaisy
 BUILD := $(ROOT)/build/daisy/stage$(STAGE)
@@ -31,7 +33,7 @@ OPT ?= -O2
 DEFS := -DUSE_HAL_DRIVER -DSTM32H750xx -DSTM32H750IB -DHSE_VALUE=16000000 -DCORE_CM7 -DARM_MATH_CM7 \
         -DUSE_FULL_LL_DRIVER -DBOOT_APP -DFILEIO_ENABLE_FATFS_READER \
         -DPG_BULK_ATTR='__attribute__((section(".qspi_rom")))' \
-        -DPG_DAISY_STAGE=$(STAGE) -DPG_VERSION='"$(PG_VERSION)"' -DPG_LIBDAISY_COMMIT='"$(LIBDAISY_COMMIT)"'
+        -DPG_DAISY_STAGE=$(STAGE) -DPG_DAISY_PANEL=$(PANEL) -DPG_VERSION='"$(PG_VERSION)"' -DPG_LIBDAISY_COMMIT='"$(LIBDAISY_COMMIT)"'
 DAISY_INC := -isystem $(LIBDAISY)/src -isystem $(LIBDAISY)/src/sys -isystem $(LIBDAISY)/src/usbd \
              -isystem $(LIBDAISY)/src/usbh -isystem $(LIBDAISY) \
              -isystem $(LIBDAISY)/Drivers/CMSIS_5/CMSIS/Core/Include \
@@ -82,25 +84,37 @@ all: $(BIN)
 $(LIBDAISY)/build/libdaisy.a:
 	@echo "libDaisy is not built: run tools/daisy-setup.sh first" >&2; exit 1
 
+# tools/daisy-setup.sh builds libDaisy -Os and leaves this marker (an older -O3 build
+# leaves stage 1 without room): run the script again to rebuild it.
+$(LIBDAISY)/build/pg-opt:
+	@echo "libDaisy was built by an older tools/daisy-setup.sh (-O3): run tools/daisy-setup.sh again" >&2; exit 1
+
 # Code that only the main loop runs (the UI, the demos' builders, file formats, the
-# macro text parser) is optimised for size: the 480 KB image is the scarce resource,
-# and none of it is on the audio interrupt's path. Everything else -O2.
-SIZE_OPT := $(addprefix $(ROOT)/lib/pg/src/pg/,ui/% demo/% io/% macro/macro_parse.cpp macro/library.cpp)
+# macro text parser; on the Daisy also the recorder, which runs from the UI frame) is
+# optimised for size: the 480 KB image is the scarce resource, and none of it is on
+# the audio interrupt's path. Everything else -O2.
+SIZE_OPT := $(addprefix $(ROOT)/lib/pg/src/pg/,ui/% demo/% io/% macro/macro_parse.cpp macro/library.cpp \
+              sampler/recorder.cpp)
+# The Daisy's own code: -Os too, except what the audio interrupt runs (the pads'
+# scan, the line input's fold-down, main.cpp's callback) and the display's strip
+# expander (the main loop's heaviest loop).
+DAISY_FAST := $(addprefix $(ROOT)/daisy/,core/pads.cpp core/line_mic.cpp core/panel.cpp src/main.cpp \
+                src/usb_serial.cpp)
 $(BUILD)/obj/lib/%.o: $(ROOT)/lib/%.cpp
 	@mkdir -p $(dir $@)
 	$(CXX) -c $(PG_CXXFLAGS) $(if $(filter $(SIZE_OPT),$<),-Os) -MMD -MP $< -o $@
 
 $(BUILD)/obj/daisy/core/%.o: $(ROOT)/daisy/core/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -c $(PG_CXXFLAGS) -Wshadow -MMD -MP $< -o $@
+	$(CXX) -c $(PG_CXXFLAGS) $(if $(filter $(DAISY_FAST),$<),,-Os) -Wshadow -MMD -MP $< -o $@
 
 $(BUILD)/obj/daisy/app/%.o: $(ROOT)/daisy/app/%.cpp
 	@mkdir -p $(dir $@)
-	$(CXX) -c $(PG_CXXFLAGS) -Wshadow -MMD -MP $< -o $@
+	$(CXX) -c $(PG_CXXFLAGS) -Os -Wshadow -MMD -MP $< -o $@
 
 $(BUILD)/obj/daisy/src/%.o: $(ROOT)/daisy/src/%.cpp | $(LIBDAISY)/build/libdaisy.a
 	@mkdir -p $(dir $@)
-	$(CXX) -c $(DEV_CXXFLAGS) -MMD -MP $< -o $@
+	$(CXX) -c $(DEV_CXXFLAGS) $(if $(filter $(DAISY_FAST),$<),,-Os) -MMD -MP $< -o $@
 
 $(STARTUP_OBJ): $(STARTUP) | $(LIBDAISY)/build/libdaisy.a
 	@mkdir -p $(dir $@)
@@ -110,7 +124,7 @@ $(CCSBCS_OBJ): $(CCSBCS) | $(LIBDAISY)/build/libdaisy.a
 	@mkdir -p $(dir $@)
 	$(CC) -c $(STARTUP_CFLAGS) -w $< -o $@
 
-$(ELF): $(OBJS) $(LDSCRIPT) $(LIBDAISY)/build/libdaisy.a
+$(ELF): $(OBJS) $(LDSCRIPT) $(LIBDAISY)/build/libdaisy.a $(LIBDAISY)/build/pg-opt
 	$(CXX) $(OBJS) $(LDFLAGS) $(LIBS) -o $@
 
 # The image (everything the bootloader copies, padded to exactly 480 KB) + the ROM part.

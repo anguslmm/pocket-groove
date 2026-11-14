@@ -3,7 +3,12 @@
 // (tools/pg-daisy: keys, report, screen; tools/pg: projects, samples) can be tried
 // and tested without the board (tools/test_pg_daisy.py).
 //
-//   daisy_sim [--flash FILE] [--autoplay] [--stdio]
+//   daisy_sim [--flash FILE] [--autoplay] [--stdio] [--line-in mono|stereo|silent]
+//
+// --line-in: a synthetic signal on the codec's line input (the recording path,
+// line_mic.h): a 440 Hz tone at -12 dBFS, 0.8 s on and 0.7 s off, over a -66 dBFS
+// noise floor; "mono" puts it on L with R digital silence (a mono plug), "stereo"
+// on both (R a fifth up), "silent" only the floor. Without it there is no line input.
 //
 // Prints the pty path on the first line of stdout, then runs until killed (or, with
 // --stdio, serves stdin / stdout and ends at EOF). The audio "interrupt" is the
@@ -17,6 +22,7 @@
 #include <unistd.h>
 
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -94,6 +100,8 @@ struct SimHal final : Hal {
   bool audioRunning() override { return true; }
   uint32_t sampleRate() override { return kRate; }
   uint32_t blockFrames() override { return kBlock; }
+  bool lineInput() override { return lineIn != 0; }
+  int lineIn = 0;   // 0 none, 1 mono, 2 stereo, 3 silent
   const char* boardName() override { return "host simulation (no codec)"; }
   const char* stageName() override { return "stage 0 (simulated)"; }
   void reportLines(LineFn fn, void* user) override {
@@ -110,7 +118,28 @@ std::vector<uint8_t> g_fsStage(layout::kFsBankBytes);
 std::vector<uint8_t> g_poolImage(layout::kPoolBytes);
 std::vector<uint8_t> g_poolStage(4096);
 std::vector<uint8_t> g_txMem(layout::kTxRing);
+std::vector<int16_t> g_lineRing(65536);
 App g_app;   // one per program (the engine's state is a single static block)
+
+// The synthetic line input (see the top).
+struct LineSynth {
+  int mode = 0;
+  uint64_t n = 0;
+  uint32_t seed = 1;
+  void block(float* out, int frames) {
+    for (int i = 0; i < frames; ++i, ++n) {
+      const double t = double(n) / kRate;
+      const bool on = mode != 3 && std::fmod(t, 1.5) < 0.8;
+      seed = seed * 1664525u + 1013904223u;
+      const float noise = float(int32_t(seed)) / 2147483648.0f * 0.0005f;   // -66 dBFS
+      const float l = (on ? 0.25f * float(std::sin(2.0 * 3.14159265358979 * 440.0 * t)) : 0.0f) + noise;
+      const float r = mode == 2 ? (on ? 0.25f * float(std::sin(2.0 * 3.14159265358979 * 660.0 * t)) : 0.0f) + noise
+                                : mode == 3 ? noise : 0.0f;
+      out[2 * i] = l;
+      out[2 * i + 1] = r;
+    }
+  }
+};
 
 // Written whole to a temporary file, then renamed: a kill mid-write never leaves half an image.
 void saveFlash(const std::string& path) {
@@ -130,13 +159,21 @@ void onSignal(int) { g_stop = 1; }
 int main(int argc, char** argv) {
   std::string flashPath;
   bool autoplay = false, useStdio = false;
+  int lineIn = 0;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--flash" && i + 1 < argc) flashPath = argv[++i];
     else if (a == "--autoplay") autoplay = true;
     else if (a == "--stdio") useStdio = true;
-    else {
-      std::fprintf(stderr, "usage: daisy_sim [--flash FILE] [--autoplay] [--stdio]\n");
+    else if (a == "--line-in" && i + 1 < argc) {
+      const std::string m = argv[++i];
+      lineIn = m == "mono" ? 1 : m == "stereo" ? 2 : m == "silent" ? 3 : -1;
+      if (lineIn < 0) {
+        std::fprintf(stderr, "daisy_sim: --line-in mono|stereo|silent\n");
+        return 2;
+      }
+    } else {
+      std::fprintf(stderr, "usage: daisy_sim [--flash FILE] [--autoplay] [--stdio] [--line-in mono|stereo|silent]\n");
       return 2;
     }
   }
@@ -150,6 +187,7 @@ int main(int argc, char** argv) {
   std::signal(SIGTERM, onSignal);
   std::signal(SIGINT, onSignal);
   SimHal hal;
+  hal.lineIn = lineIn;
   hal.tx.attach(g_txMem.data(), uint32_t(g_txMem.size()));
   if (useStdio) {
     hal.fdIn = 0;
@@ -187,6 +225,8 @@ int main(int argc, char** argv) {
   mem.poolImage = g_poolImage.data();
   mem.poolStaging = g_poolStage.data();
   mem.poolFlash = &g_poolRegion;
+  mem.lineRing = g_lineRing.data();
+  mem.lineRingSamples = uint32_t(g_lineRing.size());
   AppConfig cfg;
   cfg.sampleRate = float(kRate);
   cfg.autoplay = autoplay;
@@ -194,6 +234,9 @@ int main(int argc, char** argv) {
   g_app.boot(hal, mem, cfg);
 
   int16_t block[kBlock * 2];
+  float in[kBlock * 2];
+  LineSynth synth;
+  synth.mode = lineIn;
   const uint64_t periodUs = uint64_t(kBlock) * 1000000u / kRate;
   uint64_t nextBlock = nowUs64();
   uint32_t lastSave = nowMs();
@@ -201,7 +244,8 @@ int main(int argc, char** argv) {
     // The "interrupt": every block that is due (the sim's output goes nowhere).
     int n = 0;
     while (nowUs64() >= nextBlock && n++ < 8) {
-      g_app.render(block, int(kBlock));
+      if (lineIn) synth.block(in, int(kBlock));
+      g_app.render(block, int(kBlock), lineIn ? in : nullptr);
       nextBlock += periodUs;
     }
     if (nowUs64() > nextBlock + 100000u) nextBlock = nowUs64();   // the host stalled: no catch-up burst

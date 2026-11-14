@@ -26,7 +26,8 @@ if ! command -v arm-none-eabi-gcc >/dev/null 2>&1; then
 fi
 
 if [ "$1" = "--check" ]; then
-  if [ -f "$dir/build/libdaisy.a" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" = "$commit" ]; then
+  if [ -f "$dir/build/libdaisy.a" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" = "$commit" ] &&
+     [ "$(cat "$dir/build/pg-opt" 2>/dev/null)" = "-Os" ]; then
     say "libDaisy $commit built: ok"
     exit 0
   fi
@@ -47,9 +48,19 @@ say "libDaisy at $(git -C "$dir" log -1 --format='%h %cd' --date=short)"
 # shellcheck disable=SC2086
 git -C "$dir" submodule update --init --quiet $subs
 jobs=$( (getconf _NPROCESSORS_ONLN || sysctl -n hw.ncpu || echo 4) 2>/dev/null | head -n 1)
+# libDaisy is built for size (-Os; its own Makefile says -O3): nearly all of it is
+# main-loop code (HAL, USB, FatFS), and -Os leaves ~20 KB more of the 480 KB image
+# for stage 1. Its only audio-path code is the per-block float conversion. The
+# marker file records the choice; daisy/Makefile refuses a library built without it.
+opt="-Os"
+if [ -f "$dir/build/libdaisy.a" ] && [ "$(cat "$dir/build/pg-opt" 2>/dev/null)" != "$opt" ]; then
+  say "libdaisy.a was built with other flags: rebuilding it with $opt"
+  rm -rf "$dir/build"
+fi
 if [ ! -f "$dir/build/libdaisy.a" ]; then
-  say "building libdaisy.a (about a minute)"
-  make -C "$dir" -j"$jobs" >"$dir/build.log" 2>&1 || { tail -n 30 "$dir/build.log"; say "libDaisy build failed (log: daisy/libDaisy/build.log)"; exit 1; }
+  say "building libdaisy.a with $opt (about a minute)"
+  make -C "$dir" -j"$jobs" OPT="$opt" >"$dir/build.log" 2>&1 || { tail -n 30 "$dir/build.log"; say "libDaisy build failed (log: daisy/libDaisy/build.log)"; exit 1; }
+  echo "$opt" > "$dir/build/pg-opt"
 fi
 # Bosch's BMI270 configuration file for stage 1's tilt (optional: without it the IMU is off).
 burl=$(sed -n 's/^BMI270_URL=//p' "$lock")

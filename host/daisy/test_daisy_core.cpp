@@ -349,6 +349,27 @@ void testLayoutAndPins() {
   CHECK(pins::kSeed[11].port == 'B' && pins::kSeed[11].pin == 8);  // I2C1_SCL
   CHECK(pins::kSeed[13].port == 'B' && pins::kSeed[13].pin == 6);  // I2C4_SCL
   for (uint8_t d : pins::kPotSeed) CHECK(pins::kSeed[d].adc);
+  // Every analog function on a pin libDaisy's AdcHandle (ADC1) can read; the pads on
+  // four distinct ADC pins, none of them a pot's, the battery's or the touch IRQ's.
+  auto onAdc1 = [](uint8_t d) {
+    for (const pins::PortPin& p : pins::kAdc1Pins)
+      if (p.port == pins::kSeed[d].port && p.pin == pins::kSeed[d].pin) return true;
+    return false;
+  };
+  for (int i = 0; i < pins::kMapCount; ++i)
+    if (pins::kMap[i].adc) CHECK(onAdc1(pins::kMap[i].seed));
+  for (int i = 0; i < 4; ++i) {
+    const uint8_t d = pins::kPadSeed[i];
+    CHECK(pins::kSeed[d].adc && onAdc1(d));
+    CHECK(d != pins::kBatterySeed && d != pins::kTouchIrqSeed);
+    for (uint8_t p : pins::kPotSeed) CHECK(d != p);
+    for (int j = i + 1; j < 4; ++j) CHECK(pins::kPadSeed[j] != d);
+    bool mapped = false;   // and the map names it as an analog function
+    for (int k = 0; k < pins::kMapCount; ++k) mapped = mapped || (pins::kMap[k].seed == d && pins::kMap[k].adc);
+    CHECK(mapped);
+  }
+  CHECK(pins::kSeed[20].port == 'C' && pins::kSeed[20].pin == 1);   // A5 = PC1 (ADC1 INP11)
+  CHECK(pins::kSeed[23].port == 'A' && pins::kSeed[23].pin == 4);   // A8 = PA4 (ADC1 INP18)
   // The header pins are the Seed's 1..15 and 22..37 (16..21 and 38..40 are analog / power).
   for (const pins::SeedPin& s : pins::kSeed) CHECK((s.header >= 1 && s.header <= 15) || (s.header >= 22 && s.header <= 37));
 }

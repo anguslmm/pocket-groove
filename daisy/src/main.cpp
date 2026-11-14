@@ -13,9 +13,10 @@
 //   0  a Seed (and a headphone amp, or the Erica Synths Labor's output amplifier):
 //      line out, control over USB serial (tools/pg-daisy), four pots on A0..A3.
 //      The transport starts by itself once booted: the demo plays.
-//   1  the breadboard prototype: also the ST7789, the TCA8418 keys and G0, the
-//      BMI270, the microSD card, the microphone, the battery (daisy/src/stage1.cpp;
-//      compile-checked, off until the hardware exists).
+//   1  the breadboard prototype: also the Adafruit 2090 display (ILI9341) and its
+//      FT6206 touch, G0, the BMI270, the microSD card, four force-sensor pads on
+//      A5..A8, the battery (daisy/src/stage1.cpp; compile-checked, nothing has run).
+// Both stages record from the codec's line input (hold L on a sampler page).
 #include <cstdio>
 #include <cstring>
 
@@ -55,15 +56,24 @@ DSY_SDRAM_BSS uint8_t g_poolImage[pgd::layout::kPoolBytes];
 DSY_SDRAM_BSS uint8_t g_poolStaging[4096];
 DSY_SDRAM_BSS uint8_t g_txRing[pgd::layout::kTxRing];
 DSY_SDRAM_BSS uint8_t g_rxRing[pgd::layout::kRxRing];
+// The line input's ring (line_mic.h): 65536 samples, 1.37 s at 48 kHz.
+constexpr uint32_t kLineRing = 65536;
+DSY_SDRAM_BSS int16_t g_lineRing[kLineRing];
 // The audio interrupt's int16 block (DTCM, as .bss).
 int16_t g_block[kBlock * 2];
 volatile float g_gain = 1.0f;
 volatile bool g_audioOn = false;
+// FPSCR as the audio interrupt finds it (the report's [fpu] line), and how many
+// callbacks found flush-to-zero / default-NaN off and set them.
+constexpr uint32_t kFpscrFzDn = (1u << 24) | (1u << 25);
+volatile uint32_t g_isrFpscr = 0;
+volatile uint32_t g_isrFpscrFixes = 0;
 
 pgdev::QspiRegion g_fsFlash, g_poolFlash;
 daisy::DaisySeed::BoardVersion g_board = daisy::DaisySeed::BoardVersion::DAISY_SEED;
-daisy::AdcChannelConfig g_adcCfg[5];
+daisy::AdcChannelConfig g_adcCfg[9];
 bool g_adcOn = false;
+int g_adcPads = -1;   // the first pad's ADC channel (stage 1), -1: none
 char g_boardName[96] = "?";
 pgdev::memory::Fault g_fault = {};
 
@@ -99,12 +109,20 @@ const char* regionName(daisy::System::MemoryRegion r) {
 
 void audioCallback(daisy::AudioHandle::InterleavingInputBuffer in, daisy::AudioHandle::InterleavingOutputBuffer out,
                    size_t size) {
+  // Flush-to-zero and default-NaN in this context too (memory.cpp sets them for the
+  // main loop and in FPDSCR, which the core copies into an interrupt's FPSCR; this
+  // checks that it did).
+  const uint32_t fpscr = __get_FPSCR();
+  g_isrFpscr = fpscr;
+  if ((fpscr & kFpscrFzDn) != kFpscrFzDn) {
+    __set_FPSCR(fpscr | kFpscrFzDn);
+    g_isrFpscrFixes = g_isrFpscrFixes + 1;
+  }
   const int frames = static_cast<int>(size / 2);
   if (frames > static_cast<int>(kBlock)) return;
-  g_app.render(g_block, frames);
+  g_app.render(g_block, frames, in);   // the pads' scan, the line input, the engine
   const float k = g_gain * (1.0f / 32768.0f);
   for (size_t i = 0; i < size; ++i) out[i] = static_cast<float>(g_block[i]) * k;
-  pgdev::stage1::audioInput(in, size);   // the microphone's ring (stage 1; nothing in stage 0)
 }
 
 uint32_t uptimeMs() { return daisy::System::GetNow(); }
@@ -144,6 +162,17 @@ struct DaisyHal final : pgd::Hal {
     const int pct = (mv - 3300) * 100 / (4150 - 3300);
     return static_cast<uint8_t>(pct < 0 ? 0 : pct > 100 ? 100 : pct);
   }
+  // The audio interrupt: the DMA buffer's latest value per pad (the ADC converts
+  // continuously, every channel ~0.5 ms; docs/DAISY.md "Force-sensor pads").
+  bool readPads(float* out) override {
+    if (!g_adcOn || g_adcPads < 0) return false;
+    for (int i = 0; i < 4; ++i) out[i] = g_hw.adc.GetFloat(static_cast<uint8_t>(g_adcPads + i));
+    return true;
+  }
+  bool lineInput() override { return true; }   // the codec's input, on every Seed
+  bool pollPointer(Pointer* p) override { return pgdev::stage1::pollPointer(p); }
+  bool touchInfo(TouchInfo* t) override { return pgdev::stage1::touchInfo(t); }
+  void applySettings(const pgd::DaisySettings& s) override { pgdev::stage1::applySettings(s); }
   bool pollKey(pg::KeyEvent* e) override { return pgdev::stage1::pollKey(e); }
   bool displayPresent() override { return pgdev::stage1::displayPresent(); }
   void present(const pg::Framebuffer& fb, int y0, int y1) override { pgdev::stage1::present(fb, y0, y1); }
@@ -151,7 +180,6 @@ struct DaisyHal final : pgd::Hal {
   void tiltPress(int rx, int ry) override { pgdev::stage1::tiltPress(rx, ry); }
   void tiltRelease() override { pgdev::stage1::tiltRelease(); }
   bool tiltRead(float* x, float* y) override { return pgdev::stage1::tiltRead(x, y); }
-  pg::sampler::MicInput* mic() override { return pgdev::stage1::mic(); }
   pg::FileSystem* sdCard() override { return pgdev::stage1::sdCard(); }
   const char* boardName() override { return g_boardName; }
   const char* stageName() override {
@@ -177,6 +205,15 @@ struct DaisyHal final : pgd::Hal {
     } else {
       std::snprintf(l, sizeof(l), "[crash] no fault recorded before this boot");
     }
+    fn(user, l);
+    const uint32_t mainFpscr = __get_FPSCR();
+    std::snprintf(l, sizeof(l),
+                  "[fpu] FPSCR main loop 0x%08lx, audio interrupt 0x%08lx, FPDSCR 0x%08lx: flush-to-zero %s, default "
+                  "NaN %s; the interrupt had to set them %lu times",
+                  static_cast<unsigned long>(mainFpscr), static_cast<unsigned long>(g_isrFpscr),
+                  static_cast<unsigned long>(FPU->FPDSCR),
+                  (mainFpscr & g_isrFpscr & (1u << 24)) ? "on" : "OFF", (mainFpscr & g_isrFpscr & (1u << 25)) ? "on" : "OFF",
+                  static_cast<unsigned long>(g_isrFpscrFixes));
     fn(user, l);
     pgdev::memory::reportLines(fn, user);
     const pgdev::usbserial::Stats us = pgdev::usbserial::stats();
@@ -212,10 +249,20 @@ void startCycleCounter() {
 }
 
 void startAdc() {
-  // Four pots (A0..A3) and, in stage 1, the battery divider (A4): pins.h.
+  // Four pots (A0..A3) and, in stage 1, the battery divider (A4) and the four
+  // force-sensor pads (A5..A8): pins.h. The pads sample for 32.5 ADC cycles instead of
+  // 8.5: their source is the 10 k divider (the pots' is at most 2.5 k), and a short
+  // sampling time with a high source impedance lets the previous channel's charge
+  // leak into the reading (crosstalk between channels).
   int n = 0;
   for (int i = 0; i < 4; ++i) g_adcCfg[n++].InitSingle(daisy::DaisySeed::GetPin(pgd::pins::kPotSeed[i]));
-  if (PG_DAISY_STAGE >= 1) g_adcCfg[n++].InitSingle(daisy::DaisySeed::GetPin(pgd::pins::kBatterySeed));
+  if (PG_DAISY_STAGE >= 1) {
+    g_adcCfg[n++].InitSingle(daisy::DaisySeed::GetPin(pgd::pins::kBatterySeed));
+    g_adcPads = n;
+    for (int i = 0; i < 4; ++i)
+      g_adcCfg[n++].InitSingle(daisy::DaisySeed::GetPin(pgd::pins::kPadSeed[i]),
+                               daisy::AdcChannelConfig::SPEED_32CYCLES_5);
+  }
   g_hw.adc.Init(g_adcCfg, static_cast<size_t>(n));
   g_hw.adc.Start();
   g_adcOn = true;
@@ -251,6 +298,8 @@ int main() {
   mem.poolImage = g_poolImage;
   mem.poolStaging = g_poolStaging;
   mem.poolFlash = &g_poolFlash;
+  mem.lineRing = g_lineRing;
+  mem.lineRingSamples = kLineRing;
   pgd::AppConfig cfg;
   cfg.sampleRate = static_cast<float>(kRate);
   cfg.autoplay = PG_DAISY_STAGE == 0;

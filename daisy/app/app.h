@@ -5,8 +5,9 @@
 //                     the flash images)
 //   loopOnce()        forever, from the main loop (no operating system: this is the
 //                     cooperative scheduler, daisy/core/scheduler.h)
-//   render()          from the audio callback (the interrupt): Instrument::process
-//                     and the load meter, nothing else
+//   render()          from the audio callback (the interrupt): the pads' scan, the
+//                     line input into its ring, Instrument::process and the load
+//                     meter, nothing else
 // The same single-writer contract as the Cardputer and the desktop: the main loop
 // changes the engine only through Engine::post (the UI does), and the audio
 // interrupt is the only code that runs the engine.
@@ -15,8 +16,12 @@
 // docs/DAISY.md):
 //   keys        from the computer (key_script.h: the desktop's script format, lines
 //               starting '>'), and from the hardware when it exists (Hal::pollKey:
-//               the TCA8418 on the breadboard, stage 1); G0 as on the Cardputer:
+//               G0 on the breadboard, stage 1); G0 as on the Cardputer:
 //               held = tilt (if there is an IMU), held + '-' / '=' = output level
+//   pads        four force sensors (pads.h), scanned in render(); each plays a
+//               drum track (App::padEvent, the one place to change)
+//   touch       the 2090's FT6206 (Hal::pollPointer): reported, mirrored as ~PGT
+//   recording   hold L on a sampler page: the codec's line in (line_mic.h)
 //   transfer    tools/pg's protocol (pg::io::Xfer) on the same port: projects on /int
 //               and /sd, samples in the pool
 //   report      'r' prints the report (load now / peak, longest block, underruns,
@@ -34,8 +39,11 @@
 #include "../core/key_script.h"
 #include "../core/load_meter.h"
 #include "../core/led.h"
+#include "../core/line_mic.h"
+#include "../core/pads.h"
 #include "../core/pool_mirror.h"
 #include "../core/pots.h"
+#include "../core/settings.h"
 #include "../core/ramfs.h"
 #include "../core/scheduler.h"
 #include "../core/serial_link.h"
@@ -72,16 +80,36 @@ class Hal {
   virtual uint32_t sampleRate() = 0;
   virtual uint32_t blockFrames() = 0;
 
-  // Physical keys (stage 1: the TCA8418 matrix and G0). false: none waiting.
+  // Physical keys (stage 1: G0; the key layout is undecided). false: none waiting.
   virtual bool pollKey(pg::KeyEvent* /*e*/) { return false; }
-  // Touch / pointer input (a touch panel is being considered: FT5336 on I2C): a
-  // place for it, not wired to the UI yet (the UI takes keys only). false: none.
+  // Touch / pointer input (stage 1: the 2090's FT6206). The UI does not take pointer
+  // events yet: the App counts them, reports them ([touch]) and sends them to the
+  // screen mirror (~PGT lines). false: none.
   struct Pointer {
-    int16_t x, y;      // in the UI's 240x135 canvas (the platform undoes the panel's scale)
-    bool down;
+    int16_t x, y;        // in the UI's 240x135 canvas (the platform undoes the panel's
+                         // rotation, offset and scale); outside it on the border
+    int16_t rawX, rawY;  // the controller's own coordinates (native, portrait)
+    bool down;           // false: the touch ended (x, y: where it was last)
     uint32_t timeMs;
   };
   virtual bool pollPointer(Pointer* /*p*/) { return false; }
+  struct TouchInfo {
+    const char* state;   // "present", "NOT FOUND at 0x38", ...
+    bool present;
+    uint8_t chipId, firmware;
+    uint32_t reads, errors;
+    int irq;             // the IRQ pin's level (0 = low: touched), -1 not wired / unknown
+    uint8_t orientation; // the TouchMap in use (touch.h)
+  };
+  virtual bool touchInfo(TouchInfo* /*t*/) { return false; }
+  // The force-sensor pads (stage 1). CALLED FROM THE AUDIO INTERRUPT (App::render),
+  // once per block: the four ADC readings, 0..1. false: no pads.
+  virtual bool readPads(float* /*out4*/) { return false; }
+  // The codec's line input reaches render() (the recording path). false: none.
+  virtual bool lineInput() { return false; }
+  // The Daisy's settings changed (or were loaded at boot): the display's orientation
+  // and SPI speed, the touch mapping. The pads' calibration is the App's own.
+  virtual void applySettings(const DaisySettings& /*s*/) {}
   // The display (stage 1). false: none (present is then never called).
   virtual bool displayPresent() { return false; }
   virtual void present(const pg::Framebuffer& /*fb*/, int /*y0*/, int /*y1*/) {}
@@ -90,8 +118,6 @@ class Hal {
   virtual void tiltPress(int /*responseX*/, int /*responseY*/) {}
   virtual void tiltRelease() {}
   virtual bool tiltRead(float* /*x*/, float* /*y*/) { return false; }
-  // The microphone (stage 1, MAX9814 into the codec's left input). nullptr: none.
-  virtual pg::sampler::MicInput* mic() { return nullptr; }
   // /sd (stage 1, FatFS on the microSD card). nullptr: no card.
   virtual pg::FileSystem* sdCard() { return nullptr; }
   // The four pots (stage 0 on the breadboard): 0..1 each, < 0 = no pot. false: none.
@@ -122,6 +148,8 @@ struct AppMemory {
   uint8_t* poolImage = nullptr;            // pg::sampler::kPoolBytes
   uint8_t* poolStaging = nullptr;          // 4 KB
   pg::sampler::FlashDriver* poolFlash = nullptr;   // kPoolBytes
+  int16_t* lineRing = nullptr;             // the line input's ring (a power of two samples)
+  uint32_t lineRingSamples = 0;
 };
 
 struct AppConfig {
@@ -134,8 +162,10 @@ class App {
  public:
   void boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg);
   void loopOnce();
-  // Audio interrupt: frames (a multiple of 16) of interleaved stereo int16.
-  void render(int16_t* out, int frames);
+  // Audio interrupt: frames (a multiple of 16) of interleaved stereo int16; in: the
+  // codec's input block (interleaved stereo float), nullptr when there is none. Also
+  // scans the pads (Hal::readPads), before the engine runs.
+  void render(int16_t* out, int frames, const float* in = nullptr);
 
   pg::Instrument& instrument() { return inst_; }
   pg::ui::Ui& ui() { return ui_; }
@@ -152,6 +182,11 @@ class App {
   float outputGainDb() const { return gainDb_; }
   bool mirroring() const { return mirror_on_; }
   PotMacros& pots() { return pots_; }
+  PadScanner& pads() { return pads_; }
+  LineMic& lineMic() { return lineMic_; }
+  const DaisySettings& settings() const { return settings_; }
+  uint32_t padNotes() const { return padNotes_; }
+  uint32_t pointerEvents() const { return pointerEvents_; }
 
   // printf to the serial port (and the boot log while booting).
   void sp(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -168,6 +203,7 @@ class App {
   static void tLed(void* u, uint32_t now) { static_cast<App*>(u)->serviceLed(now); }
   static void tStats(void* u, uint32_t now) { static_cast<App*>(u)->serviceStats(now); }
   static void tPots(void* u, uint32_t now) { static_cast<App*>(u)->servicePots(now); }
+  static void tPads(void* u, uint32_t now) { static_cast<App*>(u)->servicePads(now); }
   static uint32_t msClock(void* u) { return static_cast<App*>(u)->hal_->millis(); }
   static uint32_t usClock(void* u) { return static_cast<App*>(u)->hal_->micros(); }
 
@@ -179,6 +215,15 @@ class App {
   void serviceLed(uint32_t now);
   void serviceStats(uint32_t now);
   void servicePots(uint32_t now);
+  void servicePads(uint32_t now);
+  void padEvent(const PadEvent& e);
+  void servicePointer(uint32_t now);
+  void pointer(const Hal::Pointer& p);
+  bool settingsCommand(const char* line);
+  void saveSettings();
+  void printPads(bool withCal);
+  void printTouch();
+  void printLineIn();
   void serviceXfer(uint32_t now);
   void letter(char c, uint32_t now);
   void scriptLine(const char* line, uint32_t now);
@@ -212,6 +257,9 @@ class App {
   Scheduler sched_;
   LoadMeter meter_;
   PotMacros pots_;
+  PadScanner pads_;
+  LineMic lineMic_;
+  DaisySettings settings_;
 
   // state
   LedMode led_ = LedMode::Booting;
@@ -233,6 +281,20 @@ class App {
   bool poolLoaded_ = false;
   int poolDropped_ = 0;
   uint32_t bootMs_ = 0;
+  // pads, touch
+  bool padsOn_ = false;               // the Hal has pads (render scans them)
+  volatile bool padsSeen_ = false;    // readPads answered (set in the interrupt)
+  uint32_t padsWatchMs_ = 0;          // >pads watch: a [pads] line this often (0: off)
+  uint32_t padsWatchLast_ = 0;
+  uint32_t padNotes_ = 0, padUps_ = 0, padPressures_ = 0;
+  uint32_t pointerEvents_ = 0, pointerDowns_ = 0;
+  Hal::Pointer lastPointer_{};
+  bool pointerSeen_ = false;
+  int16_t injX_ = 0, injY_ = 0;       // >touch X Y [ms]: an injected touch, lifted at injUpMs_
+  uint32_t injUpMs_ = 0;
+  bool injDown_ = false;
+  const char* settingsLoad_ = "defaults";
+  bool lineIn_ = false;               // the codec's input reaches render() (Hal::lineInput)
 
   // The boot log, replayed by 'l' (the computer usually opens the port after boot).
   static constexpr size_t kBootLog = 3072;

@@ -107,13 +107,36 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
      pg::sampler::kPoolSlots, static_cast<unsigned long>(hal.millis() - t1));
   if (romMissing_) sp("[boot] ROM part of the image MISSING: the built-in sounds are silent. Flash the whole .bin\n");
 
+  // The Daisy's own settings (pads, display orientation, touch map), from /int.
+  {
+    settings_ = DaisySettings{};
+    uint8_t b[DaisySettings::kBytes + 8];
+    size_t n = 0;
+    if (!fs_.exists(DaisySettings::kPath)) settingsLoad_ = "defaults (no file yet)";
+    else if (fs_.read(DaisySettings::kPath, b, sizeof(b), &n) && settings_.decode(b, n)) settingsLoad_ = "loaded";
+    else settingsLoad_ = "FILE UNREADABLE: defaults";
+    pads_.reset();
+    pads_.setScanHz(static_cast<float>(hal.sampleRate()) / static_cast<float>(hal.blockFrames() ? hal.blockFrames() : 96));
+    for (int i = 0; i < PadScanner::kPads; ++i) pads_.setCal(i, settings_.pads[i]);
+    pads_.setGlobal(settings_.padGlobal);
+    hal.applySettings(settings_);
+    sp("[boot] settings %s (%s)\n", DaisySettings::kPath, settingsLoad_);
+  }
+
+  // Recording: the codec's line input, into the pool (line_mic.h).
+  lineMic_.init(mem.poolImage ? &writer_ : nullptr, &mirror_, &pool_, mem.lineRing, mem.lineRingSamples,
+                hal.sampleRate());
+  const bool lineIn = hal.lineInput() && mem.lineRing && mem.poolImage;
+  lineIn_ = lineIn;
+  lineMic_.setAvailable(false);   // once the audio runs (servicePads)
+
   inst_.init(cfg.sampleRate, /*monoOutput=*/false);
   inst_.setSamplePool(mem.poolImage ? &pool_ : nullptr);
   pg::ui::initPalette(fb_);
   ui_.init(inst_.engine(), inst_.project(), &fs_);
   ui_.setSampler(&inst_.sampler());
   ui_.setMelodic(&inst_.melodic());
-  ui_.setMic(hal.mic());
+  ui_.setMic(lineIn ? &lineMic_ : nullptr);
   xfer_.init(&fs_, cfg.version);
   xfer_.setSamples(mem.poolImage ? &writer_ : nullptr);
   samplesChanged_ = xfer_.samplesChanged();
@@ -138,6 +161,7 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   sched_.add("led", 10, tLed, this);
   sched_.add("stats", kStatsEveryMs, tStats, this);
   sched_.add("pots", 10, tPots, this);
+  sched_.add("pads", 0, tPads, this);
 
   script_ = KeyScript{};
   link_ = SerialLink{};
@@ -150,8 +174,16 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   logging_ = false;
 }
 
-void App::render(int16_t* out, int frames) {
+void App::render(int16_t* out, int frames, const float* in) {
   meter_.begin(hal_->cycles());
+  // The pads first: one scan per block, so the scan interval is the block's and
+  // never waits for the main loop (pads.h LATENCY).
+  float x[PadScanner::kPads];
+  if (hal_->readPads(x)) {
+    pads_.scan(x);
+    padsSeen_ = true;
+  }
+  if (in) lineMic_.audioIn(in, frames);
   inst_.process(out, frames);
   meter_.end(hal_->cycles());
 }
@@ -222,6 +254,77 @@ void App::serviceKeys(uint32_t now) {
     float x, y;
     if (hal_->tiltRead(&x, &y)) ui_.tiltInput(x, y, now);
   }
+  servicePointer(now);
+}
+
+// ---- pads -------------------------------------------------------------------------------
+
+// THE PADS' SOUND, in this one function. Today each pad plays one drum track through
+// the engine's live NoteOn (what the UI's own drum pads send, ui.cpp Ui::padDown:
+// note 60), with the pad's velocity as 1..127; Up ends it (NoteOff); pressure goes
+// nowhere yet. When the core's platform-neutral pad API is merged (another branch is
+// adding pad down with velocity / pad pressure / pad up to lib/pg's UI layer), this
+// body becomes the three calls into the Ui and nothing else here changes. Until then
+// two things differ from the UI's pads: the selected track does not follow, and a
+// note recorded into a playing pattern gets no undo snapshot (the Ui takes that).
+void App::padEvent(const PadEvent& e) {
+  static constexpr uint8_t kPadTrack[PadScanner::kPads] = {pg::kTrackKick, pg::kTrackSnare, pg::kTrackClap,
+                                                          pg::kTrackHatClosed};
+  const uint8_t t = kPadTrack[e.pad & (PadScanner::kPads - 1)];
+  pg::Command c{};
+  if (e.type == PadEvent::Down) {
+    const int v = 1 + static_cast<int>(lrintf(e.value * 126.0f));
+    c.type = pg::CmdType::NoteOn;
+    c.a = t;
+    c.b = 60;
+    c.c = static_cast<uint8_t>(v < 1 ? 1 : v > 127 ? 127 : v);
+    c.step = pg::kDefaultStep;
+    c.step.note = 60;
+    c.step.vel = c.c;
+    inst_.engine().post(c);
+    ++padNotes_;
+  } else if (e.type == PadEvent::Up) {
+    c.type = pg::CmdType::NoteOff;
+    c.a = t;
+    c.b = 60;
+    inst_.engine().post(c);
+    ++padUps_;
+  } else {
+    ++padPressures_;   // pressure: nowhere yet (a macro, once the core's pad API is there)
+  }
+}
+
+void App::servicePads(uint32_t now) {
+  lineMic_.setAvailable(lineIn_ && hal_->audioRunning());
+  PadEvent e;
+  for (int n = 0; n < 32 && pads_.pop(&e); ++n) padEvent(e);
+  if (padsWatchMs_ && now - padsWatchLast_ >= padsWatchMs_) {
+    padsWatchLast_ = now;
+    printPads(false);
+  }
+}
+
+// ---- touch ------------------------------------------------------------------------------
+
+void App::pointer(const Hal::Pointer& p) {
+  ++pointerEvents_;
+  if (p.down && !(pointerSeen_ && lastPointer_.down)) ++pointerDowns_;
+  lastPointer_ = p;
+  pointerSeen_ = true;
+  if (mirror_on_) {   // the screen mirror draws it (tools/pg-daisy mirror: a dot)
+    char l[40];
+    const int n = std::snprintf(l, sizeof(l), "~PGT %c %d %d\n", p.down ? 'D' : 'U', p.x, p.y);
+    if (n > 0) hal_->serialWrite(l, static_cast<size_t>(n));
+  }
+}
+
+void App::servicePointer(uint32_t now) {
+  Hal::Pointer p;
+  for (int n = 0; n < 16 && hal_->pollPointer(&p); ++n) pointer(p);
+  if (injDown_ && static_cast<int32_t>(now - injUpMs_) >= 0) {
+    injDown_ = false;
+    pointer(Hal::Pointer{injX_, injY_, -1, -1, false, now});
+  }
 }
 
 // ---- serial ----------------------------------------------------------------------------
@@ -290,6 +393,9 @@ void App::printHelp() {
   sp("  >down KEY  >up KEY  >tap KEY [ms]  >wait MS  >release  >shot NAME  >sync TAG\n");
   sp("      keys as in the desktop's key scripts (host/ui_scripts); KEY by legend:\n");
   sp("      ` 1 .. = del tab q .. \\ fn sft a .. ent ctl opt alt z .. / spc G0\n");
+  sp("  >pads [watch [MS|off] | window N | release N | hyst R | xtalk R [MS] | reset]\n");
+  sp("  >pad N|all [thr US] [ceil US] [curve X] [on|off]   (the force-sensor pads' calibration)\n");
+  sp("  >touch X Y [MS]  >touch map N|auto  >display turn  >display spi 2|4|8|16\n");
   sp("  ~PGX ...  the transfer protocol (tools/pg: ls, pull, push, sample)\n");
   sp("  tools/pg-daisy on the computer drives all of this (keys from its keyboard, the screen)\n");
 }
@@ -386,6 +492,8 @@ void App::scriptLine(const char* line, uint32_t now) {
   } else if (std::strcmp(v, "sync") == 0) {
     // The client waits for this line: everything queued before it has run.
     sp("[key] sync %s\n", script_.arg());
+  } else if (settingsCommand(line)) {
+    return;
   } else {
     sp("[key] unknown command \"%s\"\n", v);
   }
@@ -446,6 +554,9 @@ void App::serviceScreen(uint32_t now) {
 
 void App::serviceStore(uint32_t now) {
   // One flash operation per call: the /int snapshot first, then the pool's mirror.
+  // While a recording runs the pool's copy waits (its sector erases would stall the
+  // main loop, and the slot is copied once, after the commit).
+  mirror_.hold(lineMic_.armed());
   if (persist_.step(now)) return;
   mirror_.flushStep();
 }
@@ -601,6 +712,9 @@ void App::printReport() {
       sp("[pots] none\n");
     }
   }
+  printPads(true);
+  printTouch();
+  printLineIn();
   sp("[led] %s; screen mirror %s, frames sent %lu; script lines %lu (overlong %lu)\n", ledModeName(led_),
      mirror_on_ ? "on" : "off", static_cast<unsigned long>(fbs_.framesSent()),
      static_cast<unsigned long>(link_.scriptLines()), static_cast<unsigned long>(link_.overlongLines()));

@@ -18,6 +18,16 @@
                                        letter is SHIFT + the letter; Ctrl-R report;
                                        Ctrl-S screenshot; Esc or Ctrl-C quits
     tools/pg-daisy bootloader          restart into the Daisy bootloader (to flash)
+    tools/pg-daisy pads [MS]           stage 1's force-sensor pads while you press them:
+                                       a [pads] line every MS (default 100: raw readings,
+                                       conductance, peaks, pressure, state, velocity);
+                                       Ctrl-C ends. Then tune with cmd (below)
+    tools/pg-daisy cmd WORDS...        one '>' command, its answer printed, e.g.
+                                       cmd pad 1 thr 15 ceil 600 / cmd pads / cmd display turn
+                                       / cmd touch 120 67 (a touch at canvas 120, 67)
+
+In the mirror window a touch on the device's screen (stage 1's FT6206) shows as a
+red dot, from the "~PGT" lines the device sends while the mirror is on.
 
 The serial protocol (one port, shared with tools/pg's transfer lines "~PGX"):
 '>' + a key-script command per line (">tap q 40", ">down sft", ">wait 100",
@@ -57,6 +67,8 @@ class Device:
         self.frame = None   # the screen: {"w", "h", "px": bytearray, "pal": [...]} once one arrived
         self.frames = 0
         self.last_name = None
+        self.touch = None   # (down, x, y) in canvas coordinates, from "~PGT D|U X Y"
+        self.touches = 0
 
     def close(self):
         self.s.close()
@@ -80,6 +92,15 @@ class Device:
                 text = line.decode("ascii", "replace").rstrip("\r")
                 if text.startswith("~PGF "):
                     self._screen(text)
+                    continue
+                if text.startswith("~PGT "):
+                    p = text.split()
+                    if len(p) == 4 and p[1] in ("D", "U"):
+                        try:
+                            self.touch = (p[1] == "D", int(p[2]), int(p[3]))
+                            self.touches += 1
+                        except ValueError:
+                            pass
                     continue
                 if self.echo:
                     self.echo(text)
@@ -284,9 +305,17 @@ def mirror(dev, scale):
     root.bind("<KeyRelease>", release)
     dev.send("m")   # the device streams the rows the UI changes
 
+    dot = {"at": None, "seen": 0}   # the touch dot drawn now: (x, y) in canvas pixels
+
     def tick():
         dev.pump(0.005)
         f = dev.frame
+        if dev.touches != dot["seen"] and f:   # the touch moved: repaint under the old dot
+            dot["seen"] = dev.touches
+            if dot["at"]:
+                f["dirty"].update(y for y in range(dot["at"][1] - 2, dot["at"][1] + 3) if 0 <= y < 135)
+            down, x, y = dev.touch
+            dot["at"] = (x, y) if down else None
         if f and f["dirty"]:
             pal = ["#%02x%02x%02x" % rgb(c) for c in f["pal"]]
             for y in sorted(f["dirty"]):
@@ -294,6 +323,12 @@ def mirror(dev, scale):
                 for k in range(scale):
                     img.put(row, to=(0, y * scale + k))
             f["dirty"].clear()
+        if dot["at"]:
+            x, y = dot["at"]
+            x0, y0 = max(0, (x - 2) * scale), max(0, (y - 2) * scale)
+            x1, y1 = min(240 * scale, (x + 3) * scale), min(135 * scale, (y + 3) * scale)
+            if x0 < x1 and y0 < y1:   # a touch on the border, outside the canvas, is not drawn
+                img.put("#ff2020", to=(x0, y0, x1, y1))
         root.after(15, tick)
 
     root.after(15, tick)
@@ -355,6 +390,27 @@ def main(argv=None):
             keys_terminal(dev)
         elif c == "mirror":
             mirror(dev, a.scale)
+        elif c == "pads":
+            ms = int(a.args[0]) if a.args else 100
+            dev.key("pads")
+            dev.key("pads watch %d" % ms)
+            try:
+                for line in dev.lines(1e9):
+                    if line.startswith("[pads]"):
+                        print(line)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                dev.key("pads watch off")
+                dev.pump(0.1)
+        elif c == "cmd":
+            if not a.args:
+                print("pg-daisy: cmd needs words, e.g. cmd pad 1 thr 15")
+                return 2
+            dev.echo = lambda l: None if l.startswith("[key] sync") or l.startswith("[stats]") else print(l)
+            dev.key(" ".join(a.args))
+            dev.sync("cmd")
+            dev.pump(0.3)
         elif c == "bootloader":
             dev.send("B")
             time.sleep(0.2)

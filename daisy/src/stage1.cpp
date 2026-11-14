@@ -5,8 +5,12 @@
 // (the strip buffers are cleaned before each transfer: they live in cached AXI SRAM;
 // DMA1/2 reach AXI SRAM through the bus matrix); its end callback runs in the DMA
 // interrupt. I2CHandle::ReadDataAtAddress / WriteDataAtAddress take 7-bit addresses
-// and block (timeout in ms). FatFSInterface::Init(MEDIA_SD) links the SD driver and
-// gives the path "0:/"; SdmmcHandler uses SDMMC1 on D1..D6, 4-bit.
+// and block (timeout in ms; before it, the HAL waits up to 25 ms for a busy bus:
+// i2c_bus.h's guard); the pins are open drain with NO internal pull-ups (the boards
+// on the bus bring theirs). FatFSInterface::Init(MEDIA_SD) links the SD driver and
+// gives the path "0:/"; SdmmcHandler uses SDMMC1 on D1..D6, 4-bit. SPI1's kernel
+// clock is PLL2P = 25 MHz (system.cpp: HSE 16 MHz / M 1 * N 12.5 / P 8), so
+// prescaler 2 = 12.5 MHz, 4 = 6.25, 8 = 3.125 MHz.
 #include "stage1.h"
 
 #if PG_DAISY_STAGE >= 1
@@ -16,8 +20,10 @@
 
 #include "../core/bmi270.h"
 #include "../core/button.h"
+#include "../core/i2c_bus.h"
 #include "../core/panel.h"
 #include "../core/pins.h"
+#include "../core/touch.h"
 #include "daisy_seed.h"
 #include "fatfs.h"
 #include "pg/tilt/tilt.h"
@@ -47,36 +53,56 @@ __attribute__((section(".qspi_rom"))) const uint8_t kBmiConfig[] = {
 bool g_on = false;
 
 // ---- display ------------------------------------------------------------------------
-#ifndef PG_DAISY_PANEL_HX8357D
-#define PG_DAISY_PANEL_HX8357D 1   // the likely first screen (3.5" 480x320); 0: ST7789 240x135
+// The panel (make STAGE=1 PANEL=...: -DPG_DAISY_PANEL): 0 the Adafruit 2090 (ILI9341
+// 320x240, the stage 1 default), 1 a 3.5" HX8357D 480x320, 2 the ST7789 240x135.
+#ifndef PG_DAISY_PANEL
+#define PG_DAISY_PANEL 0
 #endif
+
+pgd::PanelConfig panelConfig(bool turned) {
+  if (PG_DAISY_PANEL == 1) return pgd::PanelConfig::hx8357d_480x320();
+  if (PG_DAISY_PANEL == 2) return pgd::PanelConfig::st7789_240x135();
+  return pgd::PanelConfig::ili9341_320x240(turned);
+}
+
+daisy::SpiHandle::Config::BaudPrescaler prescaler(uint8_t div) {
+  using P = daisy::SpiHandle::Config::BaudPrescaler;
+  return div >= 16 ? P::PS_16 : div >= 8 ? P::PS_8 : div >= 4 ? P::PS_4 : P::PS_2;
+}
 
 struct SpiBus final : pgd::SpiPanelBus {
   daisy::SpiHandle spi;
   daisy::GPIO dc, cs, bl;
   volatile bool busyFlag = false;
   bool ok = false;
+  uint8_t divider = 2;
   static void done(void* ctx, daisy::SpiHandle::Result) { static_cast<SpiBus*>(ctx)->busyFlag = false; }
-  bool init() {
+  // 25 MHz / div (2: 12.5 MHz, near the ILI9341's 10 MHz write-cycle rating, which
+  // Adafruit's drivers exceed by far; slower over long breadboard wires: >display spi).
+  bool initSpi(uint8_t div) {
+    while (busyFlag) {
+    }
     daisy::SpiHandle::Config c;
     c.periph = daisy::SpiHandle::Config::Peripheral::SPI_1;
     c.mode = daisy::SpiHandle::Config::Mode::MASTER;
     c.direction = daisy::SpiHandle::Config::Direction::TWO_LINES_TX_ONLY;
     c.nss = daisy::SpiHandle::Config::NSS::SOFT;
-    // The SPI1 kernel clock and so the bit rate this gives are not checked here: start
-    // slow and raise it on the hardware (docs/DAISY.md "Display").
-    c.baud_prescaler = daisy::SpiHandle::Config::BaudPrescaler::PS_8;
+    c.baud_prescaler = prescaler(div);
     c.pin_config.sclk = seedPin(8);
     c.pin_config.mosi = seedPin(10);
     c.pin_config.miso = daisy::Pin();
     c.pin_config.nss = daisy::Pin();
+    divider = div;
     ok = spi.Init(c) == daisy::SpiHandle::Result::OK;
+    return ok;
+  }
+  bool init() {
     dc.Init(seedPin(9), daisy::GPIO::Mode::OUTPUT);
     cs.Init(seedPin(7), daisy::GPIO::Mode::OUTPUT);
     bl.Init(seedPin(27), daisy::GPIO::Mode::OUTPUT);
     cs.Write(false);   // the only device on the bus
     bl.Write(true);
-    return ok;
+    return initSpi(2);
   }
   void command(uint8_t cmd, const uint8_t* params, size_t n) override {
     while (busyFlag) {
@@ -101,10 +127,16 @@ struct SpiBus final : pgd::SpiPanelBus {
 };
 SpiBus g_spi;
 pgd::Panel g_panel;
-__attribute__((section(".axi_bss"), aligned(32))) uint8_t g_strips[2 * pgd::Panel::kStripBytes];
+// The strip buffers (30 KB) in D2 SRAM, next to the App: DMA1/2 (SPI1's) reach it,
+// it is cached like AXI SRAM (pixelsAsync cleans the lines), and the AXI SRAM after
+// the image is too small for them once the image is near its 480 KB.
+__attribute__((section(".d2_bss"), aligned(32))) uint8_t g_strips[2 * pgd::Panel::kStripBytes];
 bool g_panelOn = false;
 
-// ---- I2C1: the BMI270 (and touch, later) --------------------------------------------
+// ---- I2C1: the BMI270 and the FT6206 ----------------------------------------------
+// The timeout of one transaction (ms): the longest one is a 64-byte BMI270 chunk,
+// ~1.7 ms at 400 kHz.
+constexpr uint32_t kI2cTimeoutMs = 3;
 struct I2c final : pgd::I2cBus {
   daisy::I2CHandle h;
   uint32_t errors = 0;
@@ -118,19 +150,29 @@ struct I2c final : pgd::I2cBus {
     return h.Init(c) == daisy::I2CHandle::Result::OK;
   }
   bool write(uint8_t addr, uint8_t reg, const uint8_t* data, size_t n) override {
-    const bool ok = h.WriteDataAtAddress(addr, reg, 1, const_cast<uint8_t*>(data), static_cast<uint16_t>(n), 10) ==
-                    daisy::I2CHandle::Result::OK;
+    const bool ok = h.WriteDataAtAddress(addr, reg, 1, const_cast<uint8_t*>(data), static_cast<uint16_t>(n),
+                                         kI2cTimeoutMs) == daisy::I2CHandle::Result::OK;
     if (!ok) ++errors;
     return ok;
   }
   bool read(uint8_t addr, uint8_t reg, uint8_t* data, size_t n) override {
-    const bool ok = h.ReadDataAtAddress(addr, reg, 1, data, static_cast<uint16_t>(n), 10) == daisy::I2CHandle::Result::OK;
+    const bool ok = h.ReadDataAtAddress(addr, reg, 1, data, static_cast<uint16_t>(n), kI2cTimeoutMs) ==
+                    daisy::I2CHandle::Result::OK;
     if (!ok) ++errors;
     return ok;
   }
 };
 I2c g_i2c;
+pgd::I2cGuard g_bus;   // both drivers go through it (a stuck bus never holds the loop)
+uint32_t busMicros(void*) { return daisy::System::GetUs(); }
+bool g_i2cOn = false;
 pgd::Bmi270 g_imu;
+// touch
+pgd::Ft6206 g_touch;
+pgd::TouchMap g_touchMap;
+daisy::GPIO g_touchIrq;
+pgd::Hal::Pointer g_ptrQ[16];
+int g_ptrN = 0;
 pg::tilt::Tracker g_tracker;
 bool g_tiltOn = false, g_tiltFresh = false;
 uint32_t g_lastImuMs = 0;
@@ -284,19 +326,28 @@ void begin(bool enabled) {
   g_g0.Init(seedPin(25), daisy::GPIO::Mode::INPUT, daisy::GPIO::Pull::PULLUP);   // pins.h "G0 BUTTON"
   // display
   if (g_spi.init()) {
-    g_panel.init(PG_DAISY_PANEL_HX8357D ? pgd::PanelConfig::hx8357d_480x320() : pgd::PanelConfig::st7789_240x135(),
-                 &g_spi, g_strips);
+    g_panel.init(panelConfig(false), &g_spi, g_strips);
     g_panel.begin();
     g_panelOn = true;
   }
-  // IMU (the setup runs on in service())
+  // I2C1: the IMU (its setup runs on in service()) and the touch controller
   g_tracker.setRate(1000.0f / kImuPollMs);
+  g_touchIrq.Init(seedPin(pgd::pins::kTouchIrqSeed), daisy::GPIO::Mode::INPUT, daisy::GPIO::Pull::PULLUP);
+  const pgd::PanelConfig& pc = g_panel.config();
+  g_touchMap.x0 = pc.x0;
+  g_touchMap.y0 = pc.y0;
+  g_touchMap.scale = pc.scale;
+  const int o = pgd::TouchMap::orientationFor(pc.madctl);
+  g_touchMap.orientation = static_cast<uint8_t>(o < 0 ? 3 : o);
   if (g_i2c.init()) {
+    g_i2cOn = true;
+    g_bus.init(&g_i2c, busMicros, nullptr);
 #if PGD_HAVE_BMI270_CONFIG
-    g_imu.begin(&g_i2c, kBmiConfig, sizeof(kBmiConfig));
+    g_imu.begin(&g_bus, kBmiConfig, sizeof(kBmiConfig));
 #else
-    g_imu.begin(&g_i2c, nullptr, 0);
+    g_imu.begin(&g_bus, nullptr, 0);
 #endif
+    g_touch.begin(&g_bus, daisy::System::GetNow());
   }
   // SD: one attempt at boot (blocking, ~0.1-1 s with a card), retried every 10 s.
   tryMountSd(daisy::System::GetNow());
@@ -308,6 +359,18 @@ void service(uint32_t nowMs) {
   if (g_keyN < 16 && g_g0Button.poll(!g_g0.Read(), nowMs, &e)) g_keyQ[g_keyN++] = e;
   if (g_panelOn) g_panel.step();
   if (!g_imu.ready()) g_imu.step(nowMs);
+  if (g_i2cOn && g_touch.step(nowMs)) {
+    pgd::Ft6206::Event te;
+    while (g_touch.pop(&te)) {
+      if (g_ptrN >= 16) continue;
+      int px, py, cx, cy;
+      g_touchMap.mapToPanel(te.x, te.y, &px, &py);
+      g_touchMap.toCanvas(px, py, &cx, &cy);
+      g_ptrQ[g_ptrN++] = pgd::Hal::Pointer{static_cast<int16_t>(cx), static_cast<int16_t>(cy),
+                                           static_cast<int16_t>(te.x), static_cast<int16_t>(te.y),
+                                           te.kind != pgd::Ft6206::Event::Up, te.ms};
+    }
+  }
   if (g_tiltOn && g_imu.ready() && nowMs - g_lastImuMs >= kImuPollMs) {
     g_lastImuMs = nowMs;
     pgd::Bmi270::Raw r;
@@ -329,9 +392,49 @@ bool pollKey(pg::KeyEvent* e) {
   return true;
 }
 
+bool pollPointer(pgd::Hal::Pointer* p) {
+  if (!g_ptrN) return false;
+  *p = g_ptrQ[0];
+  for (int i = 1; i < g_ptrN; ++i) g_ptrQ[i - 1] = g_ptrQ[i];
+  --g_ptrN;
+  return true;
+}
+
+bool touchInfo(pgd::Hal::TouchInfo* t) {
+  if (!g_on) return false;
+  t->state = g_i2cOn ? pgd::Ft6206::stateName(g_touch.state()) : "I2C NOT STARTED";
+  t->present = g_touch.present();
+  t->chipId = g_touch.chipId();
+  t->firmware = g_touch.firmware();
+  t->reads = g_touch.reads();
+  t->errors = g_touch.errors();
+  t->irq = g_touchIrq.Read() ? 1 : 0;
+  t->orientation = g_touchMap.orientation;
+  return true;
+}
+
 bool displayPresent() { return g_panelOn; }
 void present(const pg::Framebuffer& fb, int y0, int y1) {
   if (g_panelOn) g_panel.present(fb, y0, y1);
+}
+
+void applySettings(const pgd::DaisySettings& s) {
+  if (!g_on) return;
+  bool again = false;
+  if (g_panelOn && PG_DAISY_PANEL == 0) {
+    const uint8_t m = s.displayTurned ? pgd::PanelConfig::kIliMadctlTurned : pgd::PanelConfig::kIliMadctl;
+    if (m != g_panel.config().madctl) {
+      g_panel.setMadctl(m);
+      again = true;
+    }
+  }
+  if (g_panelOn && s.spiDivider != g_spi.divider) {
+    g_spi.initSpi(s.spiDivider);
+    again = true;
+  }
+  if (again) g_panel.begin();   // blocking ~0.5 s, then the last frame again
+  const int o = s.touchOrientation >= 0 ? s.touchOrientation : pgd::TouchMap::orientationFor(g_panel.config().madctl);
+  g_touchMap.orientation = static_cast<uint8_t>(o < 0 ? 3 : o);
 }
 
 bool imuPresent() { return g_imu.ready(); }
@@ -352,12 +455,6 @@ bool tiltRead(float* x, float* y) {
   return true;
 }
 
-// Recording: line in through the codec's input is the first path (docs/DAISY.md); not
-// built yet: the ring this would fill from audioInput() and a pg::sampler::MicInput over
-// pg's Recorder (48 kHz in, recRatesFor) are the next step.
-pg::sampler::MicInput* mic() { return nullptr; }
-void audioInput(const float*, size_t) {}
-
 pg::FileSystem* sdCard() { return g_on ? &g_sdFs : nullptr; }
 
 void reportLines(LineFn fn, void* user) {
@@ -366,14 +463,26 @@ void reportLines(LineFn fn, void* user) {
     fn(user, "[stage1] not started (a stage 0 build): no display, IMU, SD card or G0");
     return;
   }
-  std::snprintf(l, sizeof(l), "[display] %s, %ux%u at scale %u, frames %lu",
-                g_panelOn ? (PG_DAISY_PANEL_HX8357D ? "HX8357D" : "ST7789") : "NOT STARTED", g_panel.config().width,
-                g_panel.config().height, g_panel.config().scale, static_cast<unsigned long>(g_panel.framesSent()));
+  const pgd::PanelConfig& pc = g_panel.config();
+  std::snprintf(l, sizeof(l),
+                "[display] %s %ux%u, the UI at scale %u at (%u,%u), MADCTL 0x%02x, SPI %lu.%02lu MHz (25 / %u), "
+                "frames %lu",
+                g_panelOn ? pc.name() : "NOT STARTED", pc.width, pc.height, pc.scale, pc.x0, pc.y0, pc.madctl,
+                static_cast<unsigned long>(25 / g_spi.divider), static_cast<unsigned long>(2500 / g_spi.divider % 100),
+                g_spi.divider, static_cast<unsigned long>(g_panel.framesSent()));
   fn(user, l);
-  std::snprintf(l, sizeof(l), "[imu] BMI270 %s @0x%02x, err 0x%02x, status 0x%02x, reads %lu, i2c errors %lu%s",
+  std::snprintf(l, sizeof(l), "[imu] BMI270 %s @0x%02x, err 0x%02x, status 0x%02x, reads %lu%s",
                 pgd::Bmi270::stateName(g_imu.state()), g_imu.address(), g_imu.errReg(), g_imu.internalStatus(),
-                static_cast<unsigned long>(g_imu.reads()), static_cast<unsigned long>(g_i2c.errors),
+                static_cast<unsigned long>(g_imu.reads()),
                 PGD_HAVE_BMI270_CONFIG ? "" : " (built without Bosch's configuration file)");
+  fn(user, l);
+  std::snprintf(l, sizeof(l),
+                "[i2c] I2C1 400 kHz %s: ok %lu, failed %lu (NAKs included), slow failures %lu (the bus %s), skipped "
+                "%lu, longest %lu us",
+                g_i2cOn ? "started" : "NOT STARTED", static_cast<unsigned long>(g_bus.ok()),
+                static_cast<unsigned long>(g_bus.errors()), static_cast<unsigned long>(g_bus.stalls()),
+                g_bus.stalled() ? "IS HELD: SDA/SCL stuck or no pull-ups?" : "free",
+                static_cast<unsigned long>(g_bus.skipped()), static_cast<unsigned long>(g_bus.maxUs()));
   fn(user, l);
   std::snprintf(l, sizeof(l), "[sd] %s (FatFS result %d)", g_sdMounted ? "mounted" : "NOT MOUNTED", g_sdErr);
   fn(user, l);
@@ -393,14 +502,15 @@ namespace stage1 {
 void begin(bool) {}
 void service(uint32_t) {}
 bool pollKey(pg::KeyEvent*) { return false; }
+bool pollPointer(pgd::Hal::Pointer*) { return false; }
+bool touchInfo(pgd::Hal::TouchInfo*) { return false; }
 bool displayPresent() { return false; }
 void present(const pg::Framebuffer&, int, int) {}
+void applySettings(const pgd::DaisySettings&) {}
 bool imuPresent() { return false; }
 void tiltPress(int, int) {}
 void tiltRelease() {}
 bool tiltRead(float*, float*) { return false; }
-pg::sampler::MicInput* mic() { return nullptr; }
-void audioInput(const float*, size_t) {}
 pg::FileSystem* sdCard() { return nullptr; }
 void reportLines(LineFn fn, void* user) { fn(user, "[stage1] not in this build (stage 0): no display, IMU, SD card or G0"); }
 }  // namespace stage1
