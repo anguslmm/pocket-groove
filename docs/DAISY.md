@@ -7,9 +7,18 @@ Read the first-power-on checklist before plugging anything in.
 
 **Status (2026-11-14): nothing has run on a Seed yet.** The firmware compiles and links for the
 STM32H750 without warnings, in both stages. Everything portable runs on the host: the scheduler,
-the serial protocol, /int, the sample pool, the display path and the BMI270 driver are
-unit-tested, and the firmware's whole `App` runs in `daisy_sim` against the real computer tools.
-Only the hardware can show the rest (see "What only the hardware can show").
+the serial protocol, /int, the sample pool, the display path (now the Adafruit 2090's ILI9341),
+the BMI270 and FT6206 drivers on their shared I2C bus, the force-sensor pad scanner and the
+line-in recorder are unit-tested, and the firmware's whole `App` runs in `daisy_sim` and in
+`test_daisy_stage1` against the real computer tools. Only the hardware can show the rest (see
+"What only the hardware can show").
+
+**Stage 1 parts (owner's order, 2026-11-14):** Daisy Seed3 65 MB with headers on the Erica
+Synths Labor; the **Adafruit 2090** screen (2.8" 320x240 ILI9341 over SPI, FT6206 capacitive
+touch on I2C at 0x38, EYESPI revision; its microSD slot is not used); an **Adafruit 4682**
+microSD breakout on SDMMC; **four Adafruit 1075** square force sensors (Alpha MF02A-N-221-A01),
+each with a 10 k resistor; the **SparkFun BMI270** Qwiic board; no microphone yet: **the first
+recording path is the codec's stereo line input** (section 10).
 
 ## Contents
 1. Layout and choices
@@ -21,7 +30,7 @@ Only the hardware can show the rest (see "What only the hardware can show").
 7. Memory map
 8. Pin map
 9. How the firmware runs (no operating system)
-10. Stage 1: the breadboard prototype
+10. Stage 1: the breadboard prototype (display, touch, pads, line in: parts, wiring, algorithms)
 11. Audio load (an estimate)
 12. What is verified, what only the hardware can show
 13. libDaisy facts relied on, and assumptions not verified
@@ -34,7 +43,7 @@ Only the hardware can show the rest (see "What only the hardware can show").
 | `daisy/Makefile` | The build: `make -C daisy` (stage 0) or `make -C daisy STAGE=1`. Uses `lib/pg` unchanged. |
 | `daisy/pg_daisy.lds` | The linker script (BOOT_SRAM, derived from libDaisy's). |
 | `daisy/libdaisy.lock` | The pinned libDaisy commit (and the BMI270 configuration file's source). |
-| `daisy/core/` | Portable pieces: scheduler, serial demux, key script, load meter, LED, /int RAM file system with flash snapshots, sample pool mirror, screen mirror, pots, panel driver, BMI270, button, layout, pin map. |
+| `daisy/core/` | Portable pieces: scheduler, serial demux, key script, load meter, LED, /int RAM file system with flash snapshots, sample pool mirror, screen mirror, pots, panel driver (ILI9341 / ST7789 / HX8357D), I2C bus guard, BMI270, FT6206 touch, force-sensor pads, line-in recorder, Daisy settings file, button, layout, pin map. |
 | `daisy/app/` | The whole firmware above the hardware (`pgd::App` behind a `Hal`), shared by the device and the host simulation. |
 | `daisy/src/` | The device: libDaisy glue (main, USB serial, QSPI, memory, stage 1 drivers). |
 | `host/daisy/` | The host tests (`ctest -L daisy`) and `daisy_sim`. |
@@ -93,8 +102,15 @@ make -C daisy                                  # stage 0 -> build/daisy/stage0/p
 make -C daisy size                             # the memory map by component
 ```
 
-`make` ends with a line like `daisy_size: image 440472 of 491520 bytes (49.9 KB free), ROM part
-197056 bytes ... ok`, and the linker refuses a program that does not fit.
+`make` ends with a line like `daisy_size: image 431612 of 491520 bytes (58.5 KB free), ROM part
+197056 bytes ... ok`, and the linker refuses a program that does not fit. Stage 1:
+`make -C daisy STAGE=1` (another panel: `PANEL=1` HX8357D 480x320, `PANEL=2` ST7789 240x135;
+run `make -C daisy STAGE=1 clean` when you change PANEL).
+
+**libDaisy is built for size (`-Os`)** since 2026-11-14 (its own Makefile says `-O3`): stage 1
+did not fit otherwise. If you ran `tools/daisy-setup.sh` before that, `make` stops with "libDaisy
+was built by an older tools/daisy-setup.sh": run `tools/daisy-setup.sh` once more (it rebuilds
+the library, about a minute).
 
 This was verified in the sandbox with arm-none-eabi-gcc 13.2.1 (Ubuntu's package) and
 libDaisy 1289a00. The Homebrew cask installs the current Arm release (14.x). A newer GCC can
@@ -205,8 +221,9 @@ Safety rules, plainly:
    rails.** If the Labor's pot slots come pre-wired to its rails, do not use those slots for the
    Seed: use loose pots, or check the slots' wiring first.
 5. **Never feed a Eurorack-level signal (up to ±10 V or more) into a GPIO, an ADC pin or the
-   codec's inputs (pins 16 / 17)** without scaling it down to the 3.3 V range first. Stage 0
-   uses no inputs.
+   codec's inputs (pins 16 / 17)** without scaling it down first. The codec's inputs take line
+   level (about 1 Vrms at most, section 10 "Line in"); the ADC pins take 0..3.3 V. The Labor's
+   Eurorack-level outputs must never go straight into either.
 6. **Audio out → the Labor's output amplifier input:** Seed pin 18 (L) and pin 19 (R) to the
    amplifier's input(s), pin 20 to ground. Whether the Seed's outputs are AC-coupled on the
    board is not verified. A 10 µF capacitor in series with each output (+ towards the Seed if it
@@ -260,6 +277,58 @@ If the LED stays **steady** and no serial port appears: the firmware stopped bef
 loop (SDRAM, QSPI or USB init). Re-flash once. If it persists, report it; the next step is a
 debug build with a probe (the Seed3 has pads for an SWD header).
 
+### Stage 1, one part at a time
+
+Do stage 0 first. Then **unplug USB before every wiring change**, add one part, flash stage 1
+(`make -C daisy STAGE=1`, `tools/daisy-flash.sh 1`) and check it before the next part. Wiring is
+in section 10. Each step: what you should see, and what to paste back if you do not.
+
+10. **Stage 1 with nothing new wired.** Expect: as stage 0 but the demo does not start by itself
+    (`tools/pg-daisy tap spc` starts it). The report has `[display] ILI9341 320x240, the UI at
+    scale 1 at (40,52), MADCTL 0x28, SPI 12.50 MHz`, `[i2c] ... the bus free` (or held, with
+    nothing on it: that is expected without pull-ups), `[touch] FT6206 NOT FOUND at 0x38`,
+    `[imu] BMI270 not found`, `[pads] ...` four lines, `[linein] codec line in, 48000 Hz`,
+    `[fpu] ... flush-to-zero on, default NaN on`. **Paste back:** the whole report.
+11. **The 2090 display** (SPI pins, Lite, power; **its IM1, IM2, IM3 jumpers soldered closed**, section
+    10). Expect: at power-on the backlight comes on, the panel goes black for about half a
+    second, then the Pocket Groove screen appears in the middle with a black border (40 pixels
+    left and right, 52 / 53 above and below). Upside down: `tools/pg-daisy cmd display turn`
+    (saved). Garbage or stripes: `tools/pg-daisy cmd display spi 4` (6.25 MHz), then 8. White
+    screen: no data reaches it (the IM jumpers, MOSI, CLK, D/C, CS). Colours swapped red/blue:
+    report it (MADCTL's BGR bit). **Paste back:** the `[display]` line, a photo, what you tried.
+12. **Touch** (SDA, SCL, IRQ of the 2090; the display already powered). Expect: `[touch] FT6206
+    present (chip id 0x06 ...)`, `IRQ high (no touch)`; touching the screen and sending `r`:
+    `touches 1 ...`, `IRQ LOW` while a finger is on it, `last canvas (x,y) raw (x,y)`. Touch near
+    the top-left corner of the UI: canvas near (0,0); bottom right: near (239,134).
+    `tools/pg-daisy mirror` shows a red dot where you touch. Mirrored or swapped: try
+    `tools/pg-daisy cmd touch map N` for N = 0..7 until the dot follows the finger (saved;
+    `touch map auto` undoes it), and tell me which N. **Paste back:** the `[touch]` and `[i2c]`
+    lines, and the raw coordinates at the four corners of the panel.
+13. **The BMI270** (Qwiic lead into the same SDA / SCL). Expect: `[imu] BMI270 ready @0x68`, the
+    touch still `present`, `[i2c] ... failed 0` growing only by the probes of absent devices.
+    Hold G0 (if wired) and tilt: as on the Cardputer. **Paste back:** `[imu]`, `[i2c]`, `[touch]`.
+14. **One force sensor** (pad 1, with its 10 k resistor; section 10's diagram). Then
+    `tools/pg-daisy pads`: at rest the pad's `uS` reads below 1; pressing it lightly gives tens,
+    hard a few hundred to over a thousand. Tap it: the kick plays (louder for a harder tap) and
+    `vel` shows the velocity. Ctrl-C, then wire the other three (snare, clap, closed hat) and check
+    each the same way. Tuning, while `pads` runs in one terminal and `cmd` in another: a pad that
+    triggers too easily, `cmd pad N thr 20`; one that needs too much force, `cmd pad N thr 5`; hard
+    hits not reaching full velocity, `cmd pad N ceil 500`; soft hits too quiet, `cmd pad N curve
+    0.6`; a hard hit also playing the pad next to it, `cmd pads xtalk 0.5`. All saved at once.
+    **Paste back:** about ten seconds of `tools/pg-daisy pads` output with one soft tap, one hard
+    tap and one slow press on each pad, and the `cmd pads` lines.
+15. **microSD** (Adafruit 4682). Expect: `[sd] mounted (FatFS result 0)`, `tools/pg ls` lists
+    `/sd` too. **Paste back:** the `[sd]` line.
+16. **Line in** (a phone or a computer's headphone output, volume at about half, section 10).
+    Put a sampler instrument on PERC (on the screen or: `tools/pg-daisy tap ...` as in
+    `host/ui_scripts/mic.txt`), hold L (`tools/pg-daisy down l`), play something, let go (`up
+    l`). Expect: the waveform grows on the screen while L is held, a toast `SLOT 1 REC01 ...`, the
+    sample plays from PERC, at the right pitch. The report: `[linein] last: slot 1 DONE (commit
+    OK) ... at 48000 Hz`, `mono L alone (R silent)` with a mono cable or `(L+R)/2` with a stereo
+    one, input peaks between about -20 and -3 dBFS. Peaks at 0 dBFS: turn the source down. Then
+    power-cycle: the sample is still there. **Paste back:** the `[linein]` lines and
+    `[samples]`.
+
 ## 6. Driving it from the computer (stage 0's control protocol)
 
 One USB serial port carries everything, as on the Cardputer:
@@ -280,6 +349,18 @@ One USB serial port carries everything, as on the Cardputer:
 - **The screen** comes back as `~PGF` lines: a frame's begin, the palette, one line per
   framebuffer row (base64), the end (`daisy/core/fb_stream.h`). A full frame is ~44 KB; the
   mirror sends only the rows the UI changed. It costs nothing while off.
+- **Touches** (stage 1) come back while the mirror is on as `~PGT D X Y` (down or moved) and
+  `~PGT U X Y` (lifted), in UI canvas coordinates (outside 0..239 x 0..134 on the border).
+  `tools/pg-daisy mirror` draws a red dot.
+- **Stage 1 commands** (key-script lines too; `daisy/app/app_settings.cpp`), each change saved at
+  once to `/int/pg/daisy.cfg` and printed back:
+  `>pads` (the [pads] lines), `>pads watch [MS|off]`, `>pads window N`, `>pads release N`,
+  `>pads hyst R`, `>pads xtalk R [MS]`, `>pads reset`,
+  `>pad N|all [thr US] [ceil US] [curve X] [on|off]`,
+  `>touch X Y [MS]` (a touch from the computer), `>touch map N|auto`,
+  `>display turn`, `>display spi 2|4|8|16`.
+  `tools/pg-daisy pads` watches the pads; `tools/pg-daisy cmd WORDS` sends one command
+  (`tools/pg-daisy cmd pad 2 thr 15`).
 
 `tools/pg-daisy` wraps all of it (section 2 for pyserial). It can be tried without the board:
 `cmake --build build/host --target daisy_sim && build/host/daisy/daisy_sim` prints a pseudo-terminal
@@ -306,7 +387,7 @@ From the real link (`make -C daisy size`, stage 0 at commit 515cf67 merged with 
 | D2 SRAM 0x30008000 | 256 KB | **the App**: Instrument (voices + Project, 71 KB), UI (19 KB), framebuffer (33 KB), transfer, file table | 128.6 KB | 127.4 KB |
 | D3 SRAM | 64 KB | the fault record (kept over a reset) | 40 B | |
 | ITCM | 64 KB | nothing yet (a tuning option: hot DSP code) | 0 | 64 KB |
-| SDRAM 0xC0000000 | 64 MB | the ROM part's copy (192 KB); /int's files (48 x 96 KB), its snapshot staging (1 MB); the sample pool's image (3.2 MB); the serial rings (136 KB) | 9.0 MB | 55 MB |
+| SDRAM 0xC0000000 | 64 MB | the ROM part's copy (192 KB); /int's files (48 x 96 KB), its snapshot staging (1 MB); the sample pool's image (3.2 MB); the serial rings (136 KB); the line input's ring (128 KB, 1.37 s) | 9.1 MB | 55 MB |
 | QSPI 0x90000000 | 8 MB | see below | | |
 
 QSPI flash (`daisy/core/layout.h`):
@@ -343,15 +424,27 @@ strings that the linker merged across files are counted with the first file that
   daisy/app             7500        14         0         8         0
   total               355668     81214    197034      2364   9505720
 ```
-Stage 1 (`STAGE=1`) adds libDaisy's SPI, I2C, SDMMC and FatFS, and the drivers. Its image is
-466.7 KB of 480 (13.3 KB free); 32 KB of statics go after the image in AXI SRAM (the display's
-strip buffers, FatFS), leaving 13 KB there.
+(The table above is from stage 0 at 515cf67, before stage 1's work.) **Measured on the
+2026-11-14 stage 1 commit (`make`'s daisy_size line):** stage 0 image **431,612 bytes, 58.5 KB
+free**; stage 1 image **463,108 bytes, 27.7 KB free** (ROM part 205,248 bytes). Stage 1 adds
+libDaisy's SPI, I2C, SDMMC and FatFS, the drivers, the pads, the line-in recorder and their
+commands. It first came out ~3 KB over the 480 KB; what was done about it:
+- **libDaisy built `-Os`** (section 2): about 20 KB in both stages. libDaisy is the HAL, USB,
+  FatFS: main-loop code; its audio-path part is the per-block float conversion (~400 samples).
+- **The Daisy's own main-loop code `-Os`** (`daisy/app`, and `daisy/core` and `daisy/src` except
+  the pads' scan, the line input's fold-down, the panel's strip expander, main.cpp's callback
+  and the USB serial), and **pg's recorder** (on the Daisy it runs from the UI frame): ~6 KB.
+- **The display's two strip buffers (30 KB) moved from AXI SRAM to D2 SRAM** (`.d2_bss`: DMA1/2
+  reach it, it is cached like AXI SRAM and cleaned the same way), because the AXI SRAM after
+  a near-full image no longer had room for them. D2 SRAM: 166 KB of statics, 90 KB free.
+Nothing was dropped. The next levers are the same as before (a second section macro in the core
+for the UI's help text and the demos, ~30 KB; ITCM).
 
 How it fits, and what was decided: the program **is RAM-booted (BOOT_SRAM)**, so erasing and
 writing the QSPI never stalls running code. The 480 KB limit was the constraint. With the big
 cold data in QSPI (the core's `PG_BULK_ATTR`, defined by the Makefile as the `.qspi_rom`
-section), and the main-loop-only code built `-Os`, stage 0 has 50 KB to spare and stage 1 has
-13 KB, so BOOT_QSPI was not needed. The ROM part is not read in place: it is copied to SDRAM at
+section), and the main-loop-only code built `-Os`, stage 0 has 58 KB to spare and stage 1 has
+28 KB, so BOOT_QSPI was not needed. The ROM part is not read in place: it is copied to SDRAM at
 boot (~0.2 MB, a few ms). Nothing reads the QSPI afterwards, so the flash can be in its indirect
 (write) mode while the audio plays. The next levers, if stage 1 grows: the UI's help text and
 demo builders into the ROM part (a second section macro in the core, ~30 KB), the engine's
@@ -377,30 +470,40 @@ pins, the peripherals where the chip routes them.
 | POT1..POT4 (macros 1-4) | D15..D18 (A0..A3) | 22..25 | PC0, PA3, PB1, PA7 | 0 | ends to 3V3A / AGND |
 | BATTERY | D19 (A4) | 26 | PA6 | 1 | LiPo through a 100k / 100k divider |
 | SD D3, D2, D1, D0, CMD, CK | D1..D6 | 2..7 | PC11, PC10, PC9, PC8, PD2, PC12 | 1 | SDMMC1, 4-bit (Adafruit 4682) |
-| LCD CS, SCK, DC, MOSI | D7, D8, D9, D10 | 8, 9, 10, 11 | PG10, PG11, PB4, PB5 | 1 | SPI1 (TX only); DC on the MISO pin as a GPIO |
-| LCD BL | D27 | 34 | PG9 | 1 | GPIO, high = on (no PWM near the audio) |
-| I2C SCL, SDA | D11, D12 | 12, 13 | PB8, PB9 | 1 | I2C1: BMI270 (Qwiic), touch later |
-| TOUCH INT | D24 | 31 | PA1 | 1 | reserved |
+| LCD CS, SCK, DC, MOSI | D7, D8, D9, D10 | 8, 9, 10, 11 | PG10, PG11, PB4, PB5 | 1 | the 2090: SPI1 (TX only); DC on the MISO pin as a GPIO |
+| LCD BL | D27 | 34 | PG9 | 1 | the 2090's Lite: GPIO, high = on (no PWM near the audio) |
+| I2C SCL, SDA | D11, D12 | 12, 13 | PB8, PB9 | 1 | I2C1, 400 kHz: BMI270 (Qwiic, 0x68) and the 2090's FT6206 (0x38) |
+| TOUCH INT | D24 | 31 | PA1 | 1 | the 2090's IRQ: input with pull-up, only reported (polling works without it) |
 | G0 BUTTON | D25 | 32 | PA0 | 1 | pull-up, to ground when pressed |
-| AUDIO IN L / R | | 16 / 17 | codec | 1 | line in (the first recording path); later an analog MEMS capsule |
+| **PAD1..PAD4** (kick, snare, clap, closed hat) | **D20..D23 (A5..A8)** | **27..30** | PC1, PC4, PA5, PA4 | 1 | force sensors, each a divider with 10 k to AGND; ADC1 INP11, 4, 19, 18; sampled 32.5 cycles |
+| AUDIO IN L / R | | 16 / 17 | codec | 0 and 1 | line in: the first recording path (both stages); later an analog MEMS capsule |
 | AUDIO OUT L / R | | 18 / 19 | codec | 0 | line out |
-| free | D0, D13, D14, D20..D23 (A5..A8), D26, D28 (A11) | | | | for the undecided pads (force sensors through a multiplexer) and buttons |
+| free | D0, D13, D14 (I2C4), D26, D28 (A11) | 1, 14, 15, 33, 35 | | | more pads through a multiplexer, function buttons |
+
+Why A5..A8 for the pads: they are the four ADC pins left (A9 / A10 are the touch IRQ and G0, A11
+stays free for a multiplexer's common pin), all four on ADC1 (libDaisy's AdcHandle reads ADC1
+only; its pin table is checked by `test_daisy_core`), and next to each other on the header (pins
+27-30), beside 3V3A / AGND (pins 21 / 20). A7 / A8 (PA5 / PA4) are also the DAC's outputs:
+the firmware does not start the DAC.
 
 No key matrix is wired: the key layout is undecided (velocity-sensitive pads plus function buttons
 are being considered). The input layer stays general: everything becomes events into the core
-(`Hal::pollKey`, `Hal::pollPointer`).
+(`Hal::pollKey`, `Hal::pollPointer`, the pads' events).
 
 ## 9. How the firmware runs (no operating system)
 
 libDaisy is bare metal, so there are two contexts:
-- **The audio interrupt** (libDaisy's SAI DMA callback, every 2 ms): `App::render` runs the
-  engine, then the int16 → float conversion with the output level. It is the only code that
-  touches the engine.
+- **The audio interrupt** (libDaisy's SAI DMA callback, every 2 ms): `App::render` scans the
+  pads (four ADC values, a few microseconds), folds the codec's input block into the line-in
+  ring while a recording is armed, runs the engine, then the int16 → float conversion with the
+  output level. It is the only code that touches the engine. It also checks that
+  flush-to-zero / default-NaN are set in its FPSCR (section 11).
 - **The main loop**: `App::loopOnce` runs a cooperative scheduler (`daisy/core/scheduler.h`). Its
   tasks: `serial` (every pass: bytes in, transfer replies), `keys` (the key script, physical keys,
   tilt), `ui` (every 33 ms: `Ui::update`, the changed rows to the display and the mirror), `screen`
   (the mirror's lines as the transmit buffer has room), `store` (every 5 ms: one flash operation
-  for /int's snapshot or the pool's copy), `led`, `stats`, `pots` (every 10 ms). Each task is a
+  for /int's snapshot or the pool's copy; the pool's copy waits while a recording runs), `led`,
+  `stats`, `pots` (every 10 ms), `pads` (every pass: the pads' events to the engine). Each task is a
   state machine that returns quickly; the report lists each one's run time. The engine's command
   queue is the only path from here to the audio.
 
@@ -427,34 +530,236 @@ callbacks that began more than 1.5 periods after the previous one.
 ## 10. Stage 1: the breadboard prototype
 
 `make -C daisy STAGE=1` links the drivers (`daisy/src/stage1.cpp`). It is compile-checked, and
-the portable halves are host-tested. Nothing has run on hardware.
-- **Display**: not chosen yet. The likely first one is a 3.5" 480x320 HX8357D (Adafruit 5846,
-  with an FT5336 capacitive touch controller on I2C at 0x38); the 1.14" 240x135 ST7789 (Adafruit
-  6113, the Cardputer's panel) is the small fallback. `daisy/core/panel.h` keeps the panel
-  separate from the UI's 240x135 canvas: the controller, the panel's size, its RAM offsets and an
-  integer scale are configuration. 480x320 shows the UI pixel-doubled at 480x270 with 25 rows
-  spare above and below; 240x135 shows it at 1. The UI's dirty rows are what gets sent, as on the
-  Cardputer. The strip expander is the Cardputer's (palette lookup into byte-swapped RGB565,
-  double-buffered DMA), now a main-loop state machine. `test_daisy_panel` runs it against a
-  simulated controller: the panel ends up with the Cardputer path's pixels exactly, at both
-  scales. Default build: HX8357D (`-DPG_DAISY_PANEL_HX8357D=0` for the ST7789). Software reset
-  (neither board has a reset pin wired). The SPI bit rate (prescaler 8) and the HX8357D's
-  orientation byte are starting points, to be tuned on the panel. Touch: a `Hal::pollPointer`
-  hook exists; the UI takes keys only, so nothing uses it yet.
-- **Tilt**: a SparkFun BMI270 Qwiic board on I2C1 (D11 / D12), address 0x68 (0x69 with its jumper).
-  `daisy/core/bmi270.h` probes it, soft-resets it and uploads Bosch's 8 KB configuration file in
-  64-byte chunks across main-loop steps. It then waits for "init ok" and sets the Cardputer's
-  register values. `test_daisy_bmi270` runs it against a register model. Readings feed
-  `pg::tilt::Tracker` at 100 Hz while G0 is held, as on the Cardputer.
-- **G0**: a debounced GPIO (D25) producing the same key events as the Cardputer's G0.
+the portable halves are host-tested (`ctest -L daisy`: `test_daisy_panel`, `test_daisy_touch`,
+`test_daisy_pads`, `test_daisy_linein`, `test_daisy_bmi270`, and `test_daisy_stage1`, which runs
+the whole App with simulated pads, line input and touches). Nothing has run on hardware.
+
+**Wiring rules for every part below.** Unplug USB before changing wires. Everything runs from the
+Seed's 3.3 V (3V3D pin 38 for the boards, 3V3A pin 21 for the force sensors) and its grounds
+(DGND pin 40, AGND pin 20). **Nothing from the Labor's +-12 V rails touches any of it.** Join
+every board's GND to the Seed's DGND.
+
+### Display: Adafruit 2090 (2.8" 320x240, ILI9341, SPI)
+
+`daisy/core/panel.h`: `PanelConfig::ili9341_320x240()`, the stage 1 default (`PANEL=0`). The
+UI's 240x135 canvas is shown at scale 1, **centred: x 40..279, y 52..186**; `begin()` clears the
+whole panel to black once, so the border stays black, and after that only the rows the UI
+reports dirty are sent (as on the Cardputer: palette lookup into byte-swapped RGB565 strips,
+double-buffered DMA). The 320x240 redraw of the UI is not part of this work.
+
+The setup is Adafruit_ILI9341 1.7.0's (`initcmd[]`, fetched for reference 2026-11-14): software
+reset and 150 ms (the reset pin is not wired), its power / VCOM / frame rate / gamma table,
+then MADCTL, 16-bit pixels, sleep-out and 150 ms, display on and 150 ms. Orientation, from its
+`setRotation`: **MADCTL 0x28 = MV | BGR (its rotation 1, landscape)**, or **0xE8 = MY | MX | MV
+| BGR (rotation 3, turned over)**: `tools/pg-daisy cmd display turn` switches and saves it.
+Colour order: BGR, as Adafruit sets it for every rotation (the panel's filters are BGR, so our
+big-endian RGB565 shows the right colours with the BGR bit set). No inversion (unlike the
+Cardputer's IPS panel). SPI1's clock is 25 MHz (PLL2P, libDaisy's system.cpp), so the default
+prescaler 2 gives **12.5 MHz**: a full UI frame (240x135x2 bytes) is ~41 ms on the wire, a few
+changed rows well under 1 ms. The ILI9341's datasheet rates writes at 10 MHz (100 ns cycle);
+Adafruit's drivers run it at 24-40 MHz. On long breadboard wires: `cmd display spi 4` (6.25 MHz)
+or 8.
+
+**Wiring, the 2090's SPI-side header to the Seed:**
+
+| 2090 pin | to | Seed pin | Note |
+|---|---|---|---|
+| Vin | 3V3D | 38 | the board's regulator takes 3-5 V; at 3.3 V in it runs just below its regulation (the ILI9341 works at that) |
+| 3Vo | **leave unconnected** | | the board's own 3.3 V output |
+| GND | DGND | 40 | |
+| CLK | D8 (SPI1 SCK) | 9 | |
+| MOSI | D10 (SPI1 MOSI) | 11 | |
+| MISO | **leave unconnected** | | D9 (the MISO pin) is the D/C output: never wire the 2090's MISO to it |
+| CS | D7 | 8 | held low (the only device on the bus) |
+| D/C | D9 | 10 | |
+| RST | **leave unconnected** | | the board resets itself at power-on; the firmware sends a software reset |
+| Lite | D27 | 34 | high = backlight on (the board pulls it up anyway) |
+| SDCS / CCS (the card's CS) | **leave unconnected** | | its microSD slot is not used (the Adafruit 4682 on SDMMC is) |
+| Y+, X+, Y-, X- | **leave unconnected** | | resistive-touch pins, unused on the capacitive board |
+| SCL (touch) | D11 (I2C1 SCL) | 12 | shared with the BMI270 |
+| SDA (touch) | D12 (I2C1 SDA) | 13 | shared with the BMI270 |
+| IRQ (touch) | D24 | 31 | optional: reported only, polling works without it |
+| D0-D7, RD, WR, IM0-IM3 (the 8-bit side) | **leave unconnected** | | |
+| the EYESPI connector | not used | | same signals as the headers |
+
+**Before wiring: SPI mode.** The v2 breakouts ship in 8-bit parallel mode; SPI mode is set with
+the IM1 / IM2 / IM3 solder jumpers on the back (solder them closed). This is from memory of
+Adafruit's guide, which this sandbox could not reach: **check the guide's "Pinouts" / "SPI
+Wiring" page and the silkscreen** before soldering, and check where the capacitive touch's SDA /
+SCL / IRQ pins are on your revision (the EYESPI revision keeps the same headers).
+
+### Touch: the 2090's FT6206 (I2C1, 0x38)
+
+`daisy/core/touch.h`. Probe: vendor id (0xA8) 0x11 and chip id (0xA3) 0x06 / 0x36 / 0x64, as
+Adafruit_FT6206 1.1.1 checks; then the touch threshold (0x80) is set to 40, the value Adafruit's
+examples for this board use. Every 16 ms (~60 Hz) one 15-byte read of 0x00..0x0E (~0.4 ms at
+400 kHz) is parsed as Adafruit's `readData` does (TD_STATUS, per point XH/XL/YH/YL, the event
+flag and the touch id); the first point becomes down / move / up events. No answer: `NOT FOUND`,
+probed again every 2 s (a NAK costs microseconds). Three failed reads: `LOST`, an up event, probed
+again. The IRQ pin (low while touched) is only shown in the report.
+
+Coordinates: the FT6206 reports in the panel's native portrait frame (x 0..239, y 0..319). At
+rotation 1 (MADCTL 0x28) the landscape panel point is **x = 319 - ty, y = tx**, as Adafruit's
+CapTouch_onoffbutton example maps it at rotation 1 (`x = 320 - p.y, y = p.x` after its flips);
+at 0xE8, x = ty, y = 239 - tx. Then the canvas: (x - 40, y - 52) at scale 1; a touch on the
+border lands outside 0..239 x 0..134. `Hal::Pointer` carries the canvas point and the raw one.
+If the owner finds the axes wrong, `cmd touch map N` picks one of the eight orientations (bit 0
+swap, bit 1 mirror x, bit 2 mirror y; 3 is the default, 5 turned over). The UI does not take
+pointer events yet: the report's `[touch]` line has present or not, chip, IRQ, the touch count,
+the last point (canvas and raw), reads and errors; the mirror gets `~PGT` lines (section 6).
+
+**Both on one bus with the BMI270** (`daisy/core/i2c_bus.h`). The drivers are main-loop state
+machines, one blocking transaction at a time (3 ms timeout; the longest is a 64-byte BMI270
+chunk, ~1.7 ms), so they never overlap. A missing device NAKs at once. A stuck bus (SDA held
+low, or no pull-ups at all: the STM32 HAL then waits up to 25 ms for the busy flag on every
+call) is caught by a guard: the first slow failure holds every call for 1 s, failing at once, so
+the main loop loses at most one timeout per second. The `[i2c]` line says whether it is held.
+Pull-ups: libDaisy sets none on the pins. The SparkFun Qwiic board and the 2090 bring their own
+(values not verified here); with neither connected the bus reads as held, which is harmless.
+
+### Force-sensor pads: four Adafruit 1075 (Alpha MF02A-N-221-A01)
+
+**Wiring**, the same for each pad (pad 1 = A5 / pin 27 kick, pad 2 = A6 / pin 28 snare, pad 3 =
+A7 / pin 29 clap, pad 4 = A8 / pin 30 closed hat):
+
+```
+  Seed 3V3A (pin 21) ----+---- FSR ----+---- Seed A5 (pin 27)      (A6 / A7 / A8 for pads 2-4)
+                         |             |
+                   (the other pads)  10 k
+                                       |
+  Seed AGND (pin 20) ------------------+                           (optional: 10 nF from the
+                                                                    ADC pin to AGND, see below)
+```
+
+An FSR has two legs, either way round. Wire the 10 k to AGND for every pad **even before its
+sensor is there**: a pin left open floats and plays random notes (a pad that is not wired at all
+can be switched off: `cmd pad 4 off`). Do not solder to the FSR's legs (the plastic melts):
+use a breadboard, female jumpers or Adafruit's clincher connectors.
+
+**What the ADC sees.** The divider gives x = V / 3.3 = 10 k / (10 k + R_fsr). An FSR's conductance
+is roughly proportional to force, so `daisy/core/pads.h` turns each reading into conductance,
+**G = 100 uS * x / (1 - x)**, and works only in that (linear in force, where the divider voltage
+bends towards 3.3 V). At rest (> 1 M) G < 1 uS; 100 k is 10 uS; 10 k is 100 uS; 1 k is 1000 uS.
+
+**The scan.** Once per audio block, **500 Hz (every 2.0 ms), in the audio interrupt**, so the
+interval never jitters with the main loop. The ADC converts continuously (DMA, oversampling 32,
+16 bits); with the pads sampled 32.5 cycles each the nine channels take about 8,000 ADC cycles
+per sweep, 0.65 ms at libDaisy's 12.3 MHz ADC clock (1.3 ms if the chip halves it again
+internally): computed, not measured. Under the 2 ms scan, so every scan sees a fresh value.
+The pads' sampling time is longer than the pots' (8.5 cycles) because the divider's 10 k is a
+high source impedance for the ADC: with too short a sampling time the previous channel's
+charge leaks into the reading, which looks like crosstalk between pads. If the `[pads]` line
+still shows one pad moving with another, a 10 nF ceramic capacitor from each pad's ADC pin to
+AGND fixes it (10 k x 10 nF = 0.1 ms: fast enough for the velocity).
+
+**A hit** (per pad, `daisy/core/pads.cpp`):
+- **Onset**: the first scan with G at or above the pad's **threshold** (default 10 uS).
+- **Velocity window**: that scan and the next (**2 scans: the note is decided 2.0 ms after the
+  onset scan**, from 2-4 ms of force history). Velocity = the fastest rise seen in the window
+  (the onset scan's rise counted from the threshold), scaled so that rising the whole span,
+  threshold to **ceiling** (default 1000 uS), within the window is 1.0; then the pad's **curve**
+  (velocity^curve, default 1). A slope, not a level: where the crossing fell between two scans
+  does not change it (the test moves a hit by 0.5 ms steps: the same velocity). Reaching the
+  ceiling ends the window at once (velocity 1). Falling below the release level inside the
+  window is a blip (noise, a spike): no note.
+- **Held**: the note plays; **pressure** 0..1 = (G - threshold) / (ceiling - threshold) follows
+  as events when it moves by 1/128.
+- **Release**: below **60 % of the threshold** (hysteresis) for **2 scans in a row** (4 ms). A
+  one-scan bounce does not end the note, so it cannot double-trigger.
+- **Crosstalk**: when a pad's window ends, a pad whose velocity is below **0.4 x** that of a
+  neighbour hit within **5 scans (10 ms)** is a ghost and plays nothing. A hard hit leaks part of
+  its force into the next pads (through the board, and through the ADC); a flam across two pads
+  hit about as hard plays both, a soft hit 40 ms after a hard one plays.
+
+**Latency, touch to note (estimated from the design, not measured):** the crossing is seen 0-2 ms
+after it happens, the note is decided 2 ms later, the main loop posts it to the engine (within
+one pass: normally well under 1 ms) and the engine plays it in the next block, which the codec
+outputs one block later: **6-8 ms from the force crossing the threshold to sound** (velocity
+window 2 ms + 0-2 ms scan phase + 4 ms of engine and output buffering). Two things can make it
+worse: a long main-loop pass (a UI frame, a QSPI erase of tens of milliseconds while /int is
+saved; the pool's copy waits during a recording) delays the post, and a window of 3 or 4 scans
+(`cmd pads window N`) adds 2 ms each. A seam in the core would take 2 ms and the main-loop risk
+away (section 14).
+
+**Calibration**, per pad: threshold (uS), ceiling (uS), curve, on/off; global: window, release
+scans, hysteresis, crosstalk ratio and time. `cmd pad N thr .. ceil .. curve ..`, `cmd pads ...`
+(section 6); saved at once in `/int/pg/daisy.cfg` with the Daisy's other settings (display
+orientation, SPI speed, touch map), which goes into /int's flash snapshots with the UI's own
+settings. `tools/pg-daisy pads` prints every 100 ms, per pad: the raw reading x, G in uS, the
+peak since the last line, the pressure, the state, the last velocity: enough to choose a
+threshold (above the idle value, below a light touch) and a ceiling (about the G of a hard hit).
+
+**What it plays (today):** each pad one drum track (kick, snare, clap, closed hat) through the
+engine's live NoteOn (note 60, velocity 1..127), as the UI's own pads do; a release sends the
+NoteOff; pressure goes nowhere yet. All of that is one function, `App::padEvent`
+(`daisy/app/app.cpp`), to be switched to the core's platform-neutral pad API (pad down with
+velocity, pad pressure, pad up) once that branch is merged. Until then the selected track does
+not follow a pad, and a note recorded into a playing pattern gets no undo snapshot. Today's
+drum voices may use the velocity only as far as the engine already does (the core's per-note
+velocity is the other branch's work).
+
+### Line in: the first recording path
+
+`daisy/core/line_mic.h`: a `pg::sampler::MicInput` over the codec's stereo input, in both stages
+(the input is on every Seed). The gesture is the Cardputer's: **hold L on a sampler page** (over
+serial `>down l`, `>up l`); the same Recorder (the room's level, threshold start with 40 ms of
+pre-roll, the last 60 ms dropped, the playback gain), into the track's pool slot through pg's
+SampleWriter. On the Daisy that writes the SDRAM image at once; the QSPI copy follows in the
+background after the recording (it waits while one runs), so **the sample survives a restart**
+(`test_daisy_stage1` and `tools/test_pg_daisy.py` reboot and find it).
+
+- **48 kHz in, 48 kHz stored** (`recRatesFor(48000, kPoolRate)`, no filter). A slot holds
+  137,216 samples: **2.86 s at 48 kHz** (the Cardputer's 22,050 Hz slot holds 6.22 s). The slot's
+  header says 48,000 Hz, so the voices play it at its pitch.
+- **Mono**: the core's recorder takes mono. The fold-down is **(L + R) / 2, unless the right
+  input is silent: then L alone.** Silent means every sample of a block below -60 dBFS, what a
+  mono (TS) plug or a right input tied to AGND gives. Why: a stereo source keeps both sides in
+  the sum; a mono source on L alone would lose 6 dB in a sum and gain the right input's noise. A
+  right input left open on a breadboard picks up hum and is not silent: for a mono source tie pin
+  17 to AGND. The choice is made per recording and frozen once the recording starts, so a sample
+  never changes level half-way. The report's `[linein]` lines say which it was and give both
+  input peaks.
+- The input runs in the audio interrupt into a 1.37 s ring in SDRAM; the main loop feeds the
+  recorder every UI frame. A stall longer than the ring is counted (`ring overruns`).
+- **The core's `SampleWriter::commitRecording` writes the header at 22,050 Hz** whatever was
+  recorded (shown in `test_daisy_linein`): a 48 kHz recording would play 2.2x too slow. So
+  `LineMic::commitAt` makes the same commit with the rate (the same CRC checks through the
+  driver and the mapping, the same playback gain, the header read back) and lets the writer go
+  with `cancel()`. A seam in the core would remove this (section 14).
+
+**Wiring:** source left to Seed pin 16 (AUDIO IN L), right to pin 17 (AUDIO IN R), the source's
+ground to AGND (pin 20). A mono source: into pin 16, and pin 17 to AGND. A 3.5 mm jack breakout:
+tip = L, ring = R, sleeve = ground. Start with the source's volume at about half.
+
+**Levels.** libDaisy says only that the inputs take "typically a line level signal" (its
+Getting-Started-Audio doc) and does nothing to the codec but reset it (no gain set over I2C, its
+postgain is 1). TI's TAC5242 datasheet (SLASF27A) gives the ADC's full scale as **1 Vrms
+single-ended** (2 Vrms differential) for AC-coupled inputs at 3.3 V AVDD, i.e. about 2.8 V peak
+to peak single-ended. How the Seed3 routes its input pins to the codec (single-ended or
+differential, any attenuation or coupling on the board) is not in libDaisy and has not been
+verified. Consumer line level (-10 dBV, ~0.32 Vrms) and a phone's headphone output fit well;
+pro line level (+4 dBu, ~1.23 Vrms) can clip at the loudest. **Never Eurorack levels: a module
+puts out up to +-10 V (about 20 V peak to peak), seven times the full scale; it clips hard and
+can damage the codec's input. The Labor's outputs are Eurorack level: do not wire them to pins
+16 / 17** without an attenuator (for example 10 k in series and 1 k to AGND per channel: +-10 V
+becomes about +-0.9 V, inside the 1.4 V peak of full scale) and only after checking its levels
+on the Labor Scope.
+
+### Tilt, G0, microSD, battery
+
+- **Tilt**: a SparkFun BMI270 Qwiic board on I2C1 (D11 / D12) with the touch, address 0x68 (0x69
+  with its jumper). `daisy/core/bmi270.h` probes it, soft-resets it and uploads Bosch's 8 KB
+  configuration file in 64-byte chunks across main-loop steps. It then waits for "init ok" and
+  sets the Cardputer's register values. `test_daisy_bmi270` runs it against a register model.
+  Readings feed `pg::tilt::Tracker` at 100 Hz while G0 is held, as on the Cardputer. Qwiic
+  wiring: black GND to DGND (40), red 3.3V to 3V3D (38), blue SDA to D12 (pin 13), yellow SCL to
+  D11 (pin 12). (A BMI270 that is not found at boot is not probed again: power-cycle.)
+- **G0**: a debounced GPIO (D25, pin 32) to ground through a push button, producing the same key
+  events as the Cardputer's G0.
 - **microSD** (Adafruit 4682, SDMMC, 4-bit, 25 MHz): libDaisy's SdmmcHandler and FatFS behind a
   `pg::FileSystem` (/sd). The card is mounted at boot, with a retry every 10 s. FatFs cannot
   replace a file on rename, so the target is removed first; pg::io's power-loss recovery covers
   that gap, as it does for the Cardputer's FAT card.
-- **Recording**: the first path is line in through the codec's stereo input (pins 16 / 17); an
-  analog MEMS capsule with fixed gain is to be chosen. **Not built yet.** The audio callback
-  already hands its input block to `stage1::audioInput`. What is missing is the ring it would
-  fill, plus a `pg::sampler::MicInput` over pg's Recorder (48 kHz in, `recRatesFor(48000, ...)`).
 - **Battery**: A4 through a divider. **Pots** stay as in stage 0.
 
 ## 11. Audio load (an ESTIMATE, not a measurement)
@@ -489,9 +794,17 @@ What could make it worse:
   so they take what the audio leaves: a heavy audio load slows the UI, not the reverse. The
   exception is interrupts at the audio's priority (USB, SPI DMA), which add their own length to a
   callback's start.
-- Denormals: the FX tails decaying in silence produced subnormal floats on the host. The M7's FPU
-  handles them in hardware, and libDaisy's system code does not touch FPSCR (no flush-to-zero
-  set there); the cost on the M7 is unmeasured.
+- **Denormals (checked and changed 2026-11-14).** The FX tails decaying in silence produced
+  subnormal floats on the host. libDaisy does not touch FPSCR anywhere (its only FPU code is
+  `SystemInit`'s CP10/CP11 enable, which a `BOOT_APP` build skips), so the firmware ran with
+  flush-to-zero off. It now **sets FZ (bit 24) and DN (default NaN, bit 25)** in the preinit hook
+  (`daisy/src/memory.cpp`), before any constructor: in FPSCR (the main loop) and in FPU->FPDSCR,
+  the value the core gives an interrupt handler's FPSCR, so the audio callback gets them too. The
+  same hook enables CP10/CP11 again (harmless if the bootloader did). The audio callback reads its
+  own FPSCR, sets FZ / DN if they are missing and counts it; the report's `[fpu]` line shows the
+  main loop's, the callback's and FPDSCR, so the first power-on proves it. Effect on the sound:
+  values below 1.2e-38 become 0, about -750 dBFS. The M7 handles subnormals in hardware without a
+  trap, so the speed gain is likely small; the point is that both contexts compute the same way.
 
 ## 12. What is verified, what only the hardware can show
 
@@ -509,13 +822,29 @@ Verified here (sandbox, no hardware):
 - On the host: everything in section 9, the display path, the BMI270 driver, and the App itself
   (`tools/test_pg_daisy.py` against `daisy_sim`: report, keys, screen, scripts, project and
   sample transfer, /int and the pool surviving a restart).
+- Stage 1's portable halves (2026-11-14), on the host: the ILI9341 setup sequence and the
+  centred, dirty-row picture against a simulated controller (`test_daisy_panel`); the FT6206's
+  register parsing, probe, events, loss and return, the coordinate mapping for both rotations,
+  and the I2C guard on a stuck bus shared with the BMI270 (`test_daisy_touch`); the pad scanner
+  on synthetic force curves: soft and hard hits, the crossing's phase, a slow press, hover and
+  bounce, noise and spikes, flams, crosstalk, calibration, the settings file (`test_daisy_pads`);
+  line-in recording through the Daisy's pool: the fold-down cases, 48 kHz headers, cancel,
+  overrun, the mirror's flash copy read back (`test_daisy_linein`); the whole App with all of
+  it, recording by the UI's gesture over serial and finding it after a reboot, a pad hit
+  playing a note, settings surviving a reboot, touches to the mirror (`test_daisy_stage1`);
+  and `daisy_sim --line-in mono` with `tools/test_pg_daisy.py` (record, restart, `tools/pg
+  sample get` returns REC01).
+- The 2090's init values and orientations against Adafruit_ILI9341 1.7.0 and
+  Adafruit_FT6206 1.1.1 (read, not run). The TAC5242's input full scale from TI's datasheet
+  (search results quoting SLASF27A; the PDF itself was not opened here).
 - The Cardputer firmware and the host build are untouched and pass (`docs/STATE.md`).
 
 Only the hardware can show: that the board boots (clocks, SDRAM, QSPI init in BOOT_SRAM), that
 the TAC5242 plays with libDaisy's reset-only codec setup, the real audio load, USB CDC on a Mac
 (enumeration, throughput, no lost bytes), QSPI erase/write timing and its effect on the main
-loop, the ADC's pots (noise, range), the LED patterns, stage 1's panel, card, IMU and timing,
-and any interrupt-priority effects.
+loop, the ADC's pots (noise, range), the LED patterns, stage 1's panel, touch, card, IMU and
+timing, the force sensors' real curves and the pads' latency, the line input's level and noise,
+the [fpu] line, and any interrupt-priority effects.
 
 ## 13. libDaisy facts relied on, and assumptions not verified
 
@@ -542,6 +871,18 @@ Read in libDaisy's source at 1289a00:
 - `HardFault_Handler` stops at a breakpoint (a lockup without a debugger), so ours replaces the
   fault vectors in the RAM vector table.
 - SPI DMA does no cache maintenance; I2C takes 7-bit addresses; `FatFSInterface` uses "0:/".
+- Clocks (`src/sys/system.cpp`): SPI1/2/3's kernel clock is PLL2P = 25 MHz (HSE 16 MHz, M 1,
+  N 12 + 4096/8192, P 8), so SPI prescaler 2 = 12.5 MHz; the ADC's is PLL3R = 24.6 MHz, with
+  libDaisy's ASYNC_DIV2.
+- ADC (`src/per/adc.cpp`): ADC1 only, 16 bits, oversampling 32 by default, continuous DMA
+  (circular) when no multiplexer is used; `GetFloat` reads the latest value from the DMA buffer;
+  sampling time per channel (`InitSingle`'s ConversionSpeed, default 8.5 cycles). The pins it
+  can read are its own table of 16 (ADC1 INP3-INP19 without INP6), copied into `pins.h`
+  `kAdc1Pins` and checked against the pin map by `test_daisy_core`.
+- I2C (`src/per/i2c.cpp`): blocking HAL calls with the caller's timeout, after an unbounded wait
+  for the handle to be READY; the pins are open drain with **no pull-ups**.
+- Audio: the Seed's `postgain` is 1; nothing sets the codec's input gain (no I2C setup).
+- FPSCR / FPDSCR: not written anywhere in libDaisy; CPACR only in `SystemInit` (skipped).
 - libdaisy.a is built **without** `-fshort-enums`, while libDaisy's `core/Makefile` builds apps
   **with** it. Plain enums in libDaisy's config structs (e.g. `QSPIHandle::Config`) then differ
   in size between an app and the library. This build leaves `-fshort-enums` out to match the
@@ -560,13 +901,34 @@ Not verifiable from the source (assumptions):
 - RAM D3 is not touched by the bootloader between runs (the fault record lives there; it has a
   magic and a check word, so garbage is ignored).
 - The ST7789 offsets on the 6113 (assumed the Cardputer's 40 / 53), the HX8357D's MADCTL for
-  landscape, and the SPI1 kernel clock (and so the real bit rate).
+  landscape.
+- The 2090: that its IM1-IM3 jumpers select SPI as remembered, where its touch pins are on the
+  EYESPI revision, its I2C pull-ups, that it runs from 3.3 V on Vin, its backlight current from
+  3V3D. That the FT6206's coordinates follow Adafruit's rotation-1 example on this board
+  (`touch map N` corrects it without a new build).
+- The force sensors' range on the Alpha MF02A (thresholds and ceiling are starting values), and
+  the ADC's settling with a 10 k source at 32.5 cycles.
+- How the Seed3 routes its audio inputs to the TAC5242 (single-ended or differential, coupling,
+  any attenuation) and so the real input level.
 - That the Daisy's CDC enumerates on macOS without a driver. It is a standard CDC ACM device,
   which macOS supports natively.
 
 ## 14. Seams in the core, risks, licences
 
-Seams in the core (none were needed for this work; these would help later):
+Seams in the core wanted by stage 1 (not made: lib/pg is another branch's; worked around here):
+- **`SampleWriter::commitRecording(samples, name, rate)`**: today it writes the header at
+  kPoolRate (22,050) whatever was recorded, so a 48 kHz recording would play 2.2x slow.
+  `LineMic::commitAt` repeats its steps with the rate; with the parameter that copy goes away.
+- **An engine command path the audio interrupt can use** (a second single-producer queue the
+  engine drains at the start of `process`, or `Engine::postFromAudio`). The pads are scanned in
+  the interrupt, but their notes go through the main loop to `Engine::post` (the queue has one
+  producer). With it, a pad's note would play in the same block it is decided in: 2 ms less
+  latency (4-6 ms instead of 6-8), and no main-loop stall (a UI frame, a QSPI erase) could delay
+  a note.
+- **The platform-neutral pad API in the UI** (being added on another branch): `App::padEvent` is
+  the one function to switch over.
+
+Seams in the core (none were needed for stage 0; these would help later):
 - **A float output from the engine** (`Engine::process(float*, ...)`). The engine's output is
   int16, so the 24-bit codec gets 16-bit audio (with dither or truncation as the master does). A
   float path would also save the conversion.
@@ -574,7 +936,8 @@ Seams in the core (none were needed for this work; these would help later):
   builders' data 16 KB), to move them into the ROM part if stage 1 needs room.
 - **XferEnv: "flash writes do not stall"**. Samples and projects could then be put while the
   transport plays on a platform where that is true (the Daisy); today pg refuses with ERR PLAYING.
-- **Pointer events in the UI** for a touch panel (the Hal has the hook).
+- **Pointer events in the UI** for a touch panel (the Hal delivers them now: `Hal::Pointer`,
+  canvas coordinates).
 
 Risks for the first power-on, most likely first:
 1. **The firmware does not get as far as USB** (LED steady, no serial port). Causes:
@@ -595,8 +958,33 @@ Risks for the first power-on, most likely first:
    slot pre-wired to a rail. Section 4's rules and checking the silkscreen first cover this.
 7. **dfu-util's DFU mode detection** in the script: the libDaisy commands work without it.
 
+Stage 1's risks, most likely first:
+1. **The 2090 shows nothing (white)**: the SPI-mode jumpers not closed, MISO wired to D9, or
+   the wrong header side. The firmware cannot tell: it only writes. Section 5 step 11.
+2. **The touch axes mirrored or swapped**: the mapping is from Adafruit's example, not tried
+   on this board. `cmd touch map N` fixes it without a build.
+3. **The force sensors' numbers**: threshold 10 uS, ceiling 1000 uS, the 4 ms window and the
+   crosstalk ratio are guesses from the FSR family, not this part. Expect to tune them with
+   `tools/pg-daisy pads` (section 10); a floating pad pin plays random notes.
+4. **The I2C bus** without pull-ups, or with a device holding it: `[i2c]` says "IS HELD".
+5. **The line-in level**: unknown board routing; start with the source at half volume.
+6. **The panel's SPI speed** on breadboard wires at 12.5 MHz: `cmd display spi 4`.
+7. **Pad latency in practice**: a long main-loop pass delays a note (the report's `[main]
+   longest pass`); the engine seam above removes that.
+
 Licences: libDaisy (MIT) is fetched, not copied; the linker script is derived from libDaisy's
 VisualGDB-generated script (BSD). Bosch's BMI270 configuration file (BSD-3-Clause) is extracted
 by `tools/daisy-setup.sh` into `daisy/vendor/` with its notice (`daisy/vendor/BMI270_LICENSE`).
 A distributed firmware binary that contains it must carry that notice. It is the same 8192
 bytes M5Unified uploads on the Cardputer, compared byte for byte.
+
+Adafruit: Adafruit_ILI9341 1.7.0 and Adafruit_FT6206_Library 1.1.1 were fetched for reference
+only (not into the repository). No code was copied. Two things were taken from them as data,
+recorded here: the ILI9341 setup table (`daisy/core/panel.cpp kIliInit`: the commands and their
+parameter bytes from its `initcmd[]`, which are the panel vendor's register values) and the
+FT6206's register addresses, ids and threshold (`daisy/core/touch.cpp`). Adafruit_ILI9341's source
+header says "BSD license, all text here must be included in any redistribution" and its README
+says MIT; Adafruit_FT6206 is MIT. Both are written by Limor Fried / Ladyada for Adafruit
+Industries. If the table is treated as copyrightable, the notice to carry is Adafruit's: "Written
+by Limor "ladyada" Fried for Adafruit Industries. BSD license, all text here must be included in
+any redistribution."
