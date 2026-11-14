@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The computer side of the Daisy target against the firmware's own App code
 (host/daisy/daisy_sim on a pseudo-terminal): tools/pg-daisy (keys, report, screen,
-key scripts) and tools/pg (projects and samples over the same port), and /int and the
-sample pool surviving a restart through the simulated QSPI flash.
+key scripts, pads hit from the computer) and tools/pg (projects and samples over the
+same port), and /int and the sample pool surviving a restart through the simulated
+QSPI flash.
 
     python3 tools/test_pg_daisy.py --sim build/host/daisy/daisy_sim
 
@@ -10,6 +11,7 @@ Exit 77 (skipped) without pyserial.
 """
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -219,6 +221,99 @@ class DaisyTest(unittest.TestCase):
             data, name = pg.get_sample(l, 1)
             self.assertEqual(name, "REC01")
             self.assertGreater(len(data), 48000 // 2)
+
+
+class PadTest(unittest.TestCase):
+    """Pads without sensors: ">hit" (tools/pg-daisy pad) through App::padEvent into the
+    core's pad API, on PERC set to TAP (`vel HIT 0.5`, `press PRESS fast`)."""
+
+    def setUp(self):
+        self.s = Sim()
+        self.dev = pg_daisy.Device(self.s.port)
+
+    def tearDown(self):
+        self.dev.close()
+        self.s.stop()
+
+    def peak(self):
+        """The output's peak since the last report (the report's [audio] window line)."""
+        self.dev.send("r")
+        for line in self.dev.lines(5.0):
+            m = re.search(r"output peak (\d+)", line)
+            if m:
+                self.dev.pump(0.2)   # the rest of the report
+                return int(m.group(1))
+        self.fail("no output peak in the report")
+
+    def test_pads_from_the_computer(self):
+        dev = self.dev
+        p = dev.pads()
+        self.assertEqual(p["job"], "drums")
+        self.assertEqual([p[i]["track"] for i in (1, 2, 3, 4)], ["KICK", "SNAR", "CHH", "PERC"])
+        # PERC selected silently, its SOUND page, its instrument stepped to TAP
+        for k in ("down sft", "tap h", "up sft", "tap 9"):
+            dev.key(k)
+        self.assertTrue(dev.sync("perc"))
+        for _ in range(10):
+            if dev.pads()[4]["inst"] == "TAP":
+                break
+            dev.key("tap .")
+            dev.pump(0.3)
+        p = dev.pads()[4]
+        self.assertEqual(p["inst"], "TAP")
+        base = p["heard"]
+        # velocity: a soft and a hard hit; TAP's vel line moves HIT (macro 1) for the note,
+        # below its base under velocity 100, above it over; the hard one is louder
+        heard, peaks = {}, {}
+        for vel in (0.3, 1.0):
+            dev.pump(0.6)                      # what rang before has died away
+            self.peak()                        # the window starts now
+            self.assertEqual(pg_daisy.hit(dev, 4, vel, 80), [])
+            heard[vel] = dev.pads()[4]["heard"][0]
+            dev.pump(0.4)
+            peaks[vel] = self.peak()
+        print("\n  TAP HIT base %d, heard at velocity 0.3: %d, at 1.0: %d; output peak %d / %d" % (
+            base[0], heard[0.3], heard[1.0], peaks[0.3], peaks[1.0]))
+        self.assertLess(heard[0.3], base[0])
+        self.assertGreater(heard[1.0], base[0])
+        self.assertGreater(peaks[1.0], peaks[0.3])
+        self.assertGreater(peaks[0.3], 0)
+        # pressure: a held pad squeezed moves PRESS (macro 2), the release brings it back
+        pg_daisy.hit(dev, 4, 0.8, 0, press=1.0)
+        dev.pump(0.1)
+        held = dev.pads()[4]
+        self.assertTrue(held["held"])
+        self.assertEqual(held["press"], (1, 160))      # TAP: press PRESS fast, the full range
+        self.assertGreater(held["heard"][1], base[1])
+        dev.key("hit 4 press 0.3")
+        dev.pump(0.1)
+        softer = dev.pads()[4]
+        self.assertTrue(0 < softer["press"][1] < 160)
+        dev.key("hit 4 up")
+        dev.pump(0.4)                                  # the glide back (120 ms)
+        after = dev.pads()[4]
+        self.assertFalse(after["held"])
+        self.assertEqual(after["press"], (-1, 0))
+        self.assertEqual(after["heard"][1], base[1])
+        # the pads' job: the desktop's key, then the command; the CLI's pad
+        dev.key("tap padjob")
+        dev.pump(0.2)
+        p = dev.pads()
+        self.assertEqual(p["job"], "notes")
+        self.assertEqual({p[i]["track"] for i in (1, 2, 3, 4)}, {"PERC"})   # the selected track
+        self.assertEqual(len({p[i]["note"] for i in (1, 2, 3, 4)}), 4)      # up the scale
+        dev.ask("pads job drums")
+        self.assertEqual(dev.pads()["job"], "drums")
+        dev.close()
+        out = subprocess.run([sys.executable, os.path.join(HERE, "pg_daisy.py"), "--port", self.s.port, "pad", "1",
+                              "0.786", "hold", "150"], capture_output=True, text=True, timeout=30).stdout
+        self.dev = pg_daisy.Device(self.s.port)
+        self.assertIn("held   pad 1 (job drums) plays KICK note 60", out)
+        self.assertIn("HELD", out)
+        self.assertIn("after  pad 1", out)
+        self.assertIn("last hit pad 1 velocity 0.79 = 100", "\n".join(self.dev.ask("pads")))
+        # nonsense is refused, nothing plays
+        self.assertTrue(any(l.startswith("[pads] ?") for l in self.dev.ask("hit 17 0.5")))
 
 
 def main():

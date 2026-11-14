@@ -20,11 +20,21 @@
     tools/pg-daisy bootloader          restart into the Daisy bootloader (to flash)
     tools/pg-daisy pads [MS]           stage 1's force-sensor pads while you press them:
                                        a [pads] line every MS (default 100: raw readings,
-                                       conductance, peaks, pressure, state, velocity);
-                                       Ctrl-C ends. Then tune with cmd (below)
+                                       conductance, peaks, pressure, state, velocity
+                                       and the note velocity it makes); Ctrl-C ends.
+                                       Then tune with cmd (below)
+    tools/pg-daisy pad N VEL [hold MS] [press P]
+                                       hit pad N (1..16) from the computer, no sensor
+                                       needed: velocity VEL 0..1 (0.786 = note velocity
+                                       100), released after MS (default 100), pressure
+                                       P 0..1 while held; prints what the pad plays
+                                       and what the engine hears while held and after.
+                                       The same path as a sensor's hit (App::padEvent)
     tools/pg-daisy cmd WORDS...        one '>' command, its answer printed, e.g.
                                        cmd pad 1 thr 15 ceil 600 / cmd pads / cmd display turn
                                        / cmd touch 120 67 (a touch at canvas 120, 67)
+                                       / cmd pads job notes (the pads' job: drums or notes;
+                                       also the key padjob: tap padjob)
 
 In the mirror window a touch on the device's screen (stage 1's FT6206) shows as a
 red dot, from the "~PGT" lines the device sends while the mirror is on.
@@ -39,6 +49,7 @@ back as "~PGF" lines (daisy/core/fb_stream.h). The port is found by USB id (libD
 import argparse
 import base64
 import os
+import re
 import struct
 import sys
 import time
@@ -141,6 +152,23 @@ class Device:
         self.key("sync %s" % tag)
         return self.wait_for(lambda l: l.strip() == "[key] sync %s" % tag, seconds) is not None
 
+    def ask(self, cmd, seconds=5.0):
+        """One '>' command; the lines it printed (everything before its sync)."""
+        tag = "ask%d" % int(time.time() * 1000 % 100000)
+        self.key(cmd)
+        self.key("sync %s" % tag)
+        out = []
+        for line in self.lines(seconds):
+            if line.strip() == "[key] sync %s" % tag:
+                return out
+            out.append(line)
+        return out
+
+    def pads(self):
+        """What the pads play now (">pads"): {"job": ..., pad number: {"track", "note",
+        "inst", "held", "heard": [4], "press": (macro, offset)}}."""
+        return parse_pads(self.ask("pads"))
+
     def shot(self, name="frame", seconds=5.0):
         before = self.frames
         self.key("shot %s" % name)
@@ -148,6 +176,34 @@ class Device:
         while time.time() < end and self.frames == before:
             self.pump(0.05)
         return self.frames > before
+
+
+PAD_LINE = re.compile(r"\[pads\] (\d+) plays (\S+) note (\d+) \((\S+)\)( HELD)? heard (\d+) (\d+) (\d+) (\d+) "
+                      r"press (-?\d+) ([+-]\d+)")
+
+
+def parse_pads(lines):
+    out = {}
+    for line in lines:
+        m = re.match(r"\[pads\] job (\w+);", line)
+        if m:
+            out["job"] = m.group(1)
+            continue
+        m = PAD_LINE.match(line)
+        if m:
+            out[int(m.group(1))] = {"track": m.group(2), "note": int(m.group(3)), "inst": m.group(4),
+                                    "held": bool(m.group(5)), "heard": [int(m.group(i)) for i in range(6, 10)],
+                                    "press": (int(m.group(10)), int(m.group(11)))}
+    return out
+
+
+def hit(dev, pad, vel, hold=100, press=None):
+    """Pad `pad` (1..16) hit from the computer (">hit"): velocity 0..1, released after
+    hold ms (0: held until ">hit N up"), pressure 0..1 while held."""
+    cmd = "hit %d %s hold %d" % (pad, vel, hold)
+    if press is not None:
+        cmd += " press %s" % press
+    return dev.ask(cmd)
 
 
 def rgb(c):
@@ -403,6 +459,34 @@ def main(argv=None):
             finally:
                 dev.key("pads watch off")
                 dev.pump(0.1)
+        elif c == "pad":
+            usage = "pg-daisy: pad N VEL [hold MS] [press P]   (N 1..16, VEL and P 0..1)"
+            try:
+                pad, vel = int(a.args[0]), float(a.args[1])
+                opts = dict(zip(a.args[2::2], a.args[3::2]))
+                if len(a.args) % 2 or set(opts) - {"hold", "press"}:
+                    raise ValueError
+                hold = int(opts.get("hold", 100))
+                press = float(opts["press"]) if "press" in opts else None
+            except (IndexError, ValueError):
+                print(usage)
+                return 2
+            for line in hit(dev, pad, vel, hold, press):
+                if line.startswith("[pads] ?"):
+                    print(line)
+                    return 2
+
+            def show(when):
+                p = dev.pads()
+                if pad in p:
+                    d = p[pad]
+                    print("%-6s pad %d (job %s) plays %s note %d (%s)%s: heard %s, press macro %d %+d" % (
+                        when, pad, p.get("job", "?"), d["track"], d["note"], d["inst"], " HELD" if d["held"] else "",
+                        " ".join(str(v) for v in d["heard"]), d["press"][0], d["press"][1]))
+            show("held")   # the round trip is about a UI frame: the engine's status has the hit
+            if hold > 0:
+                dev.pump(hold / 1000.0 + 0.2)
+                show("after")
         elif c == "cmd":
             if not a.args:
                 print("pg-daisy: cmd needs words, e.g. cmd pad 1 thr 15")

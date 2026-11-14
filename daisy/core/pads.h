@@ -26,7 +26,10 @@
 //             the window at once (velocity 1). Falling below the release level
 //             inside the window: a blip, no note.
 //   Held      Down(pad, velocity) was sent; Pressure(pad, 0..1) follows while held,
-//             (G - threshold) / (ceiling - threshold), when it moved by 1/128.
+//             (G - threshold) / (ceiling - threshold), when it moved by 1/128. A
+//             pressure event never takes the ring's last kReserve places: those are
+//             for Down and Up, so a main loop that stalls loses pressure values (the
+//             newest is sent again at the next scan), never a note's start or end.
 //   release   below release level = threshold * releaseRatio (hysteresis) for
 //             releaseScans scans in a row (default 2: 4 ms): Up(pad). A bounce
 //             that dips for one scan does not end the note: no double triggers.
@@ -37,7 +40,19 @@
 // leaks a fraction of its force into its neighbours (through the board, and through
 // the ADC sampling one channel after another), and that fraction is dropped. Two
 // pads hit about as hard (a flam across two pads) both play.
-// The velocity curve: out = lin ^ curve (1 = linear; 0.5 lifts soft hits).
+// THE VELOCITY CURVE: out = lin ^ curve (1 = linear; 0.5 lifts soft hits), and the
+// UI makes it the note's 1..127 linearly (pg/ui/pads.h padVelocity; 0.786 = 100, the
+// velocity a `vel` line treats as neutral). The defaults (threshold 10 uS, ceiling
+// 650 uS, curve 0.5) put a MEDIUM hit at 0.79 and a HARD one at 1:
+//   medium  the force's steepest rise about 100 uS per ms (200 per scan): from nothing
+//           to 400 uS (the FSR at 2.5 k) in 4 ms. lin = 200 * 2 / 640 = 0.63, ^0.5 = 0.79
+//   hard    160 uS per ms or more across the window (320 per scan: 640 uS in 4 ms),
+//           or 650 uS (1.5 k) reached inside it: velocity 1, note velocity 127. (A
+//           rise shorter than a scan is seen only in part: 320 uS in 2 ms gives 90..125
+//           by where the scans fall.)
+//   soft    15 uS per ms (120 uS in 8 ms): lin 0.1, ^0.5 = 0.31 (note velocity 40)
+// GUESSES until real sensors are measured (docs/DAISY.md "Tuning the velocity"):
+// how fast a finger on rubber over an Alpha MF02A really rises is not known yet.
 //
 // LATENCY (at the Daisy's 2 ms scan): the crossing is seen 0-2 ms after it happens,
 // the note is decided window-1 scans after that (2 ms), then the main loop posts it
@@ -52,8 +67,8 @@ namespace pgd {
 
 struct PadCal {
   float threshold = 10.0f;   // uS: where a touch starts (the FSR at 100 k)
-  float ceiling = 1000.0f;   // uS: full force (1 k): pressure 1, the velocity span
-  float curve = 1.0f;        // velocity exponent, 0.25..4
+  float ceiling = 650.0f;    // uS: full force (1.5 k): pressure 1, the velocity span
+  float curve = 0.5f;        // velocity exponent, 0.25..4 (above: a medium hit is 0.79)
   bool on = true;            // off: the pad is ignored (not wired)
 };
 
@@ -79,6 +94,7 @@ class PadScanner {
   static constexpr float kDividerUs = 100.0f;   // 1 / 10 k, in uS
   static constexpr float kPressureStep = 1.0f / 128.0f;
   static constexpr int kRing = 64;               // events (a power of two)
+  static constexpr int kReserve = 2 * kPads;     // places pressure leaves for Down / Up
 
   // x (0..1: the ADC's reading) -> G in uS (clamped: x at most 0.9995).
   static float conductance(float x);
@@ -112,7 +128,8 @@ class PadScanner {
   float lastReading(int pad) const { return pad_[pad].x; }
   float lastUs(int pad) const { return pad_[pad].g; }
   float pressure(int pad) const;          // 0..1 from the last reading
-  float lastVelocity(int pad) const { return pad_[pad].lastVel; }
+  float lastVelocity(int pad) const { return pad_[pad].lastVel; }   // after the curve
+  float lastLinear(int pad) const { return pad_[pad].lastLin; }     // before it
   float peakUs(int pad) const { return pad_[pad].maxG; }   // since the last report
   void clearPeaks();
   uint32_t hits(int pad) const { return pad_[pad].hits; }
@@ -133,10 +150,10 @@ class PadScanner {
     float sentP = -1.0f;       // the last pressure sent
     float x = 0.0f, g = 0.0f;  // the last reading, its conductance
     float maxG = 0.0f;
-    float lastVel = 0.0f;
+    float lastVel = 0.0f, lastLin = 0.0f;
     uint32_t hits = 0, ghosts = 0, blips = 0;
   };
-  void push(uint8_t type, int pad, float value);
+  bool push(uint8_t type, int pad, float value);
   float linear(const Pad& p, const PadCal& c) const;
   bool ghost(int pad, float lin) const;
   void takeOver();

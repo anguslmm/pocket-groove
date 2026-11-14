@@ -140,6 +140,9 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   xfer_.setSamples(mem.poolImage ? &writer_ : nullptr);
   samplesChanged_ = xfer_.samplesChanged();
   ui_.boot(hal.millis());
+  ui_.setPadJob(settings_.padJob ? pg::ui::PadJob::Notes : pg::ui::PadJob::Drums);
+  for (InjPad& p : inj_) p = InjPad{};
+  pendMask_ = 0;
   sp("[boot] UI up, project \"%s\"%s\n", ui_.projectName(), cfg.autoplay ? ", autoplay" : "");
 
   meter_.configure(hal.cpuHz(), static_cast<uint32_t>(static_cast<uint64_t>(hal.cpuHz()) * hal.blockFrames() /
@@ -184,6 +187,13 @@ void App::render(int16_t* out, int frames, const float* in) {
   }
   if (in) lineMic_.audioIn(in, frames);
   inst_.process(out, frames);
+  int pk = 0;
+  for (int i = 0; i < 2 * frames; ++i) {
+    const int a = out[i] < 0 ? -out[i] : out[i];
+    pk = a > pk ? a : pk;
+  }
+  if (static_cast<uint32_t>(pk) > outPeak_.load(std::memory_order_relaxed))
+    outPeak_.store(static_cast<uint32_t>(pk), std::memory_order_relaxed);
   meter_.end(hal_->cycles());
 }
 
@@ -198,6 +208,10 @@ void App::loopOnce() {
 
 void App::handleKey(const pg::KeyEvent& e, uint32_t now) {
   const uint8_t k = e.key;
+  if (k == KeyScript::kKeyPadJob) {   // the desktop's padjob key (F4): the pads' job
+    if (e.down) ui_.togglePadJob();
+    return;
+  }
   if (k > pg::kKeyG0) return;
   const uint64_t bit = 1ull << k;
   if (!e.down) {
@@ -258,45 +272,67 @@ void App::serviceKeys(uint32_t now) {
 
 // ---- pads -------------------------------------------------------------------------------
 
-// THE PADS' SOUND, in this one function. Today each pad plays one drum track through
-// the engine's live NoteOn (what the UI's own drum pads send, ui.cpp Ui::padDown:
-// note 60), with the pad's velocity as 1..127; Up ends it (NoteOff); pressure goes
-// nowhere yet. When the core's platform-neutral pad API is merged (another branch is
-// adding pad down with velocity / pad pressure / pad up to lib/pg's UI layer), this
-// body becomes the three calls into the Ui and nothing else here changes. Until then
-// two things differ from the UI's pads: the selected track does not follow, and a
-// note recorded into a playing pattern gets no undo snapshot (the Ui takes that).
+// THE PADS' SOUND, in this one function: the core's pad API (pg/ui/pads.h). A hit
+// is the Ui's padDown with the scanner's velocity (after the pad's curve, 0..1: the
+// Ui makes it 1..127 linearly), pressure while held its padPressure, the release its
+// padUp. What a pad plays is the Ui's: the job (drums: KICK SNARE CHH PERC; notes: the
+// selected track up the scale), live record, the `vel` and `press` lines of the
+// track's instrument. The sensors' events (servicePads) and the computer's (">hit")
+// both come through here. The UI thread: the main loop.
 void App::padEvent(const PadEvent& e) {
-  static constexpr uint8_t kPadTrack[PadScanner::kPads] = {pg::kTrackKick, pg::kTrackSnare, pg::kTrackClap,
-                                                          pg::kTrackHatClosed};
-  const uint8_t t = kPadTrack[e.pad & (PadScanner::kPads - 1)];
-  pg::Command c{};
+  const uint32_t now = hal_->millis();
   if (e.type == PadEvent::Down) {
-    const int v = 1 + static_cast<int>(lrintf(e.value * 126.0f));
-    c.type = pg::CmdType::NoteOn;
-    c.a = t;
-    c.b = 60;
-    c.c = static_cast<uint8_t>(v < 1 ? 1 : v > 127 ? 127 : v);
-    c.step = pg::kDefaultStep;
-    c.step.note = 60;
-    c.step.vel = c.c;
-    inst_.engine().post(c);
+    ui_.padDown(e.pad, e.value, now);
     ++padNotes_;
+    lastPad_ = static_cast<int8_t>(e.pad);
+    lastPadVel_ = e.value;
   } else if (e.type == PadEvent::Up) {
-    c.type = pg::CmdType::NoteOff;
-    c.a = t;
-    c.b = 60;
-    inst_.engine().post(c);
+    ui_.padUp(e.pad, now);
     ++padUps_;
   } else {
-    ++padPressures_;   // pressure: nowhere yet (a macro, once the core's pad API is there)
+    ui_.padPressure(e.pad, e.value, now);
+    pressMs_[e.pad] = now;
+    ++padPressures_;
   }
 }
 
+// Every main-loop pass: the scanner's events (queued by the audio interrupt, 500 scans
+// a second) into the UI. Down and Up go at once, in order. Pressure is merged: only the
+// newest value per pad is kept, and handed over at most once per pad every
+// kPressEveryMs (the UI's own limit per track, so what arrives is sent, not left for
+// its next frame); a hit or a release drops what waited from before it.
 void App::servicePads(uint32_t now) {
   lineMic_.setAvailable(lineIn_ && hal_->audioRunning());
   PadEvent e;
-  for (int n = 0; n < 32 && pads_.pop(&e); ++n) padEvent(e);
+  for (int n = 0; n < PadScanner::kRing && pads_.pop(&e); ++n) {
+    if (e.pad >= kAppPads) continue;
+    if (e.type == PadEvent::Pressure) {
+      ++padPressuresIn_;
+      pendPress_[e.pad] = e.value;
+      pendMask_ |= 1u << e.pad;
+      continue;
+    }
+    pendMask_ &= ~(1u << e.pad);
+    padEvent(e);
+  }
+  for (int p = 0; p < kAppPads; ++p) {   // the computer's hits that end now
+    if (inj_[p].down && inj_[p].upAt && static_cast<int32_t>(now - inj_[p].upAt) >= 0) {
+      inj_[p].down = false;
+      pendMask_ &= ~(1u << p);
+      padEvent(PadEvent{PadEvent::Up, static_cast<uint8_t>(p), 0.0f, 0});
+    }
+  }
+  if (pendMask_) {
+    for (int p = 0; p < kAppPads; ++p) {
+      if (!((pendMask_ >> p) & 1u) || now - pressMs_[p] < pg::ui::kPressEveryMs) continue;
+      pendMask_ &= ~(1u << p);
+      padEvent(PadEvent{PadEvent::Pressure, static_cast<uint8_t>(p), pendPress_[p], 0});
+    }
+  }
+  if (static_cast<uint8_t>(ui_.padJob()) != settings_.padJob) {   // the job changed (key, command): kept
+    settings_.padJob = static_cast<uint8_t>(ui_.padJob());
+    saveSettings();
+  }
   if (padsWatchMs_ && now - padsWatchLast_ >= padsWatchMs_) {
     padsWatchLast_ = now;
     printPads(false);
@@ -392,8 +428,10 @@ void App::printHelp() {
   sp("  >down KEY  >up KEY  >tap KEY [ms]  >wait MS  >release  >shot NAME  >sync TAG\n");
   sp("      keys as in the desktop's key scripts (host/ui_scripts); KEY by legend:\n");
   sp("      ` 1 .. = del tab q .. \\ fn sft a .. ent ctl opt alt z .. / spc G0\n");
-  sp("  >pads [watch [MS|off] | window N | release N | hyst R | xtalk R [MS] | reset]\n");
+  sp("  >pads [watch [MS|off] | job [drums|notes] | window N | release N | hyst R | xtalk R [MS] | reset]\n");
   sp("  >pad N|all [thr US] [ceil US] [curve X] [on|off]   (the force-sensor pads' calibration)\n");
+  sp("  >hit N VEL [hold MS] [press P]  >hit N press P  >hit N up   (a pad from the computer, 0..1)\n");
+  sp("  >tap padjob   the pads' job, drums / notes (the desktop's F4)\n");
   sp("  >touch X Y [MS]  >touch map N|auto  >display turn  >display spi 2|4|8|16\n");
   sp("  ~PGX ...  the transfer protocol (tools/pg: ls, pull, push, sample)\n");
   sp("  tools/pg-daisy on the computer drives all of this (keys from its keyboard, the screen)\n");
@@ -626,11 +664,14 @@ void App::printReport() {
   }
   {
     const uint32_t now = meter_.nowPermille();
-    sp("[audio] window: AUD now %lu.%lu%% peak %lu.%lu%%, longest block %luus of %luus, blocks %lu, late %lu\n",
+    const uint32_t opk = takeOutputPeak();
+    sp("[audio] window: AUD now %lu.%lu%% peak %lu.%lu%%, longest block %luus of %luus, blocks %lu, late %lu; "
+       "output peak %lu (%d dBFS)\n",
        static_cast<unsigned long>(now / 10), static_cast<unsigned long>(now % 10),
        static_cast<unsigned long>(w.peakPermille / 10), static_cast<unsigned long>(w.peakPermille % 10),
        static_cast<unsigned long>(w.maxUs), static_cast<unsigned long>(meter_.periodUs()),
-       static_cast<unsigned long>(w.blocks), static_cast<unsigned long>(w.late));
+       static_cast<unsigned long>(w.blocks), static_cast<unsigned long>(w.late), static_cast<unsigned long>(opk),
+       opk ? static_cast<int>(lrintf(20.0f * log10f(static_cast<float>(opk) / 32767.0f))) : -99);
     sp("[audio] since boot: longest block %luus, blocks %lu, underruns (block longer than its period) %lu, "
        "late starts (> 1.5 periods apart) %lu\n",
        static_cast<unsigned long>(meter_.bootMaxUs()), static_cast<unsigned long>(meter_.blocks()),

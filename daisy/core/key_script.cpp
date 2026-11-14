@@ -23,10 +23,13 @@ bool parseMs(const char* s, uint32_t* out) {
   return true;
 }
 
-// The key id for a legend, or -1. "G0" is accepted in any case.
+// The key id for a legend, or -1. "G0" is accepted in any case; "padjob" / "F4" is
+// KeyScript::kKeyPadJob.
 int keyId(const char* name) {
   if (!name || !*name) return -1;
   if ((name[0] == 'G' || name[0] == 'g') && name[1] == '0' && name[2] == 0) return pg::kKeyG0;
+  if (std::strcmp(name, "padjob") == 0 || std::strcmp(name, "F4") == 0 || std::strcmp(name, "f4") == 0)
+    return KeyScript::kKeyPadJob;
   const int k = pg::ui::keyFromName(name);
   return (k >= 0 && k <= pg::kKeyG0) ? k : -1;
 }
@@ -129,7 +132,7 @@ void KeyScript::releaseAll(uint32_t nowMs, Emit emit, void* user) {
   head_ = 0;
   count_ = 0;
   waiting_ = false;
-  for (int k = 0; k <= pg::kKeyG0; ++k) {
+  for (int k = 0; k <= kKeyPadJob; ++k) {
     const uint64_t bit = 1ull << k;
     if (!(held_ & bit)) continue;
     held_ &= ~bit;

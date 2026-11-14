@@ -9,6 +9,13 @@
 //   >pads hyst R               the release level as a fraction of the threshold (0.1..0.95)
 //   >pads xtalk R [MS]         crosstalk: a pad below R of a neighbour hit within MS is dropped
 //   >pads reset                every pad and the above back to the defaults
+//   >pads job [drums|notes]    the pads' job (pg/ui/pads.h); alone: the other one, with
+//                              the UI's toast. Also ">tap padjob" (the desktop's F4)
+//   >hit N VEL [hold MS] [press P]   pad N (1..16) hit from the computer at velocity VEL
+//                              (0..1, as the sensors' after the curve), released after MS
+//                              (default 100; hold 0: until ">hit N up"); press P: the
+//                              pressure 0..1 while held. Through App::padEvent, as a
+//                              sensor's hit. >hit N press P: pressure on a held pad
 //   >pad N|all [thr US] [ceil US] [curve X] [on|off]
 //   >touch X Y [MS]            a touch from the computer at canvas X Y, lifted after MS
 //   >touch map N|auto          the touch orientation 0..7 (touch.h), or from the display
@@ -21,6 +28,7 @@
 #include <cstring>
 
 #include "app.h"
+#include "pg/ui/ui_tables.h"
 
 namespace pgd {
 
@@ -88,8 +96,6 @@ int words(char* buf, char** w, int max) {
   return n;
 }
 
-const char* const kPadName[PadScanner::kPads] = {"kick", "snare", "clap", "hat"};
-
 int dbfs(uint16_t peak) { return peak ? static_cast<int>(lrintf(20.0f * log10f(float(peak) / 32767.0f))) : -99; }
 
 }  // namespace
@@ -104,9 +110,36 @@ void App::saveSettings() {
   if (!ok) sp("[settings] COULD NOT WRITE %s\n", DaisySettings::kPath);
 }
 
+// What the pads play now: the job, the counts, and per pad the track, its instrument
+// and what the engine hears of its macros (EngineStatus::macroPos: velocity, pressure
+// and tilt included), with the pressure macro and its offset in position units.
+void App::printPadPlay() {
+  sp("[pads] job %s; notes %lu, ups %lu, pressure %lu to the UI (%lu from the sensors), %lu from the computer; "
+     "last hit pad %d velocity %s = %d\n",
+     ui_.padJob() == pg::ui::PadJob::Drums ? "drums" : "notes", static_cast<unsigned long>(padNotes_),
+     static_cast<unsigned long>(padUps_), static_cast<unsigned long>(padPressures_),
+     static_cast<unsigned long>(padPressuresIn_), static_cast<unsigned long>(padInjected_), lastPad_ + 1,
+     fx(lastPadVel_, 2).s, lastPad_ < 0 ? 0 : pg::ui::padVelocity(lastPadVel_));
+  const pg::EngineStatus& st = ui_.engineStatus();
+  const int shown = padsSeen_ ? PadScanner::kPads : 4;
+  for (int i = 0; i < shown && i < kAppPads; ++i) {
+    const int t = ui_.padTrack(i);
+    if (t < 0) {
+      sp("[pads] %d plays nothing\n", i + 1);
+      continue;
+    }
+    const pg::macro::MacroSet* set = ui_.instrumentOf(t);
+    sp("[pads] %d plays %s note %d (%s)%s heard %d %d %d %d press %d %+d\n", i + 1, pg::ui::kTrackNames[t],
+       ui_.padNote(i), set ? set->name : "CLASSIC", ui_.padHeld(i) ? " HELD" : "", st.macroPos[t][0],
+       st.macroPos[t][1], st.macroPos[t][2], st.macroPos[t][3], ui_.pressMacro(t),
+       ui_.pressOffset(t) / pg::kOffsetScale);
+  }
+}
+
 void App::printPads(bool withCal) {
+  if (withCal) printPadPlay();
   if (!padsSeen_) {
-    sp("[pads] none (%s)\n", hal_->stageName());
+    sp("[pads] no sensors (%s): >hit N VEL plays a pad from the computer\n", hal_->stageName());
     return;
   }
   const PadGlobal& g = pads_.global();
@@ -117,25 +150,25 @@ void App::printPads(bool withCal) {
        fx(pads_.scanHz(), 0).s, fx(scanMs, 1).s, g.windowScans, fx(scanMs * float(g.windowScans - 1), 1).s,
        static_cast<int>(lrintf(g.releaseRatio * 100.0f)), g.releaseScans, fx(g.xtalkRatio, 2).s, g.xtalkScans,
        fx(scanMs * float(g.xtalkScans), 0).s);
-    sp("[pads] notes %lu, ups %lu, pressure events %lu, events dropped %lu; settings %s\n",
-       static_cast<unsigned long>(padNotes_), static_cast<unsigned long>(padUps_),
-       static_cast<unsigned long>(padPressures_), static_cast<unsigned long>(pads_.dropped()), settingsLoad_);
+    sp("[pads] sensor events dropped %lu (the main loop away too long); settings %s\n",
+       static_cast<unsigned long>(pads_.dropped()), settingsLoad_);
     for (int i = 0; i < PadScanner::kPads; ++i) {
       const PadCal& c = pads_.cal(i);
       const float x = pads_.lastReading(i);
-      sp("[pads] %d %-5s %-5s x %s (%s mV) G %s uS, peak %s uS, pressure %s | thr %s uS ceil %s uS curve %s %s | "
-         "hits %lu ghosts %lu blips %lu, last velocity %s\n",
-         i + 1, kPadName[i], PadScanner::stateName(pads_.state(i)), fx(x, 4).s, fx(x * 3300.0f, 0).s,
+      sp("[pads] %d %-5s x %s (%s mV) G %s uS, peak %s uS, pressure %s | thr %s uS ceil %s uS curve %s %s | "
+         "hits %lu ghosts %lu blips %lu, last velocity %s (linear %s) = %d\n",
+         i + 1, PadScanner::stateName(pads_.state(i)), fx(x, 4).s, fx(x * 3300.0f, 0).s,
          fx(pads_.lastUs(i), 1).s, fx(pads_.peakUs(i), 1).s, fx(pads_.pressure(i), 2).s, fx(c.threshold, 1).s,
          fx(c.ceiling, 0).s, fx(c.curve, 2).s, c.on ? "on" : "OFF", static_cast<unsigned long>(pads_.hits(i)),
          static_cast<unsigned long>(pads_.ghosts(i)), static_cast<unsigned long>(pads_.blips(i)),
-         fx(pads_.lastVelocity(i), 2).s);
+         fx(pads_.lastVelocity(i), 2).s, fx(pads_.lastLinear(i), 2).s,
+         pads_.hits(i) ? pg::ui::padVelocity(pads_.lastVelocity(i)) : 0);
     }
     pads_.clearPeaks();
     return;
   }
   // the watch line: everything for tuning in one line per interval
-  char l[300];
+  char l[340];
   int n = std::snprintf(l, sizeof(l), "[pads] x");
   for (int i = 0; i < PadScanner::kPads; ++i) n += std::snprintf(l + n, sizeof(l) - size_t(n), " %s", fx(pads_.lastReading(i), 3).s);
   n += std::snprintf(l + n, sizeof(l) - size_t(n), " | uS");
@@ -149,7 +182,8 @@ void App::printPads(bool withCal) {
     n += std::snprintf(l + n, sizeof(l) - size_t(n), " %s", PadScanner::stateName(pads_.state(i)));
   n += std::snprintf(l + n, sizeof(l) - size_t(n), " | vel");
   for (int i = 0; i < PadScanner::kPads; ++i)
-    n += std::snprintf(l + n, sizeof(l) - size_t(n), " %s", fx(pads_.lastVelocity(i), 2).s);
+    n += std::snprintf(l + n, sizeof(l) - size_t(n), " %s=%d", fx(pads_.lastVelocity(i), 2).s,
+                       pads_.hits(i) ? pg::ui::padVelocity(pads_.lastVelocity(i)) : 0);
   pads_.clearPeaks();
   sp("%s\n", l);
 }
@@ -234,12 +268,22 @@ bool App::settingsCommand(const char* line) {
         const float scans = ms * pads_.scanHz() / 1000.0f;
         g.xtalkScans = static_cast<uint8_t>(scans < 0.0f ? 0 : scans > 20.0f ? 20 : lrintf(scans));
       }
+    } else if (std::strcmp(k, "job") == 0) {
+      changed = false;
+      if (n > 2 && std::strcmp(w[2], "drums") == 0) ui_.setPadJob(pg::ui::PadJob::Drums);
+      else if (n > 2 && std::strcmp(w[2], "notes") == 0) ui_.setPadJob(pg::ui::PadJob::Notes);
+      else if (n == 2) ui_.togglePadJob();
+      else sp("[pads] ? >pads job [drums|notes]\n");
+      settings_.padJob = static_cast<uint8_t>(ui_.padJob());
+      saveSettings();
+      printPadPlay();
     } else if (std::strcmp(k, "reset") == 0) {
       for (PadCal& c : settings_.pads) c = PadCal{};
       g = PadGlobal{};
     } else {
       changed = false;
-      sp("[pads] ? >pads [watch [MS|off] | window N | release N | hyst R | xtalk R [MS] | reset]\n");
+      sp("[pads] ? >pads [watch [MS|off] | job [drums|notes] | window N | release N | hyst R | xtalk R [MS] | "
+         "reset]\n");
     }
     if (changed) {
       g = PadScanner::sanitize(g);
@@ -281,6 +325,7 @@ bool App::settingsCommand(const char* line) {
     printPads(true);
     return true;
   }
+  if (std::strcmp(v, "hit") == 0) return hitCommand(w, n);
   if (std::strcmp(v, "touch") == 0) {
     float x = 0.0f, y = 0.0f, ms = 100.0f;
     if (n >= 3 && std::strcmp(w[1], "map") == 0) {
@@ -318,6 +363,52 @@ bool App::settingsCommand(const char* line) {
     return true;
   }
   return false;
+}
+
+// >hit N VEL [hold MS] [press P] | >hit N press P | >hit N up: a pad played from the
+// computer, as PadEvents through App::padEvent (a sensor's own path after the scanner).
+bool App::hitCommand(char** w, int n) {
+  float f = 0.0f;
+  if (n < 3 || !num(w[1], &f) || f < 1.0f || f > float(kAppPads)) {
+    sp("[pads] ? >hit N VEL [hold MS] [press P] | >hit N press P | >hit N up   (N 1..%d, VEL and P 0..1)\n", kAppPads);
+    return true;
+  }
+  const int p = static_cast<int>(f) - 1;
+  const uint8_t pad = static_cast<uint8_t>(p);
+  const uint32_t now = hal_->millis();
+  if (std::strcmp(w[2], "up") == 0) {
+    if (inj_[p].down) {
+      inj_[p].down = false;
+      pendMask_ &= ~(1u << p);
+      padEvent(PadEvent{PadEvent::Up, pad, 0.0f, 0});
+    }
+    return true;
+  }
+  if (std::strcmp(w[2], "press") == 0) {
+    if (n > 3 && num(w[3], &f) && inj_[p].down) padEvent(PadEvent{PadEvent::Pressure, pad, f < 0.0f ? 0.0f : f > 1.0f ? 1.0f : f, 0});
+    return true;
+  }
+  float vel = 0.0f, hold = 100.0f, press = -1.0f;
+  bool ok = num(w[2], &vel);
+  for (int i = 3; ok && i + 1 < n; i += 2) {
+    if (std::strcmp(w[i], "hold") == 0) ok = num(w[i + 1], &hold) && hold >= 0.0f;
+    else if (std::strcmp(w[i], "press") == 0) ok = num(w[i + 1], &press);
+    else ok = false;
+  }
+  if (!ok || (n - 3) % 2 != 0) {
+    sp("[pads] ? >hit N VEL [hold MS] [press P]\n");
+    return true;
+  }
+  vel = vel < 0.0f ? 0.0f : vel > 1.0f ? 1.0f : vel;
+  if (vel < 1.0f / 127.0f) vel = 1.0f / 127.0f;   // as the scanner: a hit is never velocity 0
+  pendMask_ &= ~(1u << p);
+  padEvent(PadEvent{PadEvent::Down, pad, vel, 0});   // a pad already down: the UI releases it first
+  ++padInjected_;
+  inj_[p].down = true;
+  inj_[p].upAt = hold > 0.0f ? now + static_cast<uint32_t>(hold) : 0;
+  if (inj_[p].upAt == 0 && hold > 0.0f) inj_[p].upAt = 1;
+  if (press >= 0.0f) padEvent(PadEvent{PadEvent::Pressure, pad, press > 1.0f ? 1.0f : press, 0});
+  return true;
 }
 
 }  // namespace pgd

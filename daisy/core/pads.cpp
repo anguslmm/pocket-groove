@@ -28,8 +28,8 @@ float PadScanner::readingFor(float uS) {
 PadCal PadScanner::sanitize(const PadCal& c) {
   PadCal o = c;
   if (!(o.threshold == o.threshold)) o.threshold = 10.0f;   // NaN
-  if (!(o.ceiling == o.ceiling)) o.ceiling = 1000.0f;
-  if (!(o.curve == o.curve)) o.curve = 1.0f;
+  if (!(o.ceiling == o.ceiling)) o.ceiling = PadCal{}.ceiling;
+  if (!(o.curve == o.curve)) o.curve = PadCal{}.curve;
   o.threshold = clampf(o.threshold, 0.5f, 5000.0f);
   o.ceiling = clampf(o.ceiling, o.threshold * 1.5f, 200000.0f);
   o.curve = clampf(o.curve, 0.25f, 4.0f);
@@ -100,15 +100,17 @@ void PadScanner::clearPeaks() {
   for (Pad& p : pad_) p.maxG = 0.0f;
 }
 
-void PadScanner::push(uint8_t type, int pad, float value) {
+bool PadScanner::push(uint8_t type, int pad, float value) {
   const uint32_t h = head_.load(std::memory_order_relaxed);
   const uint32_t t = tail_.load(std::memory_order_acquire);
-  if (h - t >= uint32_t(kRing)) {
+  const uint32_t room = uint32_t(kRing) - (h - t);
+  if (room == 0 || (type == PadEvent::Pressure && room <= uint32_t(kReserve))) {
     ++dropped_;
-    return;
+    return false;
   }
   ring_[h & (kRing - 1)] = PadEvent{type, uint8_t(pad), value, scan_};
   head_.store(h + 1, std::memory_order_release);
+  return true;
 }
 
 bool PadScanner::pop(PadEvent* e) {
@@ -195,10 +197,7 @@ void PadScanner::scan(const float* x) {
         p.below = 0;
         if (p.state == State::Held) {
           const float pr = clampf((g - c.threshold) / (c.ceiling - c.threshold), 0.0f, 1.0f);
-          if (std::fabs(pr - p.sentP) >= kPressureStep) {
-            p.sentP = pr;
-            push(PadEvent::Pressure, i, pr);
-          }
+          if (std::fabs(pr - p.sentP) >= kPressureStep && push(PadEvent::Pressure, i, pr)) p.sentP = pr;
         }
         break;
     }
@@ -221,6 +220,7 @@ void PadScanner::scan(const float* x) {
     p.state = State::Held;
     p.below = 0;
     p.lastVel = v;
+    p.lastLin = lin;
     p.sentP = -1.0f;
     ++p.hits;
     push(PadEvent::Down, i, v);

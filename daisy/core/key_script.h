@@ -6,6 +6,8 @@
 //   >down <key>        a Cardputer key by legend: ` 1 .. = del tab q .. \ fn sft a .. ent
 //   >up <key>          ctl opt alt z .. / spc G0 (pg::ui::keyFromName: aliases too)
 //   >tap <key> [ms]    down, hold ms (default 40), up
+//                      one key more than the Cardputer's: padjob (or F4, the desktop's
+//                      key for it), the pads' job, drums / notes (kKeyPadJob)
 //   >wait <ms>         the commands after it wait (the queue pauses)
 //   >release           every key this script holds goes up now
 // The ui_shot setup lines (battery, sd, boot, demo, empty) are skipped as the
@@ -26,6 +28,9 @@ class KeyScript {
  public:
   static constexpr int kQueue = 128;
   static constexpr uint32_t kDefaultTapMs = 40;
+  // Not a Cardputer key: the desktop's padjob binding (F4, host/app/keymap.h). Its
+  // down event toggles the pads' job (App::handleKey); bit 60 of held().
+  static constexpr uint8_t kKeyPadJob = 60;
 
   enum class Parse : uint8_t {
     Queued,      // key or wait command queued
@@ -50,7 +55,7 @@ class KeyScript {
 
   int queued() const { return count_; }
   bool idle() const { return count_ == 0; }
-  uint64_t held() const { return held_; }   // bit = key id (kKeyG0 = bit 56)
+  uint64_t held() const { return held_; }   // bit = key id (kKeyG0 = bit 56, kKeyPadJob 60)
   uint32_t eventsEmitted() const { return events_; }
   uint32_t dropped() const { return dropped_; }
 
