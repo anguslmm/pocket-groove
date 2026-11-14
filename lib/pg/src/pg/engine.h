@@ -138,6 +138,21 @@ enum class CmdType : uint8_t {
 // per track in EngineStatus. Cost: nothing runs per quantum (two compares); at a
 // step of a track whose pattern has motion a few compares, and at a keyframe or
 // a change a scan of at most two patterns' steps of that track.
+// VELOCITY (docs/MACROLAB.md "Velocity and pressure"): an instrument whose set has
+// `vel` lines (macro::MacroSet::vel) moves those macros by the note's velocity:
+// at every note-on of the track (a sequenced step, a ratchet hit, a roll hit, a live
+// note: one rule) the heard position of macro m becomes
+//     clamp(where it would otherwise be (base or MOTION) + TILT OFFSET + velOffset(m, vel), 0, 255)
+// with velOffset 0 at macro::kVelRef (100, the default step velocity), the vel
+// line's full amount at 127 and the same the other way at 1 (macro::velShape).
+// It is the note's: it holds from that note-on to the track's next one (the lead's
+// chord notes share it; the last note-on sets it), jumps at the note-on, and the
+// voice has the parameters there before the note starts. It moves nothing else:
+// MOTION's keyframes and glides, the base and the tilt offset run under it as they
+// did, and motion recording writes what the hand did without it (the velocity is
+// in the note). The Project is never touched. A set without vel lines, and notes
+// at velocity 100, play bit for bit what they played before (one compare per
+// note-on). An instrument change or a new project return it to kVelRef.
 // TILT OFFSET (docs/UX.md 10.3 "Tilt"): per track and macro the engine also keeps
 // a signed offset, a second trajectory of its own (SetMacroOffset: a straight line
 // from where the offset is to the target in the command's ramp). What the voice

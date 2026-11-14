@@ -67,6 +67,9 @@ struct TrackRt {
   NoteEvent ratEv;
   PendNote pend[kMaxPend];
   uint8_t trig;
+  // ---- velocity (engine.h "VELOCITY"): the last note-on's velocity, while the set has vel lines ----
+  uint8_t nvel;                       // macro::kVelRef = no offset
+  uint8_t velOn;                      // the bound set has vel lines (cached at the bind)
   // ---- roll (CmdType::Roll) ----
   uint8_t rollC;                      // 0 = off, else hits per step x2 (1..4)
   int64_t rollCd;                     // Q32 samples until the next roll hit
@@ -319,6 +322,8 @@ struct State {
   void updateStand(int t);
   // macro motion
   float macroPos(const TrackRt& r, int m, uint32_t q) const;
+  float handPos(const TrackRt& r, int m, uint32_t q) const;
+  void noteVelocity(int t, uint8_t vel);
   // Where trajectory slot s is at quantum q: macro m's base (s = m) or its tilt
   // offset (s = kOffSlot + m). Inline everywhere: no function of its own on the audio thread.
   __attribute__((always_inline)) float slotPos(const TrackRt& r, int s, uint32_t q) const {
@@ -473,6 +478,8 @@ void State::resetRuntime() {
     r.inst = nullptr;
     r.standOn = 0;
     r.kfMask = r.live = r.tiltLive = 0;
+    r.nvel = macro::kVelRef;
+    r.velOn = 0;
     r.moving = 0;
     r.fine = r.anchor = r.settling = 0;
     for (int i = 0; i < kSoundParams + 3; ++i) r.fA[i] = r.fB[i] = 0;
@@ -1411,7 +1418,9 @@ void State::updateStand(int t) {
   uint8_t want[kTrackMacros];
   bool diff = false;
   for (int m = 0; m < kTrackMacros; ++m) {   // where they stand, with a tilt offset held still
-    want[m] = uint8_t(clampi(int(clampf(r.mTo[m] + r.mTo[kOffSlot + m], 0.0f, 255.0f) + 0.5f), 0, 255));
+    float off = r.mTo[kOffSlot + m];
+    if (r.nvel != macro::kVelRef) off += r.inst ? r.inst->velOffset(m, r.nvel) : 0.0f;   // VELOCITY
+    want[m] = uint8_t(clampi(int(clampf(r.mTo[m] + off, 0.0f, 255.0f) + 0.5f), 0, 255));
     diff |= want[m] != base[m];
   }
   if (!r.inst || !diff) {
@@ -1456,9 +1465,37 @@ void State::ensureParams(int t) {
 // the base (one more compare).
 float State::macroPos(const TrackRt& r, int m, uint32_t q) const {
   const float base = slotPos(r, m, q);
+  float off = slotPos(r, kOffSlot + m, q);
+  if (r.nvel != macro::kVelRef && r.inst) off += r.inst->velOffset(m, r.nvel);   // VELOCITY
+  if (off == 0.0f) return base;
+  return clampf(base + off, 0.0f, 255.0f);
+}
+
+// The same without the velocity offset: where the player's hand (a key, tilt) has the
+// macro. Motion recording writes this into the notes (a note's velocity is in the note).
+float State::handPos(const TrackRt& r, int m, uint32_t q) const {
+  const float base = slotPos(r, m, q);
   const float off = slotPos(r, kOffSlot + m, q);
   if (off == 0.0f) return base;
   return clampf(base + off, 0.0f, 255.0f);
+}
+
+// engine.h "VELOCITY": a note-on of velocity `vel` on track t, before its parameters
+// go to the voice. Only for a set with vel lines, and only when the velocity differs
+// from the last note's: the macros' heard positions jump by the new offsets, and the
+// voice gets the parameters there before the note starts (the 7-bit path: one
+// evaluation where the macros now stand; the fractional path: a jump interval now).
+void State::noteVelocity(int t, uint8_t vel) {
+  TrackRt& r = tr[t];
+  if (vel == r.nvel) return;
+  r.nvel = vel;
+  pubMask = uint8_t(pubMask | (1u << t));
+  if (r.fine) {
+    r.anchor = 2;   // the values jump to where the set says now
+    fineEval(t);    // and the voice has them before its note-on
+  } else {
+    updateStand(t);   // paramsSent = 0 when they changed: ensureParams sends them
+  }
 }
 
 // Slot m (a macro's base 0..3, or kOffSlot + the macro for its offset) jumps to `to`.
@@ -1476,6 +1513,8 @@ void State::resetMotion(int t) {
   TrackRt& r = tr[t];
   for (int m = 0; m < kTrackMacros; ++m) r.mFrom[m] = r.mTo[m] = float(proj->tracks[t].macro[m]);
   for (int m = kOffSlot; m < kMacroSlots; ++m) r.mFrom[m] = r.mTo[m] = 0.0f;   // a tilt offset ends too
+  r.nvel = macro::kVelRef;                         // and a note's velocity offset
+  r.velOn = (r.inst && r.inst->hasVel()) ? 1 : 0;
   r.moving = 0;
   pubMask = uint8_t(pubMask | (1u << t));
   if (r.fine) exitFine(t);
@@ -1850,7 +1889,7 @@ void State::liveStep(int t) {
   const uint32_t before = st.extWord();
   for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
     const int m = __builtin_ctz(b);
-    st.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
+    st.setMacroValue(m, int(handPos(r, m, qCount) + 0.5f));
   }
   if (st.extWord() != before) bump();
 }
@@ -1899,8 +1938,15 @@ void State::afterNoteOn(int t) {
 void State::primeNote(int t, const Step& st) {
   TrackRt& r = tr[t];
   uint8_t pos[kTrackMacros];
-  for (int m = 0; m < kTrackMacros; ++m)
-    pos[m] = st.hasMacro(m) ? st.macroValue(m) : uint8_t(macroPos(r, m, qCount) + 0.5f);
+  for (int m = 0; m < kTrackMacros; ++m) {
+    if (!st.hasMacro(m)) {
+      pos[m] = uint8_t(macroPos(r, m, qCount) + 0.5f);
+    } else {
+      float v = float(st.macroValue(m));
+      if (r.nvel != macro::kVelRef) v = clampf(v + r.inst->velOffset(m, r.nvel), 0.0f, 255.0f);   // VELOCITY
+      pos[m] = uint8_t(v + 0.5f);
+    }
+  }
   uint8_t out[kParamsPerTrack];
   deriveInto(*r.inst, voice[t], t, pos, out);
   voice[t]->setParams(out);
@@ -1951,6 +1997,7 @@ void State::hit(int t, NoteEvent ev, int32_t offCd, bool armSlide) {
       if (r.pend[i].cd < r.pend[slot].cd) slot = i;
     vOff(t, r.pend[slot].note);
   }
+  if (r.velOn) noteVelocity(t, ev.vel);
   ensureParams(t);
   if (primeSt) primeNote(t, *primeSt);
   vOn(t, ev);
@@ -2199,6 +2246,7 @@ void State::liveNoteOn(const Command& c) {
   ev.accent = (c.step.flags() & kStepAccent) != 0;
   ev.slide = isSynthTrack(t) && (c.step.flags() & kStepSlide);
   ev.chord = (t == kTrackLead && c.step.chord() < kChordNum) ? c.step.chord() : 0;
+  if (tr[t].velOn) noteVelocity(t, ev.vel);
   ensureParams(t);
   vOn(t, ev);
   tr[t].liveHeld[ev.note >> 5] |= 1u << (ev.note & 31);
@@ -2317,7 +2365,7 @@ void State::recordNote(int t, const NoteEvent& ev) {
     s.setChord(ev.chord);
     for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {   // a live hand: the note takes its values
       const int m = __builtin_ctz(b);
-      s.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
+      s.setMacroValue(m, int(handPos(r, m, qCount) + 0.5f));
     }
     if (!sameStep) {
       std::memset(r.recKeys, 0, sizeof(r.recKeys));
@@ -2332,7 +2380,7 @@ void State::recordNote(int t, const NoteEvent& ev) {
     s.addFlags(kStepOn);
     for (uint8_t b = r.live; b; b = uint8_t(b & (b - 1))) {
       const int m = __builtin_ctz(b);
-      s.setMacroValue(m, int(macroPos(r, m, qCount) + 0.5f));
+      s.setMacroValue(m, int(handPos(r, m, qCount) + 0.5f));
     }
   }
   motDirty = uint8_t(motDirty | (1u << t));
