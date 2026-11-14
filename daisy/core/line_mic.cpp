@@ -3,7 +3,6 @@
 
 #include <cmath>
 #include <cstdio>
-#include <cstring>
 
 namespace pgd {
 
@@ -17,12 +16,9 @@ bool LineMic::Sink::write(uint32_t offset, const int16_t* d, uint32_t n) {
   return ok;
 }
 
-void LineMic::init(SampleWriter* writer, pg::sampler::FlashDriver* driver, pg::sampler::FlashPool* pool,
-                   int16_t* ring, uint32_t ringSamples, uint32_t rate) {
+void LineMic::init(SampleWriter* writer, int16_t* ring, uint32_t ringSamples, uint32_t rate) {
   armed_.store(false, std::memory_order_release);
   writer_ = writer;
-  drv_ = driver;
-  pool_ = pool;
   uint32_t c = 1;
   while (c * 2 <= ringSamples && c < (1u << 30)) c *= 2;
   ring_ = ring;
@@ -135,32 +131,6 @@ void LineMic::drain() {
   }
 }
 
-SampleWriter::Result LineMic::commitAt(SampleWriter& w, pg::sampler::FlashDriver& drv, pg::sampler::FlashPool& pool,
-                                       uint32_t samples, const char* name, uint32_t rate) {
-  using namespace pg::sampler;
-  if (!w.recording() || !pool.base()) return SampleWriter::kNoSession;
-  const int slot = w.slot();
-  if (samples < kMinSamples || samples > kSlotMaxSamples || samples * 2u > w.written()) return SampleWriter::kBadSize;
-  const uint32_t head = uint32_t(slot) * kSlotBytes, audio = head + kSectorBytes, bytes = samples * 2u;
-  uint8_t buf[256];
-  uint32_t c = 0;
-  for (uint32_t o = 0; o < bytes;) {   // the audio as the flash holds it ...
-    const uint32_t n = bytes - o < sizeof buf ? bytes - o : uint32_t(sizeof buf);
-    if (!drv.read(audio + o, buf, n)) return SampleWriter::kFlash;
-    c = crc32(buf, n, c);
-    o += n;
-  }
-  SlotHeader h;   // ... and as the voice reads it: the same CRC
-  makeHeader(reinterpret_cast<const int16_t*>(pool.base() + audio), samples, name, &h, rate);
-  if (h.dataCrc != c) return SampleWriter::kVerify;
-  setPlaybackGain(&h);
-  if (!drv.write(head, &h, sizeof h)) return SampleWriter::kFlash;
-  SlotHeader back;
-  if (!drv.read(head, &back, sizeof back) || std::memcmp(&back, &h, sizeof h) != 0) return SampleWriter::kVerify;
-  w.cancel();   // the writer lets the slot go; its rescan finds the valid header
-  return pool.header(slot) ? SampleWriter::kOk : SampleWriter::kVerify;
-}
-
 void LineMic::end(RecState st, const char* why) {
   last_.state = st;
   why_ = why;
@@ -194,7 +164,7 @@ bool LineMic::poll(pg::sampler::RecView* v) {
   if (st == RecState::Done || st == RecState::Full) {
     char name[12];
     std::snprintf(name, sizeof name, "REC%02d", (slot_ + 1) % 100);
-    const SampleWriter::Result r = commitAt(*writer_, *drv_, *pool_, rec_.length(), name, rec_.rates().out);
+    const SampleWriter::Result r = writer_->commitRecording(rec_.length(), name, rec_.rates().out);
     last_.result = SampleWriter::resultName(r);
     if (r != SampleWriter::kOk) {
       writer_->cancel();

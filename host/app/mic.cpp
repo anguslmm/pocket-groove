@@ -200,14 +200,14 @@ void Mic::finishSession() {
   const uint32_t drops = dropped_.load();
   if (s == RecState::Done || s == RecState::Full) {
     std::string msg;
-    if (!samples_->putRecording(slot_, sink_.v.data(), rec_.length(), &msg)) {
+    if (!samples_->putRecording(slot_, sink_.v.data(), rec_.length(), rec_.rates().out, &msg)) {
       why_ = "CANNOT WRITE";
       std::printf("[mic] slot %d: %s\n", slot_ + 1, msg.c_str());
       return;
     }
     lastFile_ = samples_->fileOf(slot_);
     std::printf("[mic] slot %d: %s, %.2f s recorded, peak %d, threshold %d, room rms %d, %u samples dropped\n",
-                slot_ + 1, lastFile_.c_str(), double(rec_.length()) / pg::sampler::kPoolRate, int(rec_.peak()),
+                slot_ + 1, lastFile_.c_str(), double(rec_.length()) / rec_.rates().out, int(rec_.peak()),
                 int(rec_.threshold()), int(rec_.floorRms()), unsigned(drops));
   } else {
     std::printf("[mic] slot %d: %s (nothing kept; the input gave %.2f s, peak %d)\n", slot_ + 1,

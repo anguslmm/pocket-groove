@@ -44,7 +44,8 @@ class Samples {
   // clearSlot() removes the slot's files (it plays its built-in sound again).
   // A resample (SHIFT+L, kind "res") becomes "NN-resNN.wav", loaded whole (not
   // trimmed: sample_convert.h isWholeFile), levelled as any file.
-  bool putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg, const char* kind = "rec");
+  bool putRecording(int slot, const int16_t* data, uint32_t samples, uint32_t rate, std::string* msg,
+                    const char* kind = "rec");
   bool clearSlot(int slot, std::string* msg);
   std::string fileOf(int slot) const;   // "" when the slot has no file
   int reloads() const { return reloads_; }

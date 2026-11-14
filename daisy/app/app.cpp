@@ -124,8 +124,7 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   }
 
   // Recording: the codec's line input, into the pool (line_mic.h).
-  lineMic_.init(mem.poolImage ? &writer_ : nullptr, &mirror_, &pool_, mem.lineRing, mem.lineRingSamples,
-                hal.sampleRate());
+  lineMic_.init(mem.poolImage ? &writer_ : nullptr, mem.lineRing, mem.lineRingSamples, hal.sampleRate());
   const bool lineIn = hal.lineInput() && mem.lineRing && mem.poolImage;
   lineIn_ = lineIn;
   lineMic_.setAvailable(false);   // once the audio runs (servicePads)

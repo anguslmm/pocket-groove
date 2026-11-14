@@ -100,7 +100,9 @@ int main(int argc, char** argv) {
   desk::Samples* smp = &samples;
   rs.init(
       &g_inst.engine(), &g_inst.sampler(), 44100.0f,
-      [smp](int slot, const int16_t* d, uint32_t n, std::string* err) { return smp->putRecording(slot, d, n, err, "res"); },
+      [smp](int slot, const int16_t* d, uint32_t n, uint32_t rate, std::string* err) {
+        return smp->putRecording(slot, d, n, rate, err, "res");
+      },
       [smp](int slot) {
         std::string msg;
         return smp->clearSlot(slot, &msg);

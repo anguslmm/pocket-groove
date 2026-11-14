@@ -346,8 +346,8 @@ int main() {
   mic.pool = &pool;
   mic.clockMs = [] { return R->now(); };
   rs.init(&rig.eng, &rig.inst.sampler(), uih::Rig::kSr,
-          [](int slot, const int16_t* d, uint32_t n, std::string* err) {
-            return hostrs::commitToPool(P, g_bufs, slot, d, n, err);
+          [](int slot, const int16_t* d, uint32_t n, uint32_t rate, std::string* err) {
+            return hostrs::commitToPool(P, g_bufs, slot, d, n, rate, err);
           },
           [](int slot) {
             P->clear(slot);

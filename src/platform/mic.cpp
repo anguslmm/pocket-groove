@@ -254,7 +254,9 @@ bool pollSession(pg::sampler::RecView* v, bool resample) {
   if (st == RecState::Done || st == RecState::Full) {
     char name[12];
     snprintf(name, sizeof name, resample ? "RES%02d" : "REC%02d", (s_last.slot + 1) % 100);
-    const SampleWriter::Result r = samples::writer().commitRecording(len, name);
+    // at the rate the recording is stored at (22,050 here: the header as it always was)
+    const uint32_t rate = resample ? ss.rs.storedRate() : ss.rec.rates().out;
+    const SampleWriter::Result r = samples::writer().commitRecording(len, name, rate);
     s_last.commit = SampleWriter::resultName(r);
     if (r != SampleWriter::kOk) {
       samples::writer().cancel();

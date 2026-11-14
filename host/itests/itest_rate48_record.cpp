@@ -8,6 +8,11 @@
 //             ms as at 22,050 Hz; the slot's header says 48,000; the stored tone is
 //             440 Hz; played back by both samplers at a 48 kHz and a 44.1 kHz engine it
 //             is 440 Hz (and lasts as long as it was recorded); 48 -> 24 kHz too
+//   commit    the same 48 kHz recording through the core's flash path, as the Daisy
+//             commits it (SampleWriter::beginRecording / write / commitRecording at the
+//             Recorder's stored rate into a FlashPool on a RAM flash): the header says
+//             48,000 and both samplers play it at 440 Hz and for as long as it was
+//             recorded; the 44.1 -> 22.05 kHz recording (the Cardputer's) the same
 //   resample  the engine at 48 kHz, in time: the recording starts on a bar line and
 //             ends on the bar line after the release; its length is the frames between
 //             them, and every sample IS the engine's own mono output of that frame (no
@@ -22,6 +27,7 @@
 #include "common/ui_harness.h"
 #include "itests/itest_util.h"
 #include "itests/rate_util.h"
+#include "pg/sampler/flash_pool.h"
 #include "pg/sampler/melodic.h"
 #include "pg/sampler/recorder.h"
 #include "pg/sampler/resampler.h"
@@ -90,10 +96,10 @@ std::vector<int16_t> recordTone(RecRates rates, Recorder& r, uint32_t* onset) {
 }
 
 template <class V>
-double playbackHz(V& v, float fs, int slot, int note, double* lastMs) {
+double playbackHz(V& v, float fs, int slot, int note, double* lastMs, const sampler::SamplePool* pool = &g_pool) {
   uint8_t p[kSoundParams];
   rt::defaults(v, p);
-  v.setPool(&g_pool);
+  v.setPool(pool);
   v.init(fs);
   std::vector<float> out;
   float l[kQuantum], r[kQuantum];
@@ -158,6 +164,51 @@ void testMic() {
     }
     std::printf("  mic    %5u -> %5u: %s, pre-roll %.2f ms, %.1f ms long, stored %.3f Hz, played back at 440 Hz\n",
                 rates.in, rates.out, sampler::recStateName(r.state()), preMs, lenMs, hz);
+  }
+}
+
+// The recording committed as the devices commit it: streamed into an erased slot of a
+// FlashPool (a RAM flash with NOR rules) and closed by SampleWriter::commitRecording
+// at the Recorder's stored rate.
+void testCommit() {
+  static std::vector<uint8_t> image(sampler::kPoolBytes, 0xFF);
+  static sampler::RamFlash flash(image.data());
+  static sampler::FlashPool pool;
+  static sampler::SampleWriter w;
+  pool.attach(image.data());
+  w.attach(&flash, &pool);
+  static Recorder r;
+  for (const RecRates rates : {RecRates{48000, 48000}, RecRates{44100, 22050}}) {
+    const int slot = rates.out == 48000 ? 3 : 4;
+    uint32_t onset = 0;
+    const std::vector<int16_t> rec = recordTone(rates, r, &onset);
+    const double lenMs = double(r.length()) * 1000.0 / double(rates.out);
+    it::check(w.beginRecording(slot) == sampler::SampleWriter::kOk, "%u Hz: recording opened", rates.out);
+    it::check(w.write(0, reinterpret_cast<const uint8_t*>(rec.data()), uint32_t(rec.size() * 2)) ==
+                  sampler::SampleWriter::kOk,
+              "%u Hz: written", rates.out);
+    char name[12];
+    std::snprintf(name, sizeof name, "REC%02d", slot + 1);
+    it::check(w.commitRecording(r.length(), name, r.rates().out) == sampler::SampleWriter::kOk, "%u Hz: committed",
+              rates.out);
+    const sampler::SlotHeader* h = pool.header(slot);
+    it::check(h && h->rate == rates.out && h->samples == r.length(), "%u Hz: the header says %u Hz, %u samples",
+              rates.out, h ? h->rate : 0u, h ? h->samples : 0u);
+    for (float fs : {48000.0f, 44100.0f}) {
+      sampler::SamplerVoice sv;
+      sampler::MelodicSampler ms;
+      double lastA = 0, lastB = 0;
+      const double a = playbackHz(sv, fs, slot, 60, &lastA, &pool), b = playbackHz(ms, fs, slot, 48, &lastB, &pool);
+      it::check(std::fabs(rt::cents(a, 440.0)) < 1.0 && std::fabs(rt::cents(b, 440.0)) < 1.0,
+                "committed %u Hz slot at a %.0f Hz engine: %.3f Hz (sampler), %.3f (melodic)", rates.out, double(fs), a,
+                b);
+      it::check(std::fabs(lastA - lenMs) < 15.0, "committed %u Hz slot at %.0f Hz: plays %.1f ms of %.1f", rates.out,
+                double(fs), lastA, lenMs);
+      if (fs == 48000.0f)
+        std::printf("  commit %5u Hz through SampleWriter: header %u Hz, %u samples, played at a 48 kHz engine "
+                    "%.3f Hz for %.1f ms of %.1f\n",
+                    rates.out, h ? h->rate : 0u, h ? h->samples : 0u, a, lastA, lenMs);
+    }
   }
 }
 
@@ -267,7 +318,7 @@ void testHostResample() {
   for (float fs : {44100.0f, 48000.0f, 32000.0f}) {
     g_inst.init(fs, false);
     h.init(&g_inst.engine(), &g_inst.sampler(), fs,
-           [](int, const int16_t*, uint32_t, std::string*) { return true; });
+           [](int, const int16_t*, uint32_t, uint32_t, std::string*) { return true; });
     const bool ok = h.ready(&why);
     if (fs == 32000.0f) it::check(!ok && std::strcmp(why, "RESAMPLE: 44.1K ONLY") == 0, "32 kHz: not offered");
     else it::check(ok && h.storedRate() == (fs == 48000.0f ? 48000u : 22050u), "%.0f Hz: stores at %u", double(fs),
@@ -281,6 +332,7 @@ int main() {
   std::printf("itest_rate48_record: recording at 48 kHz\n");
   testRates();
   testMic();
+  testCommit();
   testResample(48000.0f);
   testResample(44100.0f);
   testHostResample();

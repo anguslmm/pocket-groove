@@ -253,8 +253,10 @@ bool Samples::clearSlot(int slot, std::string* msg) {
   return true;
 }
 
-bool Samples::putRecording(int slot, const int16_t* data, uint32_t samples, std::string* msg, const char* kind) {
-  if (slot < 0 || slot >= pg::sampler::kPoolSlots || !data || samples < pg::sampler::kMinSamples) {
+bool Samples::putRecording(int slot, const int16_t* data, uint32_t samples, uint32_t rate, std::string* msg,
+                           const char* kind) {
+  if (slot < 0 || slot >= pg::sampler::kPoolSlots || !data || samples < pg::sampler::kMinSamples ||
+      rate < pg::sampler::kMinRate || rate > pg::sampler::kMaxRate) {
     *msg = "nothing to keep";
     return false;
   }
@@ -262,7 +264,7 @@ bool Samples::putRecording(int slot, const int16_t* data, uint32_t samples, std:
   std::snprintf(base, sizeof base, "%02d-%.3s%02d.wav", slot + 1, kind, slot + 1);
   const std::string dest = dir_ + "/" + base, tmp = dest + ".in.wav";
   const std::vector<int16_t> x(data, data + samples);
-  if (!wav::write(tmp.c_str(), x, sconv::kRate, 1)) {
+  if (!wav::write(tmp.c_str(), x, int(rate), 1)) {   // at its stored rate: load() converts it
     std::remove(tmp.c_str());
     *msg = "cannot write " + dest;
     return false;
