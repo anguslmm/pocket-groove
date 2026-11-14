@@ -85,7 +85,7 @@ bool Ui::micKey(int k, bool shift) {
   const int slot = sampleSlotOf(sel_);
   micSlot_ = uint8_t(slot);
   sampler::SampleRef r;
-  sampler::resolve(sampler_ ? sampler_->pool() : nullptr, slot, &r);
+  sampler::resolve(samplePool(), slot, &r);
   if (!r.builtin) {   // it holds a sample: ask once before erasing it
     openConfirm(kConfirmReplaceSample, slot);
     return true;
@@ -163,7 +163,7 @@ void Ui::micTick() {
     case sampler::RecState::Done:
     case sampler::RecState::Full: {
       sampler::SampleRef r;
-      sampler::resolve(sampler_ ? sampler_->pool() : nullptr, micSlot_, &r);
+      sampler::resolve(samplePool(), micSlot_, &r);
       char* o = cat(catInt(cat(buf, "SLOT "), micSlot_ + 1), " ");
       o = cat(cat(o, r.builtin ? "?" : r.name), " ");
       o = catSecs(o, r.builtin ? v.samples : r.length);

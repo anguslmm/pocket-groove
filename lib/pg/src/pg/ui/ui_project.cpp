@@ -659,7 +659,7 @@ void Ui::drawDialog(Framebuffer& fb) {
       o += itoa10(confirmRow_ + 1, o);
       cat(o, "?");
       sampler::SampleRef r;
-      sampler::resolve(sampler_ ? sampler_->pool() : nullptr, confirmRow_, &r);
+      sampler::resolve(samplePool(), confirmRow_, &r);
       cat(cat(l1, r.name), " IS ERASED");
       yes = "ENTER  ERASE";
       break;

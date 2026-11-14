@@ -213,6 +213,7 @@ struct Rig {
     ui.init(eng, *proj, &fs);
     ui.setDevMode(devMode);
     ui.setSampler(&inst.sampler());
+    ui.setMelodic(&inst.melodic());
     resetClock();
     g0Held = false;
     g0Swallow = 0;
@@ -227,6 +228,7 @@ struct Rig {
     ui.init(eng, *proj, &fs);
     ui.setDevMode(devMode);
     ui.setSampler(&inst.sampler());
+    ui.setMelodic(&inst.melodic());
     resetClock();
     g0Held = false;
     g0Swallow = 0;
