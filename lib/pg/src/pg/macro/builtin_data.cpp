@@ -17,6 +17,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
     {0, 4, 21, 60, 0, 0, 0, 0,
      {0x00, 0x93},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xe7c9, "BOOM",
      "family: MATERIAL / BODY.",
      "Choose the drum: size, skin, wood.", 0,   // voice kind
@@ -43,6 +44,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // kick/trio.pgm
     {0, 2, 1, 3, 2, 16, 2, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xef00, "TRIO",
      "family: MORPH.",
      "808, 909 and gabber, blended.", 0,   // voice kind
@@ -59,6 +61,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // kick/push.pgm
     {0, 3, 13, 26, 0, 0, 0, 0,
      {0x00, 0x92},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xece5, "PUSH",
      "family: GESTURE.",
      "Push it harder, hold it longer.", 0,   // voice kind
@@ -79,6 +82,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // snare/crack.pgm
     {1, 3, 13, 39, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x7da7, "CRACK",
      "family: OPPOSITES.",
      "A 909-ish snare. Pitch it, rattle it.", 0,   // voice kind
@@ -100,6 +104,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // snare/wood.pgm
     {1, 3, 13, 36, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xf33e, "WOOD",
      "family: MATERIAL / BODY.",
      "Wood or metal, piccolo or field.", 0,   // voice kind
@@ -121,6 +126,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // snare/bite.pgm
     {1, 3, 13, 26, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xfd8e, "BITE",
      "family: INTERACTION.",
      "Low and growling, or high and wiry.", 0,   // voice kind
@@ -141,6 +147,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // clap/hype.pgm
     {2, 2, 14, 29, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x1ba2, "HYPE",
      "family: ENERGY.",
      "More hands, or a calm far crowd.", 0,   // voice kind
@@ -160,6 +167,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // clap/swarm.pgm
     {2, 3, 9, 29, 0, 0, 0, 0,
      {0x91, 0x9f},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xc06d, "SWARM",
      "family: ODD (stepped, and a pair that only makes sense together",
      "Count the hands, play the pitch.", 0,   // voice kind
@@ -180,6 +188,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // chh/tick.pgm
     {3, 3, 11, 33, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x9410, "TICK",
      "family: OPPOSITES.",
      "Dark or bright, short or long.", 0,   // voice kind
@@ -201,6 +210,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // chh/alloy.pgm
     {3, 3, 13, 35, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xe0f0, "ALLOY",
      "family: MATERIAL / BODY.",
      "From seed shaker to metal bell.", 0,   // voice kind
@@ -222,6 +232,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // ohh/blast.pgm
     {4, 2, 13, 26, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x5bbe, "BLAST",
      "family: ENERGY.",
      "Brighter and harder, or a far wash.", 0,   // voice kind
@@ -241,6 +252,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // ohh/swish.pgm
     {4, 3, 12, 28, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xfcf3, "SWISH",
      "family: MOVEMENT.",
      "Open the pedal, let echoes ride.", 0,   // voice kind
@@ -261,6 +273,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/tap.pgm
     {5, 3, 13, 26, 0, 0, 0, 0,
      {0x81, 0x90},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x088c, "TAP",
      "family: GESTURE.",
      "A hand drum: tap, slap, let it ring.", 0,   // voice kind
@@ -281,6 +294,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/trail.pgm
     {5, 3, 11, 40, 0, 0, 0, 0,
      {0x91, 0x92},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x865d, "TRAIL",
      "family: JOURNEY.",
      "Tom, rim, cowbell, clave, zap.", 0,   // voice kind
@@ -302,6 +316,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/shake.pgm
     {5, 4, 13, 52, 0, 0, 0, 3,
      {0x90, 0x92},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x511a, "SHAKE",
      "family: OPPOSITES.",
      "A shaker on the SHKR model.", 0,   // voice kind
@@ -326,6 +341,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/chop.pgm
     {5, 4, 9, 38, 0, 0, 0, 0,
      {0x91, 0x92},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x6741, "CHOP",
      "family: GESTURE (sampler).",
      "Sixteen slices; each note picks one.", 1,   // voice kind
@@ -348,6 +364,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/tape.pgm
     {5, 4, 9, 27, 0, 0, 0, 0,
      {0x90, 0x92},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x4f7d, "TAPE",
      "family: MOVEMENT (sampler).",
      "The whole sample as tape.", 1,   // voice kind
@@ -369,6 +386,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/stutter.pgm
     {5, 4, 5, 21, 0, 0, 0, 0,
      {0x93, 0x91},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x5570, "STUTTER",
      "family: ENERGY (sampler).",
      "One chop, repeated in time.", 1,   // voice kind
@@ -388,6 +406,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // bass/acid.pgm
     {6, 4, 19, 43, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xd9d2, "ACID",
      "family: INTERACTION.",
      "The 303 squelch. Open it, then bite.", 0,   // voice kind
@@ -412,6 +431,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // bass/poles.pgm
     {6, 4, 22, 64, 0, 0, 0, 0,
      {0x00, 0x93},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x66f0, "POLES",
      "family: OPPOSITES.",
      "Round house bass. Push either way.", 0,   // voice kind
@@ -438,6 +458,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // bass/surge.pgm
     {6, 2, 16, 39, 0, 0, 0, 0,
      {0x00, 0x9f},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x0752, "SURGE",
      "family: ENERGY.",
      "More and more, or deep and calm.", 0,   // voice kind
@@ -458,6 +479,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // bass/road.pgm
     {6, 3, 15, 53, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x1b3a, "ROAD",
      "family: JOURNEY.",
      "One road from deep to screaming.", 0,   // voice kind
@@ -481,6 +503,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // bass/dice.pgm
     {6, 3, 14, 46, 0, 0, 0, 0,
      {0x82, 0x9f},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x1a31, "DICE",
      "family: ODD (stepped, and a macro that only comes alive combined",
      "Roll for a flavour and an interval.", 0,   // voice kind
@@ -503,6 +526,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/hands.pgm
     {7, 4, 22, 49, 0, 0, 0, 0,
      {0x00, 0x92},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xfd8f, "HANDS",
      "family: GESTURE.",
      "Open your hand, push, shake, hold.", 0,   // voice kind
@@ -528,6 +552,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/keys.pgm
     {7, 2, 0, 0, 2, 16, 2, 0,
      {0x00, 0x9f},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x233a, "KEYS",
      "family: MORPH.",
      "Organ, pluck and bell in one.", 0,   // voice kind
@@ -544,6 +569,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/drift.pgm
     {7, 3, 16, 39, 0, 0, 0, 0,
      {0xb1, 0xa0},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xccff, "DRIFT",
      "family: MOVEMENT.",
      "Long notes that bloom and wander.", 0,   // voice kind
@@ -565,6 +591,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/voyage.pgm
     {7, 3, 16, 63, 0, 0, 0, 0,
      {0x91, 0xb2},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xd6b1, "VOYAGE",
      "family: JOURNEY.",
      "From flute to metal in one sweep.", 0,   // voice kind
@@ -589,6 +616,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/swap.pgm
     {7, 3, 13, 63, 0, 0, 0, 0,
      {0x82, 0x9f},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x14b4, "SWAP",
      "family: ODD (stepped flavours, and a macro that is dull alone).",
      "Six leads, six intervals. Click!", 0,   // voice kind
@@ -613,6 +641,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/pluck.pgm
     {7, 4, 13, 41, 0, 0, 0, 2,
      {0x90, 0x91},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x22c6, "PLUCK",
      "family: GESTURE (sampler).",
      "The sample struck like a key.", 1,   // voice kind
@@ -636,6 +665,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/cloud.pgm
     {7, 4, 8, 24, 0, 0, 0, 1,
      {0xb0, 0x93},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0x1d5c, "CLOUD",
      "family: MOVEMENT (sampler).",
      "The sample held as a slow pad.", 1,   // voice kind
@@ -655,6 +685,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/reel.pgm
     {7, 4, 12, 38, 0, 0, 0, 1,
      {0x90, 0x91},   // tilt x, y
+     {0, 0, 0, 0}, 0x00,   // vel per macro, press
      0xcdfb, "REEL",
      "family: MATERIAL (sampler).",
      "The sample on a worn tape.", 1,   // voice kind

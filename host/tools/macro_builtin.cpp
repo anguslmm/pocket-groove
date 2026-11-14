@@ -92,6 +92,9 @@ std::string emit(const pm::MacroSet& s, const std::string& file) {
     << ", " << int(s.numTrims) << ",\n";
   std::snprintf(hex, sizeof(hex), "0x%02x, 0x%02x", unsigned(s.tilt[0]), unsigned(s.tilt[1]));
   o << "     {" << hex << "},   // tilt x, y\n";
+  o << "     {" << int(s.vel[0]) << ", " << int(s.vel[1]) << ", " << int(s.vel[2]) << ", " << int(s.vel[3]) << "}, ";
+  std::snprintf(hex, sizeof(hex), "0x%02x", unsigned(s.press));
+  o << hex << ",   // vel per macro, press\n";
   std::snprintf(hex, sizeof(hex), "0x%04x", unsigned(s.id));
   o << "     " << hex << ", " << cstr(s.name) << ",\n     " << cstr(s.about) << ",\n     " << cstr(s.tagline) << ", "
     << int(s.voice) << ",   // voice kind\n";

@@ -141,6 +141,13 @@ struct Parser {
   char tiltName[2][kMacroNameLen + 1];   // the macro each tilt line names ("" = none / not given)
   int tiltLine[2];                       // 0 = no tilt line for that axis
   uint8_t tiltResp[2];
+  char velName[kMaxMacros][kMacroNameLen + 1];   // `vel MACRO AMOUNT` lines, resolved at the end
+  int8_t velAmt[kMaxMacros];
+  int velLine[kMaxMacros];
+  int numVel = 0;
+  char pressName[kMacroNameLen + 1];     // "" = `press none`
+  int pressLine = 0;
+  uint8_t pressResp = 0;
   const ParamInfo* kindScratch[kParamsPerTrack];
   TrackParams tp = nullptr;   // the list the set is checked against (its track and voice kind), from the voice line
 
@@ -156,6 +163,10 @@ struct Parser {
     std::memset(tiltName, 0, sizeof(tiltName));
     std::memset(tiltLine, 0, sizeof(tiltLine));
     std::memset(tiltResp, 0, sizeof(tiltResp));
+    std::memset(velName, 0, sizeof(velName));
+    std::memset(velAmt, 0, sizeof(velAmt));
+    std::memset(velLine, 0, sizeof(velLine));
+    std::memset(pressName, 0, sizeof(pressName));
   }
 
   bool fail(const char* fmt, const char* a = "", const char* b = "") {
@@ -274,6 +285,8 @@ struct Parser {
     if (ieq(kw, "morph")) return curveLine(w, n, Kind::Morph, -1);
     if (ieq(kw, "trim")) return curveLine(w, n, Kind::Trim, -1);
     if (ieq(kw, "tilt")) return tilt(w, n);
+    if (ieq(kw, "vel")) return vel(w, n);
+    if (ieq(kw, "press")) return press(w, n);
     if (cur < 0) return fail("'%s': a target line needs a 'macro NAME' line above it", w[0]);
     const int p = param(w[0]);
     if (p < 0) return false;
@@ -302,6 +315,44 @@ struct Parser {
     }
     tiltLine[a] = line;
     tiltResp[a] = uint8_t(r);
+    return true;
+  }
+
+  // vel NAME AMOUNT   (AMOUNT -1..1, at most 2 decimals; NAME resolved at the end)
+  bool vel(char** w, int n) {
+    if (n != 3) return fail("write 'vel MACRO AMOUNT' (AMOUNT -1..1: how far velocity 127 moves the macro)");
+    if (numVel >= kMaxMacros) return failN("%smore than %s vel lines (one per macro)", kMaxMacros);
+    int32_t v = 0;
+    if (!parseMilli(w[2], &v) || v < -1000 || v > 1000 || v % 10)
+      return fail("vel amount '%s' must be a number -1..1 with at most 2 decimals", w[2]);
+    if (std::strlen(w[1]) > size_t(kMacroNameLen)) return fail("'vel %s': no macro has that name", w[1]);
+    for (size_t i = 0; i <= std::strlen(w[1]); ++i) velName[numVel][i] = upper(w[1][i]);
+    velAmt[numVel] = int8_t(v / 10);
+    velLine[numVel] = line;
+    ++numVel;
+    return true;
+  }
+
+  // press NAME [fast|smooth|fine|wide]   or   press none   (NAME resolved at the end)
+  bool press(char** w, int n) {
+    if (n < 2 || n > 3) return fail("write 'press MACRO [fast|smooth|fine|wide]' or 'press none'");
+    if (pressLine) return fail("'press' given twice");
+    int r = kTiltDefaultResponse;
+    if (n == 3) {
+      r = -1;
+      for (int k = 0; k < 4; ++k)
+        if (ieq(w[2], kTiltResponseNames[k])) r = k;
+      if (r < 0) return fail("'%s' is not a press response (fast, smooth, fine, wide)", w[2]);
+    }
+    if (ieq(w[1], "none")) {
+      if (n == 3) return fail("'press none' takes no response");
+      pressName[0] = 0;
+    } else {
+      if (std::strlen(w[1]) > size_t(kMacroNameLen)) return fail("'press %s': no macro has that name", w[1]);
+      for (size_t i = 0; i <= std::strlen(w[1]); ++i) pressName[i] = upper(w[1][i]);
+    }
+    pressLine = line;
+    pressResp = uint8_t(r);
     return true;
   }
 
@@ -584,6 +635,23 @@ struct Parser {
         line = tiltLine[1];
         return fail("both tilt axes move %s: give one of them another macro or none", set->macros[x.macro].name);
       }
+    }
+    for (int k = 0; k < numVel; ++k) {
+      line = velLine[k];
+      const int m = set->findMacro(velName[k]);
+      if (m < 0) return fail("'vel %s': no macro has that name", velName[k]);
+      for (int q = 0; q < k; ++q)
+        if (set->findMacro(velName[q]) == m) return fail("'vel %s' given twice", set->macros[m].name);
+      set->vel[m] = velAmt[k];
+    }
+    if (pressLine) {
+      line = pressLine;
+      int m = -1;
+      if (pressName[0]) {
+        m = set->findMacro(pressName);
+        if (m < 0) return fail("'press %s': no macro has that name", pressName);
+      }
+      set->press = packTilt(m, pressResp);
     }
     // the about line repeats the set name: "ACID -- family: ..." -> "family: ..."
     const size_t nl = std::strlen(set->name);
@@ -872,6 +940,29 @@ size_t format(const MacroSet& set, const ParamTable& params, char* buf, size_t c
         o.put(kTiltResponseNames[r]);
       }
     }
+    o.nl();
+  }
+  if (set.press & kTiltGiven) {   // only what the file gave (0 = the default)
+    const int m = set.press & 0x0F;
+    o.put("press ");
+    if (m >= set.numMacros || m >= kMaxMacros) {
+      o.put("none");
+    } else {
+      o.put(set.macros[m].name);
+      const int r = (set.press >> 4) & 3;
+      if (r != kTiltDefaultResponse) {
+        o.put(" ");
+        o.put(kTiltResponseNames[r]);
+      }
+    }
+    o.nl();
+  }
+  for (int m = 0; m < set.numMacros && m < kMaxMacros; ++m) {
+    if (!set.vel[m]) continue;
+    o.put("vel ");
+    o.put(set.macros[m].name);
+    o.put(" ");
+    o.milli(int32_t(set.vel[m]) * 10);
     o.nl();
   }
   if (set.baseMask) {

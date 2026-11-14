@@ -120,6 +120,18 @@ TiltAssign MacroSet::tiltAssign(int a) const {
   return t;
 }
 
+// Not in the file: what tilt X moves (it was chosen to sweep while a sound plays), or
+// with `tilt x none` what tilt Y moves; smooth.
+PressAssign MacroSet::pressAssign() const {
+  if (press & kTiltGiven) {
+    const int m = press & 0x0F;
+    return PressAssign{int8_t(m < numMacros && m < kMaxMacros ? m : -1), uint8_t((press >> 4) & 3)};
+  }
+  TiltAssign t = tiltAssign(0);
+  if (t.macro < 0) t = tiltAssign(1);
+  return PressAssign{t.macro, uint8_t(kTiltDefaultResponse)};
+}
+
 int MacroSet::findPatch(const char* nm) const {
   for (int i = 0; i < numPatches && i < kMaxPatches; ++i)
     if (ieq(patches[i].name, nm)) return i;
