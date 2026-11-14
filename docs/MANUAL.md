@@ -224,7 +224,7 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | `del` held + a macro key | Clear that macro's motion: its values leave every note of this track in this pattern (`ctrl`+`z` brings them back). |
 | `'` | Which 16 steps the strip shows. |
 
-**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER. Their picture is the sample's waveform, `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays, **holding `l` records the microphone into that slot**, and **holding `shift`+`l` records what the groove plays** (resampling, in whole bars). While `shift` is held the footer shows its layer. Chapter 20.
+**Sampler instruments.** PERC's list ends with three instruments that play a sample instead of the percussion sound: CHOP, TAPE and STUTTER; the LEAD's with three that play one from the keyboard: PLUCK, CLOUD and REEL. Their picture is the sample's waveform, `shift`+`;` / `shift`+`.` choose which of the twelve sample slots the track plays, **holding `l` records the microphone into that slot**, and **holding `shift`+`l` records what the groove plays** (resampling, in whole bars). While `shift` is held the footer shows its layer. Chapter 20.
 
 A track with no instrument shows **CLASSIC**: it plays its classic sound (projects from before instruments), the picture shows it, and two cards name what `.` or `9` (its first instrument) and `;` (its last) would pick. Each instrument remembers where you left its macros while the device is on. Everything else (`space`, `enter`, `[` `]`, modifiers) works as in GROOVE; `shift`+`[` `]` sweeps the bass's macro 1.
 
@@ -1175,7 +1175,7 @@ Key = FX tab (`o` cycles DUCK, SPACE, MASTER) and column key.
 
 ---
 
-## 20. Samples: vocal chops
+## 20. Samples: vocal chops and sampled instruments
 
 ![CHOP playing slice 1 of a sample](ux/sampler-chop.png)
 
@@ -1212,6 +1212,29 @@ tools/pg sample rm 3                       # empty slot 3 (it plays its built-in
 ```
 
 `put` converts the file on the Mac exactly as the desktop does (any WAV; on a Mac also AIFF, MP3, M4A and anything else `afconvert` reads) and names it after the file (`--name` to choose). The device shows `SAMPLE 3: 45%` while it writes, then `SAMPLE POOL UPDATED`; a sampler instrument plays the new sound from its next note. It refuses while the sequencer plays (writing the device's flash stops the audio for a moment). If a transfer is cut off, that slot is left empty (built-in sound), never half a sample: put it again.
+
+### Playing a sample melodically: samplers on the LEAD
+
+![CLOUD: two notes looping in the window](ux/lead-sampler-cloud.png)
+
+The **LEAD** can play a sample too, from the keyboard, like an instrument: step its instrument (`9`, then `.`) past the synth sets to **PLUCK**, **CLOUD** or **REEL**. The same twelve slots: the lead remembers its own slot (`shift`+`;` / `.` on its page), so PERC can chop one sample while the lead plays another, or the same one. `l` records the microphone into the lead's slot and `shift`+`l` records what you hear into it, exactly as on PERC.
+
+The lead stays the lead. The note keys play the project's scale at the lead's octave, chord mode (`l` in GROOVE) plays chords, a note held into the next one slides, and live recording keeps long held notes long. While a sampler instrument is chosen the synth lead is not playing on that track; step back to HANDS (or any synth set) and it is.
+
+| Instrument | `z` `x` | `c` `v` | `b` `n` | `m` `,` |
+|---|---|---|---|---|
+| PLUCK: the sample struck like a key, played once from one point | TONE (dark thud .. bright snap) | LENGTH (short pluck .. a ringing key) | START (where a note starts: head .. middle) | SNAP (soft touch .. hard, driven strike) |
+| CLOUD: the sample held as a pad | SCAN (where the loop sits: head .. tail) | SPAN (a tight, grainy buzz .. a wide, slow sway) | SWELL (quick .. a slow fade in and a long release) | SHADE (dark .. open, with reverb) |
+| REEL: the sample on a worn tape | WOW (steady .. seasick pitch drift) | WORN (clean .. crushed and dull) | HOLD (a short note .. a held one with a tail) | ECHO (dry .. delay and reverb) |
+
+- **Tuning.** The sample is taken to be a **C**: at the lead's normal octave, `z` (C3) plays it exactly as recorded, `x` a step of the scale higher, and so on; `;` / `.` change the octave as on any lead. The Pocket Groove does not detect the sample's pitch. A sample in another key plays in that key's distance from C (a sample sung on D sounds a tone high against the other tracks). The instrument's PITCH (semitones) and FINE (up to a semitone either way) parameters tune it to any root: a sample on D needs PITCH -2. On the desktop they are set in the macro lab (a set's `base` line) or developer mode's parameter pages; the device has no tune control on the player page yet.
+- **Held notes.** PLUCK plays the sample once from its start point and stops at the end of the part it plays. CLOUD and REEL **loop**: a held note runs forward and backward over a short window of the sample for as long as the key (or the step's gate) is down, and fades with the release when it ends. The loop never clicks and never dips, because the playhead turns around instead of jumping.
+- **Moving through the sample.** On CLOUD, tilt (SCAN is on X) or move SCAN while a chord holds: the loop window walks through the sample and the notes travel there with it. The white lines in the picture are the notes' playheads, one per note.
+- **Up to four notes.** A chord of four notes plays all four, each at its own pitch, through one shared tone (filter, crush, drive): this is what keeps it light enough for the device. A fifth note takes over the quietest note that is already fading, or else the oldest one, without a click. A chord type with more than four notes would lose its highest notes; every chord type today has four or fewer.
+- **Slides.** A note held into the next one (or a step with SLD) glides from the old pitch to the new one without restarting the sample, like the synth lead's slide.
+- **Resample, then play it.** A nice loop: solo the synth lead, record a bar of it into a slot from PERC's CHOP page (`shift`+`l`), then choose PLUCK or CLOUD on the lead, give the lead that slot (`shift`+`.`) and play your own lead back as a sampled instrument. The lead's sampler cannot record itself: while its own slot records it plays nothing there.
+
+![The lead's own slot holds AHOO](ux/lead-sampler-user.png)
 
 ### Recording with the microphone
 

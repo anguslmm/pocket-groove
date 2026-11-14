@@ -14,6 +14,11 @@ gates are capped at the step's loop (so a note rings through the loop point and 
 next trigger); a recorded step does not retrigger under a key still held past the loop; STEP
 EDIT's GATE field runs to 63.75 steps (it clamped any edit back to 16). Not yet heard on hardware.
 
+Melodic sampler (2026-11-14, owner: "melodic sampling with the lead"): the LEAD's list gains
+three sampler instruments, PLUCK, CLOUD and REEL, that play a sample slot from the keyboard (up to
+four notes, ping-pong loops, slides). Host-verified (94/94), firmware builds clean; not yet on the
+device, not listened to. Entry "MELODIC SAMPLER BUILT" below, DEVICE CHECK step 13.
+
 Stem bounce + USB project transfer (tools/pg, docs/MANUAL.md chapter 15): host-verified
 (itest_bounce, itest_golden, test_io_xfer, test_pg_client: the Python client against the
 device protocol code on a pty); the firmware side (src/app glue, real USB-Serial/JTAG timing,
@@ -590,6 +595,99 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    pre-FX tap); resampling into a slot while CHOP plays that same slot audibly (by design silent);
    a bar length other than 16 steps (a 12-step pattern's bar is its 12 steps; a 24-step pattern
    gives a 16-step and an 8-step "bar"); showing SHIFT+L in the `/` key map.
+   MELODIC SAMPLER BUILT (2026-11-14, branch of the melodic-sampler worktree, NOT YET ON THE DEVICE,
+   NOT LISTENED TO): SAMPLER INSTRUMENTS IN THE LEAD SLOT. The owner: "support the rhythm sampling
+   with the perc slot, as well as melodic sampling with the lead". The lead's list ends with PLUCK
+   (a keyed one-shot: TONE LENGTH START SNAP), CLOUD (a ping-pong pad: SCAN SPAN SWELL SHADE; SCAN
+   on tilt X walks the loop through the sample while chords hold) and REEL (worn tape with a shared
+   pitch drift: WOW WORN HOLD ECHO), `voice lead sampler`, after the synth sets in builtin.txt
+   (UX.md 10.3 "On the LEAD", MANUAL.md chapter 20 "Playing a sample melodically", MACROLAB.md "The
+   melodic sampler"; docs/ux/lead-sampler-*.png). Choices made:
+   - THE VOICE: pg/sampler/melodic.h MelodicSampler, a second hosted voice (Engine kMaxAltVoices
+     1 -> 2; Instrument wires it on the LEAD; the sampler kind's parameter list is per track:
+     voiceKindParam(kind, track, index), 21 parameters on the lead, sampler_params.h namespace mel).
+     PARAPHONIC: up to 4 notes, each with its own playhead (32.32), pitch with glide and ADSR, summed
+     into ONE shared chain (hold, crush, drive, SVF with a filter envelope the newest unslid note
+     retriggers). Chords expand with the synth lead's table (lead::LeadVoice::chordIntervals); the
+     cap drops a chord's highest notes (no chord type has more than 4 today). Per-note gain by the
+     chord's size 1/sqrt(n). Stealing: a free note, else the same pitch, else the quietest released,
+     else the oldest; the stolen note's last value becomes an offset decaying with tau 0.6 ms (the
+     drums' de-click idea), the new note starts on time (>= 1 ms attack).
+   - THE PITCH REFERENCE: step note 48 (C3) = the sample as recorded: the lead's default octave 3
+     and root C put C3 on `z`, so the first key plays it untransposed (PERC's chop keeps 60). PITCH
+     (16..112, semitones) and FINE (+-1 semitone) tune it; no pitch detection. No player-page tune
+     control on the device (no free macro, no free TrackSettings byte): set in a .pgm / the lab.
+   - HELD NOTES: LOOP ONE (one-shot from START to the window's end, de-clicked) or PONG (forward-
+     backward over [START, START+LENGTH], the release ends it): no crossfade (no dip), a turn keeps
+     the waveform continuous (no click). LATCHED: the slot, START as a note's starting point, LOOP,
+     REVERSE. CONTINUOUS: the rest, START and LENGTH as the PONG window: the playhead is never moved;
+     a window that moved away is reached by turning toward it and travelling at the note's speed
+     (a scan). A note decayed to silence while held ends.
+   - SLIDE: a slid note keeps its playhead and envelope and glides (GLIDE, tau 2 ms .. 0.5 s); into
+     a chord the old notes glide to their counterparts in pitch order, extra notes start, surplus
+     ones release. A slid note whose gate had ended is gated again from its envelope level.
+   - THE SILENT-SLOT RULE: MelodicSampler::followSilent(&PERC's SamplerVoice): the recorders keep
+     calling SamplerVoice::setSilentSlot and the slot is silent on both samplers.
+   - UI: what branches on "is this track a sampler" is Ui::samplerOn (the instrument's kind), never
+     the track; the picture's pool comes from either voice (Ui::setMelodic, wired in the firmware,
+     the desktop app, the rig). On the lead: the window instead of slices, a playhead per note on the
+     shown slot; the note keys keep the lead's scale, chords, slide (isSynth comes first).
+   - RESAMPLING BY HAND (the request's point 8): LEFT AS IT IS. The behaviour asked for already holds
+     (itest_ui_resample "stopped"): with SHIFT+L held on a sampler page, ` and SHIFT+k select the
+     lead and its notes play while the recording follows the slot that armed it. What remains awkward
+     is that L must stay down throughout (a latch for a stopped take would change the tested
+     gesture), and with L held two notes at once can be dropped by the ghost filter (7 of 56
+     rectangles). Not changed.
+   - NOT CHANGED: PERC's SamplerVoice (its filter can also ring into subnormals on a crushed input:
+     macro_audit's "track stem" subnormal warning on TAPE; the melodic sampler flushes its states
+     below 1e-15, PERC was left bit-identical); the engine's single fading-voice slot (two tracks
+     switching kind within the same ~2 ms would cut the first one's fade short).
+   COST (host measured, device ESTIMATED): host/tools/bench_melodic under callgrind, x86 instructions
+   per output frame: PERC chop plain 87.7 (every stage 155.6); melodic 1 note plain 73.8, 4 notes
+   187.0 -> 37.7 per note, 36.1 shared; every stage on (filter + env, crush, hold, drive, drift):
+   1 note 146.3, 4 notes 264.1 -> 39.3 per note, 107.0 shared. The synth lead it replaces on the
+   track: 134.9 (1 note) / 379.7 (a MIN7 chord), mono, defaults. Host ns/frame (test_sampler_melodic
+   bench, noisy): 1 note 3.9-6, 4 notes 9-16 plain; 12-15 / 24-33 every stage. ESTIMATE at x1.3
+   cycles per instruction (range 1.0-1.6, bench_instrument's convention; consistent with F1's
+   120-cycle estimate of the plain chop): one note ~96 cycles = 1.8 % of a core at 44.1 kHz
+   (1.4-2.2); each further note ~49 cycles = 0.9 %; THE WORST CASE, a 4-note chord with every stage
+   on: ~343 cycles = 6.3 % (4.9-7.8), against ~494 cycles = 9.1 % for the synth lead's 4-note chord
+   on the same track (a sampler instrument replaces the synth's cost, it does not add to it). Not in
+   that figure: flash-cache refills for four playheads in mapped flash (a 32-byte line per 16 frames
+   per note at x1, per 4 at two octaves up: plausibly +5-20 cycles per note per frame), and moving()
+   (drift / the filter envelope's corner, ~100 instructions per quantum from flash while one moves).
+   env:profile's new MELODIC lines measure it (CLOUD single notes, CLOUD and PLUCK with MIN7 on every
+   lead step: render c/f while sounding, % of a core, notes sounding on average).
+   FIGURES (clean builds, warning-free in our sources, placement checks OK; before = main 7ef992b):
+   USB: flash 1316643 -> 1332135 (+15.5 KB: the voice, the three sets, the UI), static RAM 201500 ->
+   202276 (+776: the voice inside Instrument, ~750 B on the device, the second alt-voice slot, the UI pointer),
+   .iram0.text 129019 -> 131247 (+2228: render 1107 B, renderNote 1027 B, publish, active, mono),
+   _heap_start 0x3FCD5020 -> 0x3FCD5B28 (2824 B less heap); jack: flash 1254439 -> 1269995, static
+   RAM 200980 -> 201756, .iram0.text 122083 -> 124311, _heap_start 0x3FCD3218 -> 0x3FCD3E20 (3080 B);
+   profile: flash 1159591 -> 1176231, static RAM 245796 -> 246708, .iram0.text unchanged 67867.
+   Expect the minimum-ever free heap to drop by about 3 KB. Step / Project unchanged, old files load
+   unchanged; itest_golden and the PERC sampler tests unchanged.
+   TESTS (host, 94/94; new: test_sampler_melodic (pitch at notes 24..84 and with PITCH / FINE /
+   reverse within 0.1 %, chords, the four-note cap and steals below the material's steepest step,
+   PONG: turns at both ends, no step above the material's, 10 ms RMS within 0.5 dB, the window
+   followed without a jump, the release ends it; the one-shot's end; glide without retrigger; a
+   bounds fuzz over 7 sample lengths between guards at every parameter extreme, chord, slide and
+   window move; fine = bytes; silent slot and pool generation; no subnormal output), itest_lead_
+   sampler (the list, the picture, note keys and chord mode, STEP EDIT, the lead's own slot, L and
+   SHIFT+L into the lead's slot with its notes silent meanwhile, chords / slide from steps, synth <->
+   sampler switching mid-pattern back and forth with no faults; three key-matrix models),
+   macro_audit_lead_sampler (the sets on the test sample); itest_live_record runs every scenario on
+   CLOUD too (long legato notes, held past the loop, legato across the loop, hand chords, chord
+   mode: played back within 6 dB of how they sounded held).
+   LISTENING (not listened to): build/host/melodic_demo writes build/melodic/{pluck,cloud,reel}.wav
+   (each set on slot 1's built-in sound: a line with a slide, a MIN7 chord, a triad, a slide down;
+   the second pass moves the first macro) and build/melodic/resample_then_play.wav (ACIDJAM's lead
+   soloed, a bar resampled into slot 2 as SHIFT+L does, then PLUCK and CLOUD playing that take with
+   the same phrase; the take alone: resampled_bar_22k.wav).
+   NOT DONE: a tune control on the player's page (see above); pitch detection; a forward loop or a
+   crossfaded loop mode; a per-note filter (deliberately shared: the CPU budget); velocity to the
+   filter; the `/` key map showing L / SHIFT+L.
+   HARDWARE CHECK: DEVICE CHECK below, step 13.
    RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
    device). Measured on the owner's device just before (current main, USB build, a song with
    STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at
@@ -700,6 +798,19 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
       recorded (the `[mic] last recording` lines: ring drops, underruns, longest block; a take that
       says OVERRUN), whether the takes loop cleanly bar to bar, how they sound next to the groove,
       and whether the count-in reads right.
+   13. The melodic sampler (the flash of steps 1-9, USB build): (a) a demo playing, the LEAD's
+      SOUND page (shift+k, 9), `.` past the synth sets to PLUCK, CLOUD, REEL: each should play the
+      demo's lead line from slot 1's built-in voice, chords as chords; `r` after a minute on each
+      (AUD %, longest block, underruns: the 4-note chord is the paraphonic worst case, estimated at
+      ~6 % of a core with every stage on, replacing the synth lead's ~9 %). (b) GROOVE, chord mode
+      AUTO, hold z / c / b on CLOUD: one chord each, up to four notes, no click when a fifth note
+      steals; tilt (SCAN on X) while a chord holds: the sound should walk through the sample with no
+      click or gap. (c) z at the lead's octave 3 should play the sample at its recorded pitch. (d)
+      PERC on CHOP, solo the lead (synth HANDS), shift+l a bar into slot 2; then the lead on PLUCK,
+      shift+. to slot 2: the lead plays its own resampled bar from the keys. (e) l on the lead's
+      sampler page records the mic into the lead's slot. (f) the env:profile flash's MELODIC lines
+      (render c/f, % of a core, notes sounding). Say: clicks at steals, at a PONG turn, at a slide;
+      whether 4-note chords on CLOUD / REEL push the audio load near the 55 % ceiling.
    STANDING TASTE RULE (owner, 2026-11-13: "get the stupid tag lines for each synth out of there"):
    no descriptive captions for instruments on the screen. `about "..."` stays in the .pgm as an
    author's note, not displayed; the instrument page gives those rows to the picture (y 29..72).
