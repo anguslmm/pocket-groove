@@ -51,5 +51,16 @@ if [ ! -f "$dir/build/libdaisy.a" ]; then
   say "building libdaisy.a (about a minute)"
   make -C "$dir" -j"$jobs" >"$dir/build.log" 2>&1 || { tail -n 30 "$dir/build.log"; say "libDaisy build failed (log: daisy/libDaisy/build.log)"; exit 1; }
 fi
+# Bosch's BMI270 configuration file for stage 1's tilt (optional: without it the IMU is off).
+burl=$(sed -n 's/^BMI270_URL=//p' "$lock")
+bcommit=$(sed -n 's/^BMI270_COMMIT=//p' "$lock")
+bdir="$here/daisy/vendor/BMI270_SensorAPI"
+if [ ! -f "$here/daisy/vendor/bmi270_config.inc" ]; then
+  if { [ -d "$bdir/.git" ] || git clone --quiet "$burl" "$bdir"; } && git -C "$bdir" checkout --quiet "$bcommit"; then
+    python3 "$here/tools/daisy_bmi270_blob.py" "$bdir/bmi270.c" "$here/daisy/vendor" || say "BMI270 file not extracted (tilt stays off)"
+  else
+    say "could not fetch $burl (only stage 1's tilt needs it)"
+  fi
+fi
 say "ready: $(ls -l "$dir/build/libdaisy.a" | awk '{print $5}') bytes in daisy/libDaisy/build/libdaisy.a"
 say "next:  make -C daisy        (then tools/daisy-flash.sh, docs/DAISY.md)"

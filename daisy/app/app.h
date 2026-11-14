@@ -74,6 +74,14 @@ class Hal {
 
   // Physical keys (stage 1: the TCA8418 matrix and G0). false: none waiting.
   virtual bool pollKey(pg::KeyEvent* /*e*/) { return false; }
+  // Touch / pointer input (a touch panel is being considered: FT5336 on I2C): a
+  // place for it, not wired to the UI yet (the UI takes keys only). false: none.
+  struct Pointer {
+    int16_t x, y;      // in the UI's 240x135 canvas (the platform undoes the panel's scale)
+    bool down;
+    uint32_t timeMs;
+  };
+  virtual bool pollPointer(Pointer* /*p*/) { return false; }
   // The display (stage 1). false: none (present is then never called).
   virtual bool displayPresent() { return false; }
   virtual void present(const pg::Framebuffer& /*fb*/, int /*y0*/, int /*y1*/) {}

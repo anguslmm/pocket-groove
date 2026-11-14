@@ -64,7 +64,10 @@ PG_OBJS := $(call obj,$(PG_SRCS))
 CORE_OBJS := $(call obj,$(CORE_SRCS))
 DEV_OBJS := $(call obj,$(DEV_SRCS))
 STARTUP_OBJ := $(BUILD)/obj/startup_stm32h750xx.o
-OBJS := $(STARTUP_OBJ) $(DEV_OBJS) $(CORE_OBJS) $(PG_OBJS)
+# FatFS's code-page tables (libdaisy.a has ff.c but not this; libDaisy's core/Makefile adds it too).
+CCSBCS := $(LIBDAISY)/Middlewares/Third_Party/FatFs/src/option/ccsbcs.c
+CCSBCS_OBJ := $(BUILD)/obj/ccsbcs.o
+OBJS := $(STARTUP_OBJ) $(CCSBCS_OBJ) $(DEV_OBJS) $(CORE_OBJS) $(PG_OBJS)
 
 LDSCRIPT := $(ROOT)/daisy/pg_daisy.lds
 LDFLAGS := $(MCU) --specs=nano.specs --specs=nosys.specs -T$(LDSCRIPT) -Wl,--gc-sections \
@@ -100,6 +103,10 @@ $(BUILD)/obj/daisy/src/%.o: $(ROOT)/daisy/src/%.cpp | $(LIBDAISY)/build/libdaisy
 	$(CXX) -c $(DEV_CXXFLAGS) -MMD -MP $< -o $@
 
 $(STARTUP_OBJ): $(STARTUP) | $(LIBDAISY)/build/libdaisy.a
+	@mkdir -p $(dir $@)
+	$(CC) -c $(STARTUP_CFLAGS) -w $< -o $@
+
+$(CCSBCS_OBJ): $(CCSBCS) | $(LIBDAISY)/build/libdaisy.a
 	@mkdir -p $(dir $@)
 	$(CC) -c $(STARTUP_CFLAGS) -w $< -o $@
 

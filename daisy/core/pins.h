@@ -47,34 +47,35 @@ constexpr SeedPin kSeed[31] = {
   PinUse { fn, d, kSeed[d].header, kSeed[d].port, kSeed[d].pin, adc, st, note }
 
 constexpr PinUse kMap[] = {
-    // stage 0: four pots and the battery divider (the first breadboard / the Labor)
-    PGD_PIN("POT1 (macro 1)", 15, true, kStage0, "ADC1 INP10; wiper, ends to 3V3A (pin 21) and AGND (pin 20)"),
+    // stage 0: four pots (the first breadboard / the Labor)
+    PGD_PIN("POT1 (macro 1)", 15, true, kStage0, "ADC INP10; wiper, ends to 3V3A (pin 21) and AGND (pin 20)"),
     PGD_PIN("POT2 (macro 2)", 16, true, kStage0, "ADC INP15"),
     PGD_PIN("POT3 (macro 3)", 17, true, kStage0, "ADC INP5"),
     PGD_PIN("POT4 (macro 4)", 18, true, kStage0, "ADC INP7"),
+    // stage 1
     PGD_PIN("BATTERY", 19, true, kStage1, "ADC INP3, LiPo through a 100k/100k divider (max 2.1 V at 4.2 V)"),
-    // stage 1: microSD on SDMMC1, 4-bit (libDaisy's SdmmcHandler pins; the bootloader's too)
-    PGD_PIN("SD D3", 1, false, kStage1, "SDMMC1_D3, 47k pull-up"),
-    PGD_PIN("SD D2", 2, false, kStage1, "SDMMC1_D2, 47k pull-up"),
-    PGD_PIN("SD D1", 3, false, kStage1, "SDMMC1_D1, 47k pull-up"),
-    PGD_PIN("SD D0", 4, false, kStage1, "SDMMC1_D0, 47k pull-up"),
-    PGD_PIN("SD CMD", 5, false, kStage1, "SDMMC1_CMD, 47k pull-up"),
+    // microSD (Adafruit 4682) on SDMMC1, 4-bit: libDaisy's SdmmcHandler pins (the bootloader's too)
+    PGD_PIN("SD D3", 1, false, kStage1, "SDMMC1_D3"),
+    PGD_PIN("SD D2", 2, false, kStage1, "SDMMC1_D2"),
+    PGD_PIN("SD D1", 3, false, kStage1, "SDMMC1_D1"),
+    PGD_PIN("SD D0", 4, false, kStage1, "SDMMC1_D0"),
+    PGD_PIN("SD CMD", 5, false, kStage1, "SDMMC1_CMD"),
     PGD_PIN("SD CK", 6, false, kStage1, "SDMMC1_CK"),
-    // stage 1: ST7789 240x135 on SPI1 (write only)
-    PGD_PIN("LCD CS", 7, false, kStage1, "SPI1_NSS (driven as a GPIO)"),
+    // an SPI display (not chosen: HX8357D 480x320 or ST7789 240x135; write only, software reset)
+    PGD_PIN("LCD CS", 7, false, kStage1, "SPI1_NSS pin driven as a GPIO (held low: the only device)"),
     PGD_PIN("LCD SCK", 8, false, kStage1, "SPI1_SCK"),
-    PGD_PIN("LCD MOSI", 10, false, kStage1, "SPI1_MOSI"),
     PGD_PIN("LCD DC", 9, false, kStage1, "SPI1_MISO pin used as a GPIO (the panel sends nothing)"),
-    PGD_PIN("LCD RST", 26, false, kStage1, "GPIO"),
+    PGD_PIN("LCD MOSI", 10, false, kStage1, "SPI1_MOSI"),
     PGD_PIN("LCD BL", 27, false, kStage1, "GPIO, high = on (DC: no PWM edges near the audio)"),
-    // stage 1: TCA8418 keys on I2C1, BMI270 on I2C4 (a second bus)
-    PGD_PIN("KEYS SCL", 11, false, kStage1, "I2C1_SCL, 2.2k pull-up to 3V3"),
-    PGD_PIN("KEYS SDA", 12, false, kStage1, "I2C1_SDA, 2.2k pull-up to 3V3"),
-    PGD_PIN("KEYS INT", 24, false, kStage1, "GPIO input, pull-up (TCA8418 INT is open drain)"),
-    PGD_PIN("IMU SCL", 13, false, kStage1, "I2C4_SCL, 2.2k pull-up"),
-    PGD_PIN("IMU SDA", 14, false, kStage1, "I2C4_SDA, 2.2k pull-up"),
+    // I2C1: the BMI270 (SparkFun Qwiic board on a lead) and a touch controller later (FT5336 0x38)
+    PGD_PIN("I2C SCL", 11, false, kStage1, "I2C1_SCL (the Qwiic board has its own pull-ups)"),
+    PGD_PIN("I2C SDA", 12, false, kStage1, "I2C1_SDA"),
+    PGD_PIN("TOUCH INT", 24, false, kStage1, "reserved: the touch controller's interrupt, GPIO input"),
     PGD_PIN("G0 BUTTON", 25, false, kStage1, "GPIO input, pull-up, to ground when pressed"),
 };
+// Free for what is undecided (velocity pads through a multiplexer, function
+// buttons): D0, D13, D14, D20-D23 (A5-A8: analog), D26, D28 (A11); D29 / D30 are the
+// second USB port.
 #undef PGD_PIN
 constexpr int kMapCount = int(sizeof(kMap) / sizeof(kMap[0]));
 
@@ -89,13 +90,13 @@ struct Analog {
   const char* use;
 };
 constexpr Analog kAnalog[] = {
-    {16, "AUDIO IN L", "stage 1: the MAX9814 output through 10 uF (the recorder's input); stage 0: nothing"},
-    {17, "AUDIO IN R", "nothing"},
+    {16, "AUDIO IN L", "line in L (the first recording path); later an analog MEMS capsule, fixed gain (part to be chosen)"},
+    {17, "AUDIO IN R", "line in R"},
     {18, "AUDIO OUT L", "line out L: to the headphone amp (TPA6132) or the Labor's output amplifier input"},
     {19, "AUDIO OUT R", "line out R"},
     {20, "AGND", "analog ground: the audio grounds and the pots' low ends"},
     {21, "3V3A", "analog 3.3 V: the pots' high ends (reference for the ADC)"},
-    {38, "3V3D", "digital 3.3 V out (100 mA budget): display, TCA8418, BMI270, SD card, MAX9814"},
+    {38, "3V3D", "digital 3.3 V out: display, BMI270, SD card (how much current it can spare: Seed datasheet, unverified here)"},
     {39, "VIN", "supply input (its range is in Electrosmith's datasheet, not in libDaisy: NOT USED, power over USB)"},
     {40, "DGND", "digital ground: join with every other board's ground"},
 };

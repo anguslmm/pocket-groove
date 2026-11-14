@@ -5,3 +5,7 @@
 # run tools/daisy-setup.sh, rebuild, re-run the checks in docs/DAISY.md.
 LIBDAISY_URL=https://github.com/electro-smith/libDaisy
 LIBDAISY_COMMIT=1289a000bc29dae1bc0ed4129cfa2df40ef71574
+# Bosch's BMI270 configuration file (stage 1 tilt), BSD-3-Clause, from this commit of
+# BMI270_SensorAPI; tools/daisy-setup.sh extracts it into daisy/vendor/ (not in git).
+BMI270_URL=https://github.com/boschsensortec/BMI270_SensorAPI
+BMI270_COMMIT=41129fcfe39c583ee5462d79195741945d51c1fe

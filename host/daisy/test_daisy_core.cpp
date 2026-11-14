@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "check.h"
+#include "core/button.h"
 #include "core/fb_stream.h"
 #include "core/key_script.h"
 #include "core/layout.h"
@@ -352,9 +353,33 @@ void testLayoutAndPins() {
   for (const pins::SeedPin& s : pins::kSeed) CHECK((s.header >= 1 && s.header <= 15) || (s.header >= 22 && s.header <= 37));
 }
 
+void testButton() {
+  Button b;
+  pg::KeyEvent e{};
+  int events = 0;
+  // Bounce: down/up flicker for 10 ms, then held: one press, after 3 stable polls.
+  const bool pattern[] = {true, false, true, false, true, true, true, true, true, true};
+  uint32_t t = 0, pressAt = 0;
+  for (bool p : pattern) {
+    if (b.poll(p, t, &e)) {
+      ++events;
+      pressAt = t;
+      CHECK(e.down && e.key == pg::kKeyG0);
+    }
+    t += Button::kPollMs;
+  }
+  CHECK_EQ(events, 1);
+  CHECK_EQ(pressAt, 30u);
+  for (int i = 0; i < 5; ++i, t += Button::kPollMs)
+    if (b.poll(false, t, &e)) ++events;
+  CHECK_EQ(events, 2);
+  CHECK(!e.down && !b.down());
+}
+
 }  // namespace
 
 int main() {
+  testButton();
   testRing();
   testScheduler();
   testKeyScript();
