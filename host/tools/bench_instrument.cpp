@@ -2,9 +2,12 @@
 // playing a busy pattern (grooves::programBusy: all 8 tracks, ratchets,
 // p-locks, every send up, DJ filter + drive + ducker on).
 //
-//   bench_instrument [--runs N] [--seconds S] [--no-callgrind]
+//   bench_instrument [--runs N] [--seconds S] [--no-callgrind] [--demo N]
 //
-// For each scene (stereo / mono device x 44.1 / 32 kHz):
+// --demo N plays factory demo N's song (pg/demo) instead of the busy pattern.
+//
+// For each scene (stereo / mono device x 44.1 / 32 / 48 kHz; 48 kHz is the Daisy's
+// rate: the Daisy's budget is not this file's, see docs/ARCHITECTURE.md "Sample rates"):
 //   * wall clock: median of N runs of S seconds of audio, ns per output frame;
 //   * callgrind (if valgrind is installed): x86 instructions per output frame
 //     inside the measured loop only (--toggle-collect), which is deterministic
@@ -22,6 +25,7 @@
 #include <vector>
 
 #include "common/grooves.h"
+#include "pg/demo/demo.h"
 #include "pg/engine/engine_hooks.h"
 #include "pg/instrument/instrument.h"
 
@@ -39,7 +43,10 @@ const Scene kScenes[] = {
     {"mono   44.1k", 44100.0f, true},
     {"stereo 32k", 32000.0f, false},
     {"mono   32k", 32000.0f, true},
+    {"stereo 48k", 48000.0f, false},
+    {"mono   48k", 48000.0f, true},
 };
+int g_demo = -1;   // --demo N: the song of factory demo N instead of the busy pattern
 constexpr int kNumScenes = int(sizeof(kScenes) / sizeof(kScenes[0]));
 constexpr int kBlock = 256;     // frames per process() call (the firmware's DMA block size class)
 int16_t g_buf[2 * kBlock];
@@ -47,7 +54,14 @@ volatile int32_t g_sink;
 
 void setup(const Scene& sc) {
   g_inst.init(sc.sr, sc.mono);
-  grooves::programBusy(g_inst.project());
+  if (g_demo >= 0) {
+    pg::Project& p = g_inst.project();
+    pg::demo::build(g_inst.engine(), p, g_demo);
+    p.songMode = 1;
+    g_inst.engine().sanitizeProject(p);
+  } else {
+    grooves::programBusy(g_inst.project());
+  }
   pg::Command c{};
   c.type = pg::CmdType::Play;
   g_inst.engine().post(c);
@@ -82,8 +96,8 @@ double callgrindIrPerFrame(const char* self, int scene, double seconds, const st
   char cmd[1024];
   std::snprintf(cmd, sizeof cmd,
                 "valgrind --tool=callgrind --toggle-collect='*measureLoop*' --callgrind-out-file=%s "
-                "%s --scene %d --seconds %.3f > /dev/null 2>&1",
-                outFile.c_str(), self, scene, seconds);
+                "%s --scene %d --seconds %.3f --demo %d > /dev/null 2>&1",
+                outFile.c_str(), self, scene, seconds, g_demo);
   if (std::system(cmd) != 0) return -1.0;
   FILE* f = std::fopen(outFile.c_str(), "r");
   if (!f) return -1.0;
@@ -120,7 +134,8 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--seconds") && i + 1 < argc) seconds = std::atof(argv[++i]);
     else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) scene = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--no-callgrind")) cg = false;
-    else { std::fprintf(stderr, "usage: bench_instrument [--runs N] [--seconds S] [--no-callgrind]\n"); return 2; }
+    else if (!std::strcmp(argv[i], "--demo") && i + 1 < argc) g_demo = std::atoi(argv[++i]);
+    else { std::fprintf(stderr, "usage: bench_instrument [--runs N] [--seconds S] [--no-callgrind] [--demo N]\n"); return 2; }
   }
   if (scene >= 0) {   // callgrind child
     if (scene >= kNumScenes) return 2;
@@ -138,7 +153,9 @@ int main(int argc, char** argv) {
   std::printf("  Instrument::staticRamBytes %6zu bytes (+ voice tables, see the integration report)\n",
               pg::Instrument::staticRamBytes());
 
-  std::printf("== busy pattern, full instrument: wall clock (median of %d x %.1f s) ==\n", runs, seconds);
+  if (g_demo >= 0) std::printf("== demo %d (%s), song, full instrument: wall clock (median of %d x %.1f s) ==\n", g_demo,
+                               pg::demo::name(g_demo), runs, seconds);
+  else std::printf("== busy pattern, full instrument: wall clock (median of %d x %.1f s) ==\n", runs, seconds);
   double wall[kNumScenes];
   for (int s = 0; s < kNumScenes; ++s) {
     std::vector<double> v;

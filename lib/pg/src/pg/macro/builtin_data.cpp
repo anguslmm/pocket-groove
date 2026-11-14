@@ -3,6 +3,7 @@
 //   cmake --build build/host --target macro_builtin && build/host/macro_builtin
 // and commit the result (ctest check_builtin fails while this file is stale).
 // Fields in pg::macro::MacroSet order (macro.h); unused pool entries are zero.
+#include "../table_attr.h"
 #include "builtin_data.h"
 
 namespace pg {
@@ -11,7 +12,8 @@ namespace detail {
 
 extern const int kBuiltinCount = 31;
 
-extern const MacroSet kBuiltin[] = {
+// PG_BULK_ATTR (table_attr.h): where a platform puts the big cold data (empty by default).
+PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
     {0, 4, 21, 60, 0, 0, 0, 0,
      {0x00, 0x93},   // tilt x, y
