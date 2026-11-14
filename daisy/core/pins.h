@@ -61,27 +61,43 @@ constexpr PinUse kMap[] = {
     PGD_PIN("SD D0", 4, false, kStage1, "SDMMC1_D0"),
     PGD_PIN("SD CMD", 5, false, kStage1, "SDMMC1_CMD"),
     PGD_PIN("SD CK", 6, false, kStage1, "SDMMC1_CK"),
-    // an SPI display (not chosen: HX8357D 480x320 or ST7789 240x135; write only, software reset)
-    PGD_PIN("LCD CS", 7, false, kStage1, "SPI1_NSS pin driven as a GPIO (held low: the only device)"),
-    PGD_PIN("LCD SCK", 8, false, kStage1, "SPI1_SCK"),
-    PGD_PIN("LCD DC", 9, false, kStage1, "SPI1_MISO pin used as a GPIO (the panel sends nothing)"),
-    PGD_PIN("LCD MOSI", 10, false, kStage1, "SPI1_MOSI"),
-    PGD_PIN("LCD BL", 27, false, kStage1, "GPIO, high = on (DC: no PWM edges near the audio)"),
-    // I2C1: the BMI270 (SparkFun Qwiic board on a lead) and a touch controller later (FT5336 0x38)
-    PGD_PIN("I2C SCL", 11, false, kStage1, "I2C1_SCL (the Qwiic board has its own pull-ups)"),
+    // the display: Adafruit 2090 (2.8" 320x240 ILI9341 over SPI; write only, software reset).
+    // Also fits the other panel configurations (panel.h: ST7789 240x135, HX8357D 480x320).
+    PGD_PIN("LCD CS", 7, false, kStage1, "2090 CS: the SPI1_NSS pin driven as a GPIO (held low: the only device)"),
+    PGD_PIN("LCD SCK", 8, false, kStage1, "2090 CLK: SPI1_SCK"),
+    PGD_PIN("LCD DC", 9, false, kStage1, "2090 D/C: the SPI1_MISO pin used as a GPIO (the panel sends nothing)"),
+    PGD_PIN("LCD MOSI", 10, false, kStage1, "2090 MOSI: SPI1_MOSI"),
+    PGD_PIN("LCD BL", 27, false, kStage1, "2090 Lite: GPIO, high = on (DC: no PWM edges near the audio)"),
+    // I2C1: the BMI270 (SparkFun Qwiic board on a lead, 0x68) and the 2090's FT6206 touch (0x38)
+    PGD_PIN("I2C SCL", 11, false, kStage1, "I2C1_SCL: BMI270 + FT6206 (pull-ups on the boards, none on the Seed)"),
     PGD_PIN("I2C SDA", 12, false, kStage1, "I2C1_SDA"),
-    PGD_PIN("TOUCH INT", 24, false, kStage1, "reserved: the touch controller's interrupt, GPIO input"),
+    PGD_PIN("TOUCH INT", 24, false, kStage1, "2090 IRQ (FT6206, low while touched): GPIO input, pull-up; reported only"),
     PGD_PIN("G0 BUTTON", 25, false, kStage1, "GPIO input, pull-up, to ground when pressed"),
+    // four force sensors (Adafruit 1075), each a divider: 3V3A - FSR - pin - 10k - AGND
+    PGD_PIN("PAD1 (kick)", 20, true, kStage1, "A5, ADC1 INP11; FSR to 3V3A (pin 21), 10k to AGND (pin 20)"),
+    PGD_PIN("PAD2 (snare)", 21, true, kStage1, "A6, ADC1 INP4"),
+    PGD_PIN("PAD3 (clap)", 22, true, kStage1, "A7, ADC1 INP19 (also the DAC's OUT2: the DAC is not used)"),
+    PGD_PIN("PAD4 (closed hat)", 23, true, kStage1, "A8, ADC1 INP18 (also the DAC's OUT1: the DAC is not used)"),
 };
-// Free for what is undecided (velocity pads through a multiplexer, function
-// buttons): D0, D13, D14, D20-D23 (A5-A8: analog), D26, D28 (A11); D29 / D30 are the
-// second USB port.
+// Free for what is undecided (more pads through a multiplexer, function buttons):
+// D0, D13, D14 (I2C4), D26, D28 (A11: analog); D29 / D30 are the second USB port.
 #undef PGD_PIN
 constexpr int kMapCount = int(sizeof(kMap) / sizeof(kMap[0]));
 
-// The pots in order (seed D numbers) and the battery's.
+// The pots in order (seed D numbers), the battery's, the force sensors' (pads 1-4),
+// the touch controller's interrupt.
 constexpr uint8_t kPotSeed[4] = {15, 16, 17, 18};
 constexpr uint8_t kBatterySeed = 19;
+constexpr uint8_t kPadSeed[4] = {20, 21, 22, 23};
+constexpr uint8_t kTouchIrqSeed = 24;
+// The STM32 pins libDaisy's AdcHandle can read (src/per/adc.cpp's pin table: ADC1
+// INP3..INP19 without INP6), as port / pin. The test checks every ADC function on it.
+struct PortPin {
+  char port;
+  uint8_t pin;
+};
+constexpr PortPin kAdc1Pins[] = {{'A', 6}, {'C', 4}, {'B', 1}, {'A', 7}, {'C', 5}, {'B', 0}, {'C', 0}, {'C', 1},
+                                 {'C', 2}, {'C', 3}, {'A', 2}, {'A', 3}, {'A', 0}, {'A', 1}, {'A', 4}, {'A', 5}};
 
 // Not GPIO: the codec's analog pins and the supplies (header pin numbers).
 struct Analog {
@@ -90,13 +106,13 @@ struct Analog {
   const char* use;
 };
 constexpr Analog kAnalog[] = {
-    {16, "AUDIO IN L", "line in L (the first recording path); later an analog MEMS capsule, fixed gain (part to be chosen)"},
-    {17, "AUDIO IN R", "line in R"},
+    {16, "AUDIO IN L", "line in L: the first recording path (line level only, never Eurorack levels)"},
+    {17, "AUDIO IN R", "line in R (a mono source: into L, R tied to AGND: recorded as L alone)"},
     {18, "AUDIO OUT L", "line out L: to the headphone amp (TPA6132) or the Labor's output amplifier input"},
     {19, "AUDIO OUT R", "line out R"},
     {20, "AGND", "analog ground: the audio grounds and the pots' low ends"},
-    {21, "3V3A", "analog 3.3 V: the pots' high ends (reference for the ADC)"},
-    {38, "3V3D", "digital 3.3 V out: display, BMI270, SD card (how much current it can spare: Seed datasheet, unverified here)"},
+    {21, "3V3A", "analog 3.3 V: the pots' and the force sensors' high ends (the ADC's reference)"},
+    {38, "3V3D", "digital 3.3 V out: display (2090 Vin), BMI270, SD card (how much current it can spare: Seed datasheet, unverified here)"},
     {39, "VIN", "supply input (its range is in Electrosmith's datasheet, not in libDaisy: NOT USED, power over USB)"},
     {40, "DGND", "digital ground: join with every other board's ground"},
 };
