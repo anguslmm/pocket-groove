@@ -11,6 +11,9 @@
 //     --wav DIR       write every point's render to DIR/<set>_<point>.wav
 //     --jump DB       level-jump threshold between neighbours (default 6)
 //     --dead DB       dead-travel threshold, spectrogram distance (default 0.5)
+//     --rate HZ       engine sample rate (default 44100; 48000 = the Daisy's)
+//     --dump FILE     write one line per point: set, point, peak, loudness, RMS,
+//                     centroid (tab-separated; to compare two rates point by point)
 //
 // THE GRID. Each macro alone at 0, 1/8 .. 1 (the others at their start
 // positions), every corner of the macro space, and a 5 x 5 grid of the first
@@ -118,13 +121,14 @@ void makeTestSample() {
 
 struct Opts {
   bool hard = false, points = false, testSample = false;
-  std::string wavDir;
+  std::string wavDir, dump;
   float jumpDb = 6.0f, deadDb = 0.5f;
 } g_o;
+FILE* g_dump = nullptr;
 
-constexpr float kSr = 44100.0f;
+float kSr = 44100.0f;   // --rate
 constexpr int kBpm = 120;
-constexpr long kStepFrames = long(kSr * 15.0f / float(kBpm));   // one 16th
+long kStepFrames = long(kSr * 15.0f / float(kBpm));   // one 16th (set again by --rate)
 constexpr int kFft = 2048, kHop = 512, kBands = 96;
 constexpr float kSilentDb = -45.0f;   // hard: a point whose peak stays below this
 constexpr float kHotDb = -3.0f;       // warn: a point whose peak goes above this
@@ -706,6 +710,10 @@ int auditFile(const std::string& path) {
       sm.warn++;
     }
 
+  if (g_dump)
+    for (const Point& p : pts)
+      std::fprintf(g_dump, "%s\t%s\t%.2f\t%.2f\t%.2f\t%.0f\n", path.c_str(), p.label.c_str(), double(p.peakDb),
+                   double(p.loudDb), double(p.rmsDb), double(p.centroid));
   if (g_o.hard) {
     std::printf("%-30s %-5s %-12s %2d points  %s\n", path.c_str(), sm.voice.c_str(), sm.name.c_str(), sm.points,
                 sm.hard ? "FAIL" : "ok");
@@ -801,9 +809,11 @@ int main(int argc, char** argv) {
     else if (a == "--jump" && i + 1 < argc) g_o.jumpDb = float(std::atof(argv[++i]));
     else if (a == "--dead" && i + 1 < argc) g_o.deadDb = float(std::atof(argv[++i]));
     else if (a == "--test-sample") g_o.testSample = true;
+    else if (a == "--rate" && i + 1 < argc) kSr = float(std::atof(argv[++i]));
+    else if (a == "--dump" && i + 1 < argc) g_o.dump = argv[++i];
     else if (a == "-h" || a == "--help" || a[0] == '-') {
       std::fprintf(stderr,
-                   "usage: macro_audit [--hard] [--points] [--wav DIR] [--jump DB] [--dead DB] [--test-sample] PATH...\n"
+                   "usage: macro_audit [--hard] [--points] [--wav DIR] [--jump DB] [--dead DB] [--test-sample] [--rate HZ] [--dump FILE] PATH...\n"
                    "  PATH: a .pgm file or a folder of them (any depth). See docs/MACROLAB.md.\n");
       return 2;
     } else paths.push_back(a);
@@ -811,6 +821,8 @@ int main(int argc, char** argv) {
   if (paths.empty()) paths.push_back("macros");
   if (!g_o.wavDir.empty()) mkdir(g_o.wavDir.c_str(), 0755);
 
+  kStepFrames = long(kSr * 15.0f / float(kBpm));
+  if (!g_o.dump.empty()) g_dump = std::fopen(g_o.dump.c_str(), "w");
   g_inst.init(kSr, false);
   if (g_o.testSample) {
     makeTestSample();
@@ -840,6 +852,7 @@ int main(int argc, char** argv) {
                   s.points, double(s.loMin), double(s.loMax), double(s.loMax - s.loMin), double(s.pkMax), s.hard,
                   s.warn, s.travel.c_str());
   }
+  if (g_dump) std::fclose(g_dump);
   std::printf("macro_audit: %zu set(s), %d with hard failures\n", files.size(), fails);
   return fails ? 1 : 0;
 }

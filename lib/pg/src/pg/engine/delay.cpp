@@ -5,6 +5,8 @@ namespace engine_detail {
 
 void Delay::init(float halfRate) {
   fadeInc_ = 1.0f / (0.025f * halfRate);
+  len_ = lineFor(halfRate);
+  if (len_ > kBufCap) len_ = kBufCap;   // above PG_MAX_SAMPLE_RATE: less than 0.75 s of line
   mono_ = false;
   reset();
   d_ = dNew_ = dPending_ = int(0.125f * halfRate);
@@ -21,11 +23,11 @@ void Delay::reset() {
   fading_ = false;
   fade_ = 0.0f;
   lp_ = hp_ = lp2_ = hp2_ = 0.0f;
-  zeroRun_ = kBufLen;
+  zeroRun_ = len_;
 }
 
 int Delay::setTime(float halfRateSamples) {
-  const float maxD = float(kBufLen - kMaxBlock - 4);
+  const float maxD = float(len_ - kMaxBlock - 4);
   float d = halfRateSamples;
   int guard = 0;
   while (d > maxD && guard++ < 16) d *= 0.5f;
@@ -56,14 +58,14 @@ void Delay::setParams(float fb, float lpCoef, float hpCoef, float width) {
 
 void Delay::readTap(float* dst, int delay, int n) const {
   int r = w_ - delay;
-  if (r < 0) r += kBufLen;
-  if (r + n <= kBufLen) {
+  if (r < 0) r += len_;
+  if (r + n <= len_) {
     const int16_t* b = buf_ + r;
     for (int i = 0; i < n; ++i) dst[i] = float(b[i]);
   } else {
     for (int i = 0; i < n; ++i) {
       dst[i] = float(buf_[r]);
-      if (++r == kBufLen) r = 0;
+      if (++r == len_) r = 0;
     }
   }
 }
@@ -175,14 +177,14 @@ void Delay::run(const float* in, float* outL, float* outR, int n) {
     const int16_t q = int16_t((v > 1.0f || v < -1.0f) ? int32_t(v + 32768.5f) - 32768 : int32_t(v));
     buf_[w] = q;
     nonZero |= q;
-    if (++w == kBufLen) w = 0;
+    if (++w == len_) w = 0;
   }
   w_ = w;
   if (nonZero) {
     zeroRun_ = 0;
-  } else if (zeroRun_ < kBufLen) {
+  } else if (zeroRun_ < len_) {
     zeroRun_ += n;
-    if (zeroRun_ >= kBufLen) { lp = hp = lp2 = hp2 = 0.0f; }
+    if (zeroRun_ >= len_) { lp = hp = lp2 = hp2 = 0.0f; }
   }
   lp_ = lp;
   hp_ = hp;

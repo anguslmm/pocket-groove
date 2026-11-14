@@ -5,11 +5,17 @@
 // signal path and the state machine both share, and the interface the UI drives.
 //
 // SIGNAL PATH (Recorder::feed, on the platform's writer thread, never the audio thread):
-//   int16 mono at 44,100 Hz -> half-band low-pass + decimate by 2 (47 taps, 12 unique
-//   coefficients: flat to 9 kHz within 0.003 dB, -6 dB at 11,025 Hz, <= -69 dB from
-//   13,050 Hz on, i.e. everything that would fold back below 9 kHz)
-//   -> DC block (one pole, 17 Hz) -> int16 at 22,050 Hz into the sink, 256 samples
-//   (one 512-byte flash write) at a time. No input monitoring.
+//   int16 mono at the input rate -> [half-band low-pass + decimate by 2, only when the
+//   stored rate is half the input rate (47 taps, 12 unique coefficients; at 44.1 kHz:
+//   flat to 9 kHz within 0.003 dB, -6 dB at 11,025 Hz, <= -69 dB from 13,050 Hz on,
+//   i.e. everything that would fold back below 9 kHz; the band edges scale with the
+//   input rate)] -> DC block (one pole, 17.5 Hz) -> int16 at the stored rate into the
+//   sink, 256 samples (one 512-byte flash write) at a time. No input monitoring.
+// RATES (RecRates, a property of the platform and its pool): the Cardputer records
+//   its 44,100 Hz ADC (and the engine at 44.1 kHz) into 22,050 Hz slots, the default;
+//   a platform with room for it stores at the input rate (the Daisy: 48,000 in, 48,000
+//   stored), and then nothing filters. The times below (settle, window, pre-roll,
+//   tail, the meter) are in milliseconds and the same at every stored rate.
 //
 // STATE MACHINE (one writer thread; the UI reads the published state and calls
 // release() from its own thread):
@@ -28,8 +34,8 @@
 // The level is made right at playback (sample_format.h setPlaybackGain): nothing here
 // scales the signal, so nothing has to be rewritten once the peak is known.
 //
-// Portable C++17, no heap: the device allocates a Recorder (about 4.2 KB) only while
-// it records.
+// Portable C++17, no heap: the device allocates a Recorder (about 6.2 KB: the
+// pre-roll ring has room for 40 ms at 48 kHz) only while it records.
 #pragma once
 #include <atomic>
 #include <cstdint>
@@ -39,7 +45,27 @@
 namespace pg {
 namespace sampler {
 
-// 44.1 kHz -> 22.05 kHz: two samples in, one out.
+// The rates of a recording: in = the source's (the ADC's, the engine's), out = what
+// the slot stores (its header's rate). Valid: out == in (stored as it comes) or
+// out == in / 2 (the half-band), out within kMinRate..kMaxStoredRate.
+struct RecRates {
+  static constexpr uint32_t kMaxStoredRate = 48000;   // the pre-roll ring's size
+  uint32_t in = 44100;
+  uint32_t out = kPoolRate;
+  constexpr bool valid() const { return out >= kMinRate && out <= kMaxStoredRate && (in == out || in == 2 * out); }
+  constexpr uint32_t factor() const { return in == out ? 1u : 2u; }   // input samples per stored sample
+};
+// What a platform stores for an input rate given its pool's rate: half the input
+// when that is the pool's rate (the Cardputer: 44,100 -> 22,050), else the input rate
+// itself (the Daisy: 48,000 -> 48,000).
+constexpr RecRates recRatesFor(uint32_t inRate, uint32_t poolRate) {
+  return RecRates{inRate, inRate == 2 * poolRate ? poolRate : inRate};
+}
+
+// A time in samples at `rate` (rounded down, as the recorder always counted).
+constexpr uint32_t recSamples(uint32_t rate, uint32_t ms) { return rate * ms / 1000; }
+
+// 2:1 decimation (44.1 kHz -> 22.05 kHz on the Cardputer): two samples in, one out.
 class HalfBand {
  public:
   static constexpr int kTaps = 47;
@@ -57,10 +83,13 @@ class HalfBand {
 // One-pole DC blocker: y = x - x1 + R * y1.
 struct DcBlock {
   static constexpr float kR = 0.995f;   // -3 dB at 17.5 Hz at 22,050 Hz
+  float r = kR;
   float x1 = 0.0f, y1 = 0.0f;
   void reset() { x1 = y1 = 0.0f; }
+  // The same corner at `rate` (exactly kR at 22,050 Hz).
+  void setRate(uint32_t rate) { r = rate == 22050 ? kR : 1.0f - 110.25f / float(rate); }
   float run(float x) {
-    const float y = x - x1 + kR * y1;
+    const float y = x - x1 + r * y1;
     x1 = x;
     y1 = y;
     return y;
@@ -91,35 +120,43 @@ class RecordSink {
 
 class Recorder {
  public:
+  // The Cardputer's rates (the defaults) and the counts at its 22,050 Hz; at another
+  // stored rate the same milliseconds (preRollSamples(), tailSamples()).
   static constexpr uint32_t kInRate = 44100;
   static constexpr uint32_t kOutRate = kPoolRate;   // 22,050
   static constexpr uint32_t kSkipMs = 50, kSettleMs = 150, kWindowMs = 10;
   static constexpr uint32_t kPreRollMs = 40, kTailMs = 60;
-  static constexpr uint32_t kSkip = kOutRate * kSkipMs / 1000;           // 1102
-  static constexpr uint32_t kSettle = kOutRate * kSettleMs / 1000;       // 3307
-  static constexpr uint32_t kWindow = kOutRate * kWindowMs / 1000;       // 220
-  static constexpr uint32_t kPreRoll = kOutRate * kPreRollMs / 1000;     // 882
-  static constexpr uint32_t kTail = kOutRate * kTailMs / 1000;           // 1323
+  static constexpr uint32_t samplesIn(uint32_t rate, uint32_t ms) { return recSamples(rate, ms); }
+  static constexpr uint32_t kSkip = recSamples(kOutRate, kSkipMs);           // 1102
+  static constexpr uint32_t kSettle = recSamples(kOutRate, kSettleMs);       // 3307
+  static constexpr uint32_t kWindow = recSamples(kOutRate, kWindowMs);       // 220
+  static constexpr uint32_t kPreRoll = recSamples(kOutRate, kPreRollMs);     // 882
+  static constexpr uint32_t kTail = recSamples(kOutRate, kTailMs);           // 1323
   static constexpr uint16_t kThrMin = 300;    // -40.8 dBFS: a quiet room
   static constexpr uint16_t kThrMax = 3300;   // -19.9 dBFS: a loud one (the groove on the speaker)
   static constexpr float kThrOverFloor = 10.0f;   // +20 dB over the floor's RMS
   static constexpr int kStage = 256;          // samples per sink write (512 bytes)
-  static constexpr int kRing = 1024;          // the pre-roll ring (power of two >= kPreRoll)
-  static constexpr int kLevelEvery = 1024;    // the meter's window (46 ms)
+  static constexpr int kRing = 2048;          // the pre-roll ring (power of two >= the pre-roll at kMaxStoredRate)
+  static constexpr int kLevelEvery = 1024;    // the meter's window (46 ms; scaled at other stored rates)
+  // The most a recording may be asked to hold (a platform's slot; the Cardputer's
+  // kSlotMaxSamples is the default).
+  static constexpr uint32_t kMaxSamples = 1u << 28;
+  static_assert(recSamples(RecRates::kMaxStoredRate, kPreRollMs) <= uint32_t(kRing), "pre-roll ring too small");
 
-  // Starts listening (any state; everything is reset). maxSamples <= kSlotMaxSamples.
-  void start(RecordSink* sink, uint32_t maxSamples = kSlotMaxSamples);
+  // Starts listening (any state; everything is reset). maxSamples <= kMaxSamples.
+  // rates must be valid() (else the recorder is Failed at once).
+  void start(RecordSink* sink, uint32_t maxSamples = kSlotMaxSamples, RecRates rates = RecRates{});
   // DIRECT mode (resampling, resampler.h): a digital source that has no room, no key
   // click and no DC. Recording at once: the half-band only (no DC block, no
   // threshold, no pre-roll, no tail), the first `skip` decimated samples dropped (the
   // filter's warm-up: the source sends the history it needs in front). It fills up
   // as start()'s does (Full); the source ends it with end().
-  void startDirect(RecordSink* sink, uint32_t maxSamples, uint32_t skip);
+  void startDirect(RecordSink* sink, uint32_t maxSamples, uint32_t skip, RecRates rates = RecRates{});
   // Writer thread, direct mode: flushes and ends as `s` (Done / Full with the
   // sample's length `len`, at most what was recorded; shorter than kMinSamples is
   // Cancelled; Cancelled / Failed as they are). A recorder that Failed stays so.
   void end(RecState s, uint32_t len);
-  // Writer thread: input at kInRate. Does nothing outside Settling / Waiting / Recording.
+  // Writer thread: input at rates().in. Does nothing outside Settling / Waiting / Recording.
   void feed(const int16_t* in, int n);
   // Any thread: the key went up. The writer thread then calls finish().
   void release() { released_.store(true, std::memory_order_release); }
@@ -141,6 +178,10 @@ class Recorder {
   int colsUsed() const { return colsUsed_.load(std::memory_order_acquire); }
   uint32_t sinkWrites() const { return writes_; }
   uint32_t sinkErrors() const { return errors_; }
+  // This recording's rates, and its times in stored samples.
+  RecRates rates() const { return rates_; }
+  uint32_t preRollSamples() const { return preRoll_; }
+  uint32_t tailSamples() const { return tail_; }
 
  private:
   void out(float y);
@@ -149,6 +190,9 @@ class Recorder {
 
   RecordSink* sink_ = nullptr;
   uint32_t max_ = kSlotMaxSamples;
+  RecRates rates_{};
+  uint32_t skipN_ = kSkip, settle_ = kSettle, window_ = kWindow, preRoll_ = kPreRoll, tail_ = kTail;
+  int levelEvery_ = kLevelEvery;
   HalfBand hb_;
   DcBlock dc_;
   bool direct_ = false;
@@ -185,7 +229,9 @@ class Recorder {
 struct RecView {
   RecState state = RecState::Off;
   int slot = 0;
-  uint32_t samples = 0;        // recorded so far (22,050 Hz); the sample's length once Done / Full
+  uint32_t samples = 0;        // recorded so far (at `rate`); the sample's length once Done / Full
+  uint32_t rate = kPoolRate;   // the stored rate, Hz: what `samples` and barAt count in
+  uint32_t capacity = kSlotMaxSamples;   // the slot's size in samples (the picture's width)
   uint16_t level = 0;          // input peak over the last ~46 ms (0..32767)
   uint16_t threshold = 0;      // where the recording starts (0 while settling)
   uint16_t peak = 0;           // of the recording so far

@@ -1,6 +1,7 @@
 // Tempo-synced send delay. Runs at HALF the engine sample rate on one mono
 // int16 buffer of 16.5k samples (33 KB): 0.75 s of line at 44.1 kHz, 1.03 s
-// at 32 kHz. Bandwidth: the 2x half-band resamplers pass up to ~0.2 * fs
+// at 32 kHz; at 48 kHz the line is 18.0k samples (36 KB, PG_MAX_SAMPLE_RATE),
+// 0.75 s again, so every tempo-synced time fits where it fits at 44.1. Bandwidth: the 2x half-band resamplers pass up to ~0.2 * fs
 // (8.8 kHz at 44.1 kHz, 6.4 kHz at 32 kHz), the tone filter sets the rest.
 //
 // The sound is a plain feedback delay, D = delay time, F = one-pole LP +
@@ -18,15 +19,30 @@
 // Requests longer than the line are halved until they fit. Time and mode
 // changes cross-fade old and new taps (and their feedback) over 25 ms.
 #pragma once
+#include "../config.h"
 #include "dsp_util.h"
 
 namespace pg {
 namespace engine_detail {
 
+namespace delay_len {
+constexpr int kMargin = 2 * 8 - 2;              // 2 * Delay::kMaxBlock - 2
+constexpr int kLine44 = 16538 + kMargin;        // 0.75 s at 22.05 kHz + block margin
+// The line at half-rate `halfRate`: kLine44 at 44.1 kHz and below (so 44.1 and 32 kHz
+// run exactly the line they always had), 0.75 s + the margin above (48 kHz: 18,014).
+constexpr int lineFor(float halfRate) {
+  const int n = int(0.75f * halfRate + 0.5f) + kMargin;
+  return n > kLine44 ? n : kLine44;
+}
+}  // namespace delay_len
+
 class Delay {
  public:
   static constexpr int kMaxBlock = 8;
-  static constexpr int kBufLen = 16538 + 2 * kMaxBlock - 2;  // 0.75 s at 22.05 kHz + block margin
+  static constexpr int kBufLen = delay_len::kLine44;  // 0.75 s at 22.05 kHz + block margin
+  static constexpr int lineFor(float halfRate) { return delay_len::lineFor(halfRate); }
+  // The buffer: the line at PG_MAX_SAMPLE_RATE (config.h). 33.1 KB at 44.1 kHz, 36.0 KB at 48.
+  static constexpr int kBufCap = delay_len::lineFor(0.5f * float(kMaxSampleRate));
   static constexpr float kScale = 16384.0f;  // +-1.0 in -> int16 with 6 dB headroom
 
   void init(float halfRate);
@@ -46,17 +62,18 @@ class Delay {
   void processMono(const float* in, float* out, int n) { run<true>(in, out, nullptr, n); }
 
   // True once the whole buffer is silent and the loop filters have drained.
-  bool idle() const { return zeroRun_ >= kBufLen; }
+  bool idle() const { return zeroRun_ >= len_; }
   int currentDelay() const { return d_; }
   int targetDelay() const { return fading_ ? dNew_ : d_; }
   bool pingPong() const { return pp_; }
 
  private:
   void readTap(float* dst, int delay, int n) const;
-  bool fitsPingPong(int d) const { return !mono_ && 2 * d <= kBufLen - 2 * kMaxBlock - 4; }
+  bool fitsPingPong(int d) const { return !mono_ && 2 * d <= len_ - 2 * kMaxBlock - 4; }
   template <bool kMono> void run(const float* in, float* outL, float* outR, int n);
 
-  int16_t buf_[kBufLen];
+  int16_t buf_[kBufCap];
+  int len_ = kBufLen;   // the line in use (init): kBufLen, or 0.75 s at a higher rate
   int w_;
   int d_, dNew_, dPending_;
   bool pp_, ppNew_, mono_;

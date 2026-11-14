@@ -587,7 +587,9 @@ static void testTablesAndInit() {
 
   std::printf("  static RAM: engine state %zu bytes (delay line %zu, reverb %zu)\n", engine_detail::staticRamBytes(),
               engine_detail::delayRamBytes(), engine_detail::reverbRamBytes());
-  CHECK(engine_detail::reverbRamBytes() < 28 * 1024 + 512);
+  // The budget at 44.1 kHz (the Cardputer's PG_MAX_SAMPLE_RATE); the host builds the
+  // buffers for 48 kHz (config.h), the reverb's pool 1.09x longer.
+  CHECK(engine_detail::reverbRamBytes() < size_t((28 * 1024 + 512) * double(kMaxSampleRate) / 44100.0));
   CHECK(engine_detail::delayRamBytes() < 68 * 1024);
   CHECK(engine_detail::staticRamBytes() < 104 * 1024);
 }

@@ -32,7 +32,14 @@ constexpr uint32_t kSlotBytes = kSlotSectors * kSectorBytes;              // 278
 constexpr uint32_t kSlotAudioBytes = kSlotBytes - kSectorBytes;            // 274,432
 constexpr uint32_t kSlotMaxSamples = kSlotAudioBytes / 2;                  // 137,216
 constexpr uint32_t kPoolBytes = kPoolSlots * kSlotBytes;                   // 3,342,336 = 0x330000
+// The rate the Cardputer's pool stores (its flash slots, the desktop's RAM pool, the
+// ROM sounds). A slot's own rate is in its header: a sample at any rate from
+// kMinRate to kMaxRate plays at its natural pitch on an engine at any rate (the
+// voices step through it at header rate / engine rate). What a platform RECORDS
+// at is its own choice (recorder.h RecRates): the Cardputer keeps kPoolRate.
 constexpr uint32_t kPoolRate = 22050;
+constexpr uint32_t kMinRate = 8000;
+constexpr uint32_t kMaxRate = 96000;
 constexpr uint32_t kMinSamples = 64;     // shorter is refused (and plays as empty)
 constexpr int kNameLen = 8;
 constexpr int kOverviewCols = 232;
@@ -45,7 +52,7 @@ struct SlotHeader {
   uint16_t version;        // kHeaderVersion
   uint16_t flags;          // 0
   uint32_t samples;        // kMinSamples..kSlotMaxSamples
-  uint32_t rate;           // kPoolRate
+  uint32_t rate;           // Hz, kMinRate..kMaxRate (kPoolRate on the Cardputer)
   char     name[kNameLen]; // upper case A-Z 0-9 - _, NUL padded (not terminated when 8 long)
   uint16_t peak;           // largest |sample|, 0..32768
   uint16_t gain;           // playback gain in 1/256 (0 = 1.0, what every put sample has): a
@@ -65,8 +72,9 @@ uint32_t crc32(const void* data, size_t bytes, uint32_t crc = 0);
 // The overview of `samples` (kOverviewCols min/max pairs).
 void makeOverview(const int16_t* data, uint32_t samples, int8_t (*out)[2]);
 // A complete header for this audio (name: any string; it is cleaned into the
-// 8-character form: upper case, A-Z 0-9 - _, the rest dropped).
-void makeHeader(const int16_t* data, uint32_t samples, const char* name, SlotHeader* out);
+// 8-character form: upper case, A-Z 0-9 - _, the rest dropped) at `rate` Hz.
+void makeHeader(const int16_t* data, uint32_t samples, const char* name, SlotHeader* out,
+                uint32_t rate = kPoolRate);
 void cleanName(const char* in, char out[kNameLen]);
 // A microphone recording (stage F2) is written as it came in (no second pass over
 // the flash): its level is made right at playback. This sets h->gain so the peak
@@ -78,8 +86,10 @@ constexpr float kRecordMaxGain = 16.0f;         // +24 dB: a quiet room is not l
 void setPlaybackGain(SlotHeader* h);
 // The header's gain as a factor (0 = 1.0).
 inline float gainOf(const SlotHeader& h) { return h.gain ? float(h.gain) * (1.0f / 256.0f) : 1.0f; }
-// magic, version, header CRC, rate and count in range. Does not read the audio.
-bool headerValid(const SlotHeader& h);
+// magic, version, header CRC, rate (kMinRate..kMaxRate) and count (kMinSamples..
+// maxSamples: the slot's capacity, the Cardputer's flash slot by default) in range.
+// Does not read the audio.
+bool headerValid(const SlotHeader& h, uint32_t maxSamples = kSlotMaxSamples);
 // The header's name as a C string (out: kNameLen + 1).
 void headerName(const SlotHeader& h, char* out);
 
