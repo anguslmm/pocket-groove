@@ -4,9 +4,6 @@ namespace pg {
 namespace engine_detail {
 namespace {
 
-// Lengths in samples at 22.05 kHz (44.1 kHz engine rate); scaled for other rates.
-const int kApLen[Reverb::kNumAp] = {37, 53, 89, 139, 211, 307};
-const int kLineLen[Reverb::kNumLines] = {887, 1039, 1213, 1409, 1627, 1877, 2141, 2423};
 // Output tap positions as a fraction of each line, and their signs.
 const float kTapFracL[Reverb::kNumLines] = {0.11f, 0.78f, 0.37f, 0.29f, 0.21f, 0.93f, 0.55f, 0.07f};
 const float kTapFracR[Reverb::kNumLines] = {0.71f, 0.13f, 0.31f, 0.43f, 0.89f, 0.19f, 0.09f, 0.61f};
@@ -16,29 +13,14 @@ const float kInSign[Reverb::kNumLines] = {1, -1, 1, -1, 1, -1, 1, -1};
 const float kApGain = 0.62f;
 const float kSideWidth = 0.75f;   // side tap set gain relative to mid
 
-bool isPrime(int n) {
-  if (n < 4) return n > 1;
-  if ((n & 1) == 0) return false;
-  for (int d = 3; d * d <= n; d += 2)
-    if (n % d == 0) return false;
-  return true;
-}
-int nextPrime(int n) {
-  while (!isPrime(n)) ++n;
-  return n;
-}
-
 }  // namespace
 
 void Reverb::init(float halfRate) {
   halfRate_ = halfRate;
-  float scale = halfRate / 22050.0f;
-  if (scale > 1.0f) scale = 1.0f;          // pool is sized for 44.1 kHz
-  if (scale < 0.25f) scale = 0.25f;
+  const float scale = reverb_len::scaleFor(halfRate);   // 1 at 44.1 kHz, 1.088 at 48 (the pool's limit: kMaxScale)
   int off = 0;
   for (int i = 0; i < kNumAp; ++i) {
-    int len = nextPrime(int(float(kApLen[i]) * scale + 0.5f));
-    if (len < kMaxBlock + 3) len = nextPrime(kMaxBlock + 3);
+    const int len = reverb_len::apLen(i, scale);
     ap_[i].buf = pool_ + off;
     ap_[i].len = len;
     ap_[i].pos = 0;
@@ -46,8 +28,8 @@ void Reverb::init(float halfRate) {
   }
   int longest = 0;
   for (int i = 0; i < kNumLines; ++i) {
-    int len = nextPrime(int(float(kLineLen[i]) * scale + 0.5f));
-    while (off + len > kPoolLen && len > 64) len = nextPrime(len / 2);
+    int len = reverb_len::lineLen(i, scale);
+    while (off + len > kPoolLen && len > 64) len = reverb_len::nextPrime(len / 2);
     dl_[i].buf = pool_ + off;
     dl_[i].len = len;
     dl_[i].pos = 0;
@@ -265,3 +247,7 @@ template void Reverb::run<true>(const float*, float*, float*, int);
 
 }  // namespace engine_detail
 }  // namespace pg
+
+// The pool at 44.1 kHz is the one the reverb always had (the Cardputer's size).
+static_assert(pg::engine_detail::reverb_len::poolFor(1.0f) == 13452, "reverb lengths at 44.1 kHz changed");
+static_assert(pg::kMaxSampleRate != 44100 || pg::engine_detail::Reverb::kPoolLen == 13452, "reverb pool at 44.1 kHz");

@@ -15,6 +15,28 @@ must live in QSPI / SDRAM), line-level output needs a headphone amp (TPA6132 boa
 core. Estimated unit cost at 500 with the module: $90-125, so a $249-299 product. Work started:
 (1) the core at 48 kHz and rate-clean, (2) a Daisy target that builds in the sandbox.
 
+PROTOTYPE HARDWARE (owner and conductor, 2026-11-14). The owner has an Erica Synths EDU DIY Labor
+(breadboard, pots, output amp with headphone and line out; facts from search snippets, manual not
+read): stage 0 is the Seed3 on the Labor, codec line out into the Labor's amp, pots from the
+Seed's own 3V3 (the Labor's rails are +-12 V and will destroy the Seed). The Labor Scope is a
+self-contained oscilloscope, not a display we can drive. Parts as of today: screen Adafruit 6113
+(same 240x135 ST7789 panel as the Cardputer; no reset pin, no card slot; replaces the 4383),
+microSD Adafruit 4682 on SDMMC (the only card slot), tilt SparkFun BMI270 Qwiic board (on a lead:
+the first accessory). Dropped: the MAX9814 mic board (its automatic gain is wrong for sampling;
+use an analog MEMS capsule at fixed gain into the codec input, part not chosen; the Cardputer's
+mic is a 65 dB SNR MEMS capsule and the owner likes it). ON HOLD, OWNER'S DECISION: the key
+layout. The owner wants velocity-sensitive rubber pads ("playing the drums and synths feels WAY
+better on rubber pads"); do not buy or wire the 56-key matrix. Likely shape: 16 pads on force
+sensors (one ADC input each, through a 16:1 multiplexer) plus function buttons; pressure on a
+held pad can drive a macro. The core needs a velocity per note for this (today a step has only
+the accent flag): engine, sequencer and song file, to be done with the pads, not before. The
+breakout boards are for the prototype only; a product carries the same chips on its own board.
+
+The core at 48 kHz (2026-11-14, merged to main as 9e12a5d): 48 kHz is a first-class rate
+(docs/ARCHITECTURE.md "Sample rates"); 44.1 and 32 kHz bit-identical (itest_golden unchanged).
+Host-verified (101/101; new itest_rate48, itest_rate48_record, itest_golden48, macro_audit_48k),
+Cardputer firmware builds clean with its static RAM unchanged. Entry "48 KHZ CORE BUILT" below.
+
 
 v0.1 complete and host-verified: 55/55 host tests pass; both firmware envs build clean.
 Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
@@ -771,6 +793,72 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    retune when the slot changes); the `/` key map's CTRL layer label for ; / . (shared table);
    a tune on the native instruments (they have their own TUNE parameters).
    HARDWARE CHECK: DEVICE CHECK below, step 14.
+   48 KHZ CORE BUILT (2026-11-14, branch of the rate-48k worktree; host only, nobody has listened):
+   THE CORE RUNS AT 48 KHZ, THE DAISY'S RATE. Engine::init(48000, ...) is right everywhere; the
+   contract is docs/ARCHITECTURE.md "Sample rates". Most of the core already derived everything
+   from the rate; what was not:
+   - THE SAMPLE POOL: a slot header had to say 22,050 Hz (headerValid refused anything else); now
+     8 .. 96 kHz (kMinRate / kMaxRate), makeHeader and MemoryPool::set take the rate, the ROM
+     sounds carry kRomRate (22,050). The samplers already played header rate / engine rate.
+   - RECORDING: Recorder and Resampler take RecRates {in, out}, a property of the platform's pool:
+     the half-band only when out = in / 2, out = in stored as it comes (no filter). recRatesFor()
+     picks: the Cardputer 44,100 -> 22,050 (unchanged, bit for bit), the Daisy 48,000 -> 48,000.
+     Settle / window / pre-roll / tail / meter in ms at the stored rate; RecView gains the stored
+     rate and the slot's capacity (ui_mic's seconds and bar ticks use them). HostResample stores
+     22,050 at 44.1 kHz and 48,000 at 48 kHz, and still offers nothing at 32 (as the Cardputer).
+   - THE FX BUFFERS: the delay line (0.75 s) and the reverb pool were sized for 44.1 kHz, so at 48
+     the delay halved times at tempos where 44.1 kept them (1/4 at 80..87 BPM) and the reverb's
+     lines stopped scaling (a room 8 % smaller in seconds). Now sized for PG_MAX_SAMPLE_RATE
+     (config.h, default 48000: delay 36.1 KB, reverb 29.4 KB; the Cardputer builds with 44100 in
+     platformio.ini: exactly the old 33.1 / 26.9 KB). 44.1 and 32 kHz run the lines they always had.
+   - THE RECORDER's pre-roll ring is sized the same way (1024 on the Cardputer, 2048 at 48 kHz).
+   - LEAD TABLES: no 48 kHz set (0 bytes): the 44.1 set at 48 kHz is band-limited to 21.6 kHz, so
+     nothing aliases; it leaves out the partials between 21.6 and 23.5 kHz.
+   MEASURED AT 48 KHZ AGAINST 44.1 (itest_rate48, demo_compare --rates, macro_audit --rate):
+   pitch: bass 24..72 within 0.77 cents of the note, lead (8 waves, 36..96, every chord) 0.00 c
+   absolute on a sine and 0.01 c against 44.1; drums' tuned peaks within 6 c (kick 0.9, snare 5.9:
+   its noise, toms / rim / cowbell / clave < 1); both samplers on 22.05 / 44.1 / 48 kHz sines 0.00 c,
+   on the ROM sounds 0.01 c against 44.1. Slices land within 0.023 ms (half a 22 kHz sample). Bar
+   lines at 60..200 BPM with swing 0 / 25 / 50: within one quantum (<= 7.7 frames) of the exact
+   16 * 48000 * 15 / BPM, no drift; swung steps within 0.17 ms of the swung grid. Times: lead decay
+   +0.2 %, release 0.0 %, bass -30 dB +0.2 %, kick -0.1 %, hat slope +1.8 %, sampler release -0.6 %,
+   delay time (every division, 60..200 BPM) within 0.03 ms, the reverb's lines 610.1 / 612.9 ms,
+   its decay to -30 dB -3.5 %, the macro ramp 71.8 / 72.0 ms. Recording: a mic take at 48 -> 48,
+   48 -> 24 and 44.1 -> 22.05 each 440.000 Hz stored and played back, pre-roll 40.0 ms; the in-time
+   resample at 48 kHz is the engine's own mono output bit for bit, one bar = 92,912 frames (exact
+   92,903). The demos' mixes within 0.1 dB and 2 % of centroid; per track up to 0.5 dB (hats),
+   centroid +3..6 % on the noise voices (they gain 22..24 kHz) and -6.6 % on WAREHOUS's lead in P7
+   (quiet, unexplained). Every built-in instrument's mean loudness over its macro space within
+   0.6 dB; single points past 1.5 dB: CHH TICK at (0, 0, 0) +1.6, LEAD VOYAGE TRIP=1 SPACE=1 +1.6,
+   PERC STUTTER RATE=1 LENGTH=0 -3.9 and CHOP on the test sample SLICE=0 PITCH=1 LENGTH=0 +4.8
+   (sub-millisecond chops: quantum-sized events). WHAT SOUNDS DIFFERENT (expected, not heard): the
+   hats' square bank is not band-limited and aliases elsewhere at 48 kHz.
+   COST (host, callgrind x86 instructions per frame; the Daisy figure is an ESTIMATE): per frame
+   the same at 48 as at 44.1 (busy pattern 2130 stereo / 1740 mono; the demos' songs 1093 / 941
+   ACIDJAM, 1079 / 925 BASSHAUS, 838 / 688 WAREHOUS), so 8.8 % more per second. At 48 kHz and
+   1.0..1.6 Cortex-M7 cycles per x86 instruction on 480 MHz: busy stereo 21..34 % of the core,
+   the demos 8..18 %.
+   PROGRAM SIZE (table_attr.h): PG_BULK_ATTR (new, empty by default) on the ROM sounds and the
+   built-in instrument library, PG_TABLE_ATTR (as before) on the hot DSP tables. Cortex-M7
+   (arm-none-eabi-g++ 13.2, -mcpu=cortex-m7 -mfpu=fpv5-d16 -mfloat-abi=hard, objects summed before
+   linking, no libm / libstdc++ / libDaisy): -Os text 222.4 KB + rodata 275.4 KB, -O2 291.5 + 277.7,
+   bss 77.1 KB (the engine state). Largest data: ROM sounds 138.2 KB (kData0 50.7, kData1 33.1,
+   kData2 52.9, overviews 1.4; BULK), the instrument library 58.9 KB (BULK), lead wavetables 38.5 KB
+   + 1.6 KB of descriptors (TABLE), bass sine 2.1 + BLEP 2.2 KB (TABLE), UI help text 12.2 KB. With
+   BULK moved out: -Os 300.7 KB, -O2 372.1 KB of lib/pg in the 480 KB program; the UI (ui/*: 85 KB
+   -Os) is the next largest piece if the Daisy does not use it.
+   FIGURES (Cardputer, clean builds, warning-free, placement checks OK; before = ca54fc1):
+   USB: flash 1334439 -> 1335159 (+720), static RAM 202284 -> 202284 (.dram0.bss / .data
+   unchanged), .iram0.text 131247 -> 131235 (-12); jack: flash 1272311 -> 1273095 (+784), static
+   RAM 201764 -> 201764, .iram0.text 124307 -> 124287 (-20).
+   TESTS (host, 101/101): new itest_rate48, itest_rate48_record, itest_golden48 (six renders pinned
+   at 48 kHz), ctest macro_audit_48k and macro_audit_48k_test_sample; test_engine_live's reverb RAM
+   budget scales with PG_MAX_SAMPLE_RATE. Tools: macro_audit --rate / --dump, demo_compare --rates,
+   bench_instrument 48 kHz scenes and --demo N.
+   LEFT ALONE: setMacroCommand's explicit ramp is in quanta (tests and tools only); the macro
+   control rate (kFineQuanta, kFineEvalQuanta) is in quanta (8 % faster at 48); the sampler's
+   kMinRegion (64 samples of the sample) and minimum retrigger period (64 engine samples) are
+   counts; the hats' squares alias; the host's MemoryPool slots stay kSlotMaxSamples (2.86 s at 48).
    RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
    device). Measured on the owner's device just before (current main, USB build, a song with
    STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at

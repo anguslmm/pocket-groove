@@ -52,13 +52,25 @@ const char* recStateName(RecState s) {
   return "?";
 }
 
-void Recorder::start(RecordSink* sink, uint32_t maxSamples) {
+void Recorder::start(RecordSink* sink, uint32_t maxSamples, RecRates rates) {
   sink_ = sink;
   direct_ = false;
   skip_ = 0;
-  max_ = maxSamples < kMinSamples ? kMinSamples : (maxSamples > kSlotMaxSamples ? kSlotMaxSamples : maxSamples);
+  max_ = maxSamples < kMinSamples ? kMinSamples : (maxSamples > kMaxSamples ? kMaxSamples : maxSamples);
+  const bool ratesOk = rates.valid();
+  if (!ratesOk) rates = RecRates{};
+  rates_ = rates;
+  // The same integer arithmetic as the constants: at 22,050 Hz exactly kSkip .. kLevelEvery.
+  const uint32_t r = rates.out;
+  skipN_ = samplesIn(r, kSkipMs);
+  settle_ = samplesIn(r, kSettleMs);
+  window_ = samplesIn(r, kWindowMs);
+  preRoll_ = samplesIn(r, kPreRollMs);
+  tail_ = samplesIn(r, kTailMs);
+  levelEvery_ = int(uint64_t(r) * uint32_t(kLevelEvery) / kOutRate);
   hb_.reset();
   dc_.reset();
+  dc_.setRate(r);
   havePend_ = false;
   pend_ = 0.0f;
   n_ = 0;
@@ -80,11 +92,12 @@ void Recorder::start(RecordSink* sink, uint32_t maxSamples) {
   thr_.store(0, std::memory_order_relaxed);
   peak_.store(0, std::memory_order_relaxed);
   colsUsed_.store(0, std::memory_order_relaxed);
-  state_.store(uint8_t(RecState::Settling), std::memory_order_release);
+  state_.store(uint8_t(ratesOk ? RecState::Settling : RecState::Failed), std::memory_order_release);
 }
 
-void Recorder::startDirect(RecordSink* sink, uint32_t maxSamples, uint32_t skip) {
-  start(sink, maxSamples);
+void Recorder::startDirect(RecordSink* sink, uint32_t maxSamples, uint32_t skip, RecRates rates) {
+  start(sink, maxSamples, rates);
+  if (state() == RecState::Failed) return;
   direct_ = true;
   skip_ = skip;
   state_.store(uint8_t(RecState::Recording), std::memory_order_release);
@@ -111,6 +124,10 @@ void Recorder::feed(const int16_t* in, int n) {
     const RecState s = state();
     if (s != RecState::Settling && s != RecState::Waiting && s != RecState::Recording) return;
     const float x = float(in[i]);
+    if (rates_.in == rates_.out) {   // stored at the input rate: no filter
+      out(direct_ ? x : dc_.run(x));
+      continue;
+    }
     if (!havePend_) {
       pend_ = x;
       havePend_ = true;
@@ -164,7 +181,7 @@ void Recorder::out(float y) {
   const float ay = y < 0.0f ? -y : y;
   const int a = ay > 32767.0f ? 32767 : int(ay);
   if (a > levelAcc_) levelAcc_ = a;
-  if (++levelN_ >= kLevelEvery) {
+  if (++levelN_ >= levelEvery_) {
     level_.store(uint16_t(levelAcc_), std::memory_order_relaxed);
     levelAcc_ = levelN_ = 0;
   }
@@ -182,16 +199,16 @@ void Recorder::out(float y) {
   ring_[ringN_ & (kRing - 1)] = v;
   ++ringN_;
   if (s == RecState::Settling) {
-    if (n >= kSkip) {
+    if (n >= skipN_) {
       winSum_ += y * y;
-      if (++winN_ == kWindow) {
-        const float ms = winSum_ / float(kWindow);
+      if (++winN_ == window_) {
+        const float ms = winSum_ / float(window_);
         if (floorMin_ < 0.0f || ms < floorMin_) floorMin_ = ms;
         winSum_ = 0.0f;
         winN_ = 0;
       }
     }
-    if (n + 1 >= kSettle) {
+    if (n + 1 >= settle_) {
       const float rms = floorMin_ > 0.0f ? std::sqrt(floorMin_) : 0.0f;
       floor_ = uint16_t(rms > 32767.0f ? 32767.0f : rms);
       float t = rms * kThrOverFloor;
@@ -205,7 +222,7 @@ void Recorder::out(float y) {
   // Waiting
   if (a > int(thr_.load(std::memory_order_relaxed))) {
     state_.store(uint8_t(RecState::Recording), std::memory_order_release);
-    const uint32_t pre = ringN_ < kPreRoll ? ringN_ : kPreRoll;   // includes this sample
+    const uint32_t pre = ringN_ < preRoll_ ? ringN_ : preRoll_;   // includes this sample
     for (uint32_t k = ringN_ - pre; k != ringN_; ++k) {
       put(ring_[k & (kRing - 1)]);
       if (state() != RecState::Recording) return;
@@ -218,7 +235,7 @@ void Recorder::finish() {
   if (s == RecState::Recording) {
     if (!flush()) return;
     const uint32_t r = recorded_.load(std::memory_order_relaxed);
-    const uint32_t len = r > kTail ? r - kTail : 0;
+    const uint32_t len = r > tail_ ? r - tail_ : 0;
     if (len < kMinSamples) {
       state_.store(uint8_t(RecState::Cancelled), std::memory_order_release);
       return;

@@ -7,13 +7,18 @@ namespace pg {
 namespace sampler {
 
 void Resampler::start(Recorder* rec, RecordSink* sink, int16_t* ring, uint32_t ringSize, bool sync,
-                      uint32_t maxSamples) {
+                      uint32_t maxSamples, RecRates rates) {
   rec_ = rec;
   sink_ = sink;
   ring_ = ring;
   mask_ = ringSize - 1;
-  maxS_ = maxSamples < kMinSamples ? kMinSamples : (maxSamples > kSlotMaxSamples ? kSlotMaxSamples : maxSamples);
-  maxF_ = 2 * maxS_;
+  maxS_ = maxSamples < kMinSamples ? kMinSamples
+                                    : (maxSamples > Recorder::kMaxSamples ? Recorder::kMaxSamples : maxSamples);
+  f_ = rates.valid() ? rates.factor() : 2u;
+  rate_ = rates.out;
+  pre_ = f_ == 2 ? kPre : 0;     // the half-band's history in front and behind; none without it
+  post_ = f_ == 2 ? kPost : 0;
+  maxF_ = f_ * maxS_;
   std::memset(hist_, 0, sizeof hist_);
   n_ = s_ = e_ = lastFit_ = head_ = 0;
   started_ = endSet_ = done_ = false;
@@ -30,7 +35,7 @@ void Resampler::start(Recorder* rec, RecordSink* sink, int16_t* ring, uint32_t r
   ended_.store(false, std::memory_order_relaxed);
   endPub_.store(kNotYet, std::memory_order_relaxed);
   endLen_.store(0, std::memory_order_relaxed);
-  rec_->startDirect(sink, maxS_, kSkip);
+  rec_->startDirect(sink, maxS_, f_ == 2 ? kSkip : 0, rates);
   std::atomic_thread_fence(std::memory_order_release);
 }
 
@@ -90,7 +95,7 @@ void Resampler::quantum(const int16_t* st, int frames, uint8_t flags) {
     started_ = true;
     s_ = n_ + uint32_t(at);
     // the half-band's history in front, then this quantum from the start on
-    for (uint32_t f = s_ - kPre; f != n_ + uint32_t(frames); ++f) push(hist_[f & (kHist - 1)]);
+    for (uint32_t f = s_ - pre_; f != n_ + uint32_t(frames); ++f) push(hist_[f & (kHist - 1)]);
     n_ += uint32_t(frames);
     startPub_.store(true, std::memory_order_release);
   } else {
@@ -101,14 +106,14 @@ void Resampler::quantum(const int16_t* st, int frames, uint8_t flags) {
           lastFit_ = d;
           const int b = bars_.load(std::memory_order_relaxed);
           if (b < kMaxBars) {
-            barAt_[b] = d / 2;
+            barAt_[b] = d / f_;
             bars_.store(b + 1, std::memory_order_release);
           }
           if (rel) setEnd(d, kReleased);
         }
         if (!endSet_ && !playing) setEnd(lastFit_ > 0 ? lastFit_ : d, kStopped);
       } else if (rel) {
-        setEnd(d + (d & 1), kReleased);   // even: whole decimated samples
+        setEnd(f_ == 2 ? d + (d & 1) : d, kReleased);   // even: whole decimated samples
       }
     }
     // the quantum into the ring: one check for room, then a plain copy
@@ -127,9 +132,9 @@ void Resampler::quantum(const int16_t* st, int frames, uint8_t flags) {
     else setEnd(maxF_, kNoBarFits);
   }
   headPub_.store(head_, std::memory_order_release);
-  if (endSet_ && (why_ == kOverrun || n_ - s_ >= e_ + kPost)) {
+  if (endSet_ && (why_ == kOverrun || n_ - s_ >= e_ + post_)) {
     done_ = true;
-    endLen_.store((e_ + 1) / 2, std::memory_order_relaxed);
+    endLen_.store((e_ + f_ - 1) / f_, std::memory_order_relaxed);
     endPub_.store(why_, std::memory_order_relaxed);
     tapDone_.store(true, std::memory_order_release);
   }
