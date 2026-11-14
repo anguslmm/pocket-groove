@@ -114,6 +114,15 @@ HOT_COMMON = [
     r"^pg::sampler::SamplerVoice::(render|setParams|updateRate|updateRegion|edge|endChop|active|mono)\(",
     r"^pg::sampler::\(anonymous namespace\)::(endOf|minRegion)\(",
     r"^pg::sampler::SamplePool::generation\(",
+    # The melodic sampler (the LEAD's sampler instruments): its per-sample loops (the
+    # notes and the shared chain) and what runs once per quantum per note (the pitch,
+    # the envelope), ~2.2 KB. Flash: setParams / setParamsFine / updateTone and the
+    # notes' windows (only when a parameter changed or, while a macro moves, every 4th
+    # quantum), moving() (the drift and the filter envelope's corner: every quantum
+    # while one of them moves; env:profile's MELODIC lines measure it), edge (a
+    # playhead's turn or a one-shot's end: once per pass over the window), the note
+    # path (noteOn, startNote, allocNote, noteOff, choke: once per note).
+    r"^pg::sampler::MelodicSampler::(render|renderNote|publish|active|mono)\(",
     # Resampling (SHIFT+L): the engine's output tap, once per quantum while a resample
     # runs (a mono sum and a ring copy); its writer side (pump) runs on the writer task.
     r"^pg::sampler::Resampler::(quantum|push|setEnd)\(",
@@ -134,7 +143,8 @@ HOT = HOT_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 # Placement checks (regexes on demangled names, see the header).
 MUST_COMMON = [r"^pg::Engine::process\(", r"^pg::lead::LeadVoice::render\(", r"^pg::bass::BassVoice::render\(",
                r"^pg::engine_detail::State::fineEval\(", r"^pg::bass::BassVoice::mapParams\(",
-               r"^pg::sampler::SamplerVoice::render\(", r"^pg::sampler::Resampler::quantum\("]
+               r"^pg::sampler::SamplerVoice::render\(", r"^pg::sampler::Resampler::quantum\(",
+               r"^pg::sampler::MelodicSampler::render\("]
 MUST = MUST_COMMON + (HOT_STEREO if STEREO else HOT_MONO)
 MUST_NOT = HOT_MONO if STEREO else HOT_STEREO
 # Per-step / per-note paths (tier 2).
@@ -152,7 +162,7 @@ RAM_RODATA = ["bass/bass_tables_data.cpp"]
 AUDIO_OBJS = ("/pg/drums/", "/pg/bass/bass.cpp", "/pg/lead/lead.cpp", "/pg/engine/engine.cpp",
               "/pg/engine/delay.cpp", "/pg/engine/reverb.cpp", "/pg/engine/master.cpp",
               "/pg/sampler/sampler.cpp", "/pg/sampler/sample_pool.cpp", "/pg/sampler/flash_pool.cpp",
-              "/pg/sampler/resampler.cpp")
+              "/pg/sampler/resampler.cpp", "/pg/sampler/melodic.cpp")
 
 _hot = [re.compile(p) for p in HOT + (STEP if TIER >= 2 else [])]
 

@@ -28,7 +28,7 @@ inline float absf(float x) { return x < 0.0f ? -x : x; }
 inline float unit(float v) { return v * (1.0f / 127.0f); }
 
 // The window's minimum length in a sample of len samples at `rate`.
-int32_t minWindow(uint32_t len, uint32_t rate) {
+int32_t winMin(uint32_t len, uint32_t rate) {
   int32_t minW = int32_t(MelodicSampler::kMinWindowMs * 0.001f * float(rate));
   if (minW < SamplerVoice::kMinRegion) minW = SamplerVoice::kMinRegion;
   if (minW > int32_t(len)) minW = int32_t(len);
@@ -37,8 +37,8 @@ int32_t minWindow(uint32_t len, uint32_t rate) {
 
 // Where START puts a window's start (0 = the sample's beginning), leaving room for
 // the minimum window before the end.
-int32_t startOf(float start, uint32_t len, uint32_t rate) {
-  const int32_t L = int32_t(len), minW = minWindow(len, rate);
+int32_t winStart(float start, uint32_t len, uint32_t rate) {
+  const int32_t L = int32_t(len), minW = winMin(len, rate);
   int32_t a = int32_t(float(L) * clampf(start, 0.0f, 127.0f) * (1.0f / 128.0f));
   if (L - a < minW) a = L - minW;
   return a < 0 ? 0 : a;
@@ -46,8 +46,8 @@ int32_t startOf(float start, uint32_t len, uint32_t rate) {
 
 // The window's end for LENGTH from its start a: the minimum (0) .. the sample's end
 // (127), a square law between.
-int32_t endOf(int32_t a, float length, uint32_t len, uint32_t rate) {
-  const int32_t L = int32_t(len), minW = minWindow(len, rate);
+int32_t winEnd(int32_t a, float length, uint32_t len, uint32_t rate) {
+  const int32_t L = int32_t(len), minW = winMin(len, rate);
   const float f = clampf(length, 0.0f, 127.0f) * (1.0f / 127.0f);
   float rest = float(L - a - minW);
   if (rest < 0.0f) rest = 0.0f;
@@ -98,8 +98,8 @@ void MelodicSampler::init(float sampleRate) {
 }
 
 void MelodicSampler::region(const uint8_t* p, uint32_t length, uint32_t rate, int32_t* a, int32_t* b) {
-  *a = startOf(float(p[mel::kStart]), length, rate);
-  *b = endOf(*a, float(p[mel::kLength]), length, rate);
+  *a = winStart(float(p[mel::kStart]), length, rate);
+  *b = winEnd(*a, float(p[mel::kLength]), length, rate);
 }
 
 void MelodicSampler::setParams(const uint8_t* p) {
@@ -148,6 +148,7 @@ void MelodicSampler::updateTone() {
   driftDepth_ = 0.6f * dd * dd;                                                  // 0 .. 0.6 semitones
   driftInc_ = 0.1f * exp2Fast(6.322f * unit(pf_[mel::kDriftRate])) * qs;        // 0.1 .. 8 Hz, turns per quantum
 
+  ++winGen_;   // the notes' windows follow START / LENGTH
   ftype_ = uint8_t(clampf(float(int(pf_[mel::kFilter] + 0.5f)), 0.0f, float(kNumFilters - 1)));
   cutOct_ = 7.45f * unit(pf_[mel::kCutoff]);
   const float rr = unit(pf_[mel::kReso]);
@@ -172,12 +173,31 @@ void MelodicSampler::updateTone() {
   toneDirty_ = true;
 }
 
-// ONE: the start is the note's own (latched), LENGTH moves the end. PONG: START and
-// LENGTH move the whole window.
-void MelodicSampler::window(const Note& n, int32_t* a, int32_t* b) const {
-  const int32_t wa = n.loop ? startOf(pf_[mel::kStart], n.len, n.rate) : n.startPos;
-  *a = wa;
-  *b = endOf(wa, pf_[mel::kLength], n.len, n.rate);
+// The note's window and its edges in 32.32. ONE: the start is the note's own
+// (latched), LENGTH moves the end. PONG: START and LENGTH move the whole window.
+// Only when the parameters moved (winGen_), so it stays out of the per-sample path.
+__attribute__((noinline)) void MelodicSampler::window(Note& n) const {
+  const int32_t wa = n.loop ? winStart(pf_[mel::kStart], n.len, n.rate) : n.startPos;
+  n.a = wa;
+  n.b = winEnd(wa, pf_[mel::kLength], n.len, n.rate);
+  n.loF = int64_t(n.a) << 32;
+  n.hiF = (int64_t(n.b - 1) << 32) - 1;   // reads [i, i + 1] stay below b
+  n.winGen = winGen_;
+}
+
+// The playhead crossed the window's edge during a quantum (a turn, or a one-shot's
+// end: rare, so out of the loop). PONG: it turns, continuing as far inside as it
+// went past (the waveform stays continuous); false: a one-shot ends.
+__attribute__((noinline)) bool MelodicSampler::edge(const Note& n, int64_t& pos, int64_t& step) const {
+  if (!n.loop) return false;
+  if (pos > n.hiF) {
+    if (step > 0) { pos = n.hiF - (pos - n.hiF); step = -step; }
+  } else if (pos < n.loF) {
+    if (step < 0) { pos = n.loF + (n.loF - pos); step = -step; }
+  }
+  const int64_t maxF = (int64_t(n.len - 1) << 32) - 1;
+  if (uint64_t(pos) > uint64_t(maxF)) pos = pos < 0 ? 0 : maxF;   // never outside the sample (a tiny window)
+  return true;
 }
 
 void MelodicSampler::startNote(Note& n, uint8_t note, uint8_t root, float gain, uint32_t group) {
@@ -193,12 +213,12 @@ void MelodicSampler::startNote(Note& n, uint8_t note, uint8_t root, float gain, 
   n.loop = int(pf_[mel::kLoop] + 0.5f) == mel::kPingPong;
   n.reverse = pf_[mel::kReverse] >= 0.5f;
   n.rate = r.rate;
-  const int32_t a = startOf(pf_[mel::kStart], n.len, r.rate), b = endOf(a, pf_[mel::kLength], n.len, r.rate);
+  const int32_t a = winStart(pf_[mel::kStart], n.len, r.rate), b = winEnd(a, pf_[mel::kLength], n.len, r.rate);
   n.startPos = a;
-  n.a = a;
-  n.b = b;
+  window(n);
   n.pos = n.reverse ? ((int64_t(b - 1) << 32) - 1) : (int64_t(a) << 32);
   n.step = n.reverse ? -1 : 1;   // the speed comes at the next quantum (renderNote)
+  n.incSemis = 1.0e9f;
   n.semis = n.target = float(int(note) - mel::kRootNote);
   n.env = 0.0f;
   n.last = 0.0f;
@@ -329,15 +349,20 @@ void MelodicSampler::renderNote(Note& n, float* acc) {
   n.semis += (n.target - n.semis) * glideCoef_;
   if (absf(n.target - n.semis) < 1.0e-4f) n.semis = n.target;
   const float semis = clampf(n.semis + tune_ + drift_, -48.0f, 48.0f);
-  const int64_t inc = int64_t(n.rateRatio * exp2Fast(semis * (1.0f / 12.0f)) * 4294967296.0f);
-  n.step = n.step < 0 ? -inc : inc;
-  window(n, &n.a, &n.b);
-  const int64_t loF = int64_t(n.a) << 32;
-  const int64_t hiF = (int64_t(n.b - 1) << 32) - 1;   // reads [i, i + 1] stay below b
-  const int64_t maxF = (int64_t(n.len - 1) << 32) - 1;
-  if (n.loop) {   // the window moved away: turn toward it (the playhead never jumps)
+  if (semis != n.incSemis) {   // the speed: only when the pitch moved
+    n.incSemis = semis;
+    const int64_t inc = int64_t(n.rateRatio * exp2Fast(semis * (1.0f / 12.0f)) * 4294967296.0f);
+    n.step = n.step < 0 ? -inc : inc;
+  }
+  if (n.winGen != winGen_) window(n);
+  // this quantum's bounds: the window's, widened to the playhead while it travels toward a
+  // window that moved away (PONG turns toward it first: the playhead never jumps)
+  int64_t loF = n.loF, hiF = n.hiF;
+  if (n.loop) {
     if (n.pos > hiF && n.step > 0) n.step = -n.step;
     else if (n.pos < loF && n.step < 0) n.step = -n.step;
+    if (n.pos > hiF) hiF = n.pos;
+    if (n.pos < loF) loF = n.pos;
   }
   float env1 = n.env;
   bool ends = false;
@@ -373,46 +398,27 @@ void MelodicSampler::renderNote(Note& n, float* acc) {
   int64_t pos = n.pos, step = n.step;
   float x = 0.0f;
   int i = 0;
-  if (n.loop) {
-    for (; i < kQuantum; ++i) {
-      const int32_t ix = int32_t(pos >> 32);
-      const float fr = float(uint32_t(pos) >> 8) * (1.0f / 16777216.0f);
-      const float s0 = float(d[ix]), s1 = float(d[ix + 1]);
-      amp += ampStep;
-      x = (s0 + (s1 - s0) * fr) * amp;
-      acc[i] += x;
-      pos += step;
-      if (pos > hiF) {
-        if (step > 0) { pos = 2 * hiF - pos; step = -step; }
-      } else if (pos < loF) {
-        if (step < 0) { pos = 2 * loF - pos; step = -step; }
-      }
-      if (uint64_t(pos) > uint64_t(maxF)) pos = pos < 0 ? 0 : maxF;   // never outside the sample
-    }
-  } else {
-    for (; i < kQuantum; ++i) {
-      const int32_t ix = int32_t(pos >> 32);
-      const float fr = float(uint32_t(pos) >> 8) * (1.0f / 16777216.0f);
-      const float s0 = float(d[ix]), s1 = float(d[ix + 1]);
-      amp += ampStep;
-      x = (s0 + (s1 - s0) * fr) * amp;
-      acc[i] += x;
-      pos += step;
-      if (pos > hiF || pos < loF) {   // the one-shot's end (or its start, reversed)
-        ++i;
-        ends = true;
-        break;
-      }
-    }
-    if (i < kQuantum) {   // ended inside the quantum: its last value decays away (de-click)
-      float r = x;
-      for (; i < kQuantum; ++i) {
-        r *= residK_;
-        acc[i] += r;
-      }
-      x = r;
+  for (; i < kQuantum; ++i) {
+    const int32_t ix = int32_t(pos >> 32);
+    const float fr = float(uint32_t(pos) >> 8) * (1.0f / 16777216.0f);
+    const float s0 = float(d[ix]), s1 = float(d[ix + 1]);
+    amp += ampStep;
+    x = (s0 + (s1 - s0) * fr) * amp;
+    acc[i] += x;
+    pos += step;
+    if ((pos > hiF || pos < loF) && !edge(n, pos, step)) {   // a turn; or the one-shot's end
+      ++i;
       ends = true;
+      break;
     }
+  }
+  if (i < kQuantum) {   // ended inside the quantum: its last value decays away (de-click)
+    float r = x;
+    for (; i < kQuantum; ++i) {
+      r *= residK_;
+      acc[i] += r;
+    }
+    x = r;
   }
   n.pos = pos;
   n.step = step;
@@ -422,6 +428,38 @@ void MelodicSampler::renderNote(Note& n, float* acc) {
     n.stage = sOff;
     n.gate = false;
     n.last = 0.0f;
+  }
+}
+
+// What moves the whole chain once per quantum: the drift (a slow wave and a random
+// wander, shared by every note) and the filter's corner while its envelope decays.
+// Only while one of them moves (out of the per-sample path: flash on the device).
+__attribute__((noinline)) void MelodicSampler::moving() {
+  if (driftDepth_ > 0.0f) {
+    driftPh_ += driftInc_;
+    if (driftPh_ >= 1.0f) {
+      driftPh_ -= 1.0f;
+      rng_ = rng_ * 1664525u + 1013904223u;
+      driftTarget_ = float(int32_t(rng_)) * (1.0f / 2147483648.0f);
+    }
+    driftWander_ += (driftTarget_ - driftWander_) * (4.0f * driftInc_);
+    drift_ = driftDepth_ * (0.6f * sinTurn(driftPh_) + 0.4f * driftWander_);
+  } else {
+    drift_ = 0.0f;
+  }
+  const bool envMoving = envOct_ > 0.0f && fenv_ > 1.0e-4f;
+  if (filterOn_ && (envMoving || toneDirty_)) {
+    float hz = 60.0f * exp2Fast(cutOct_ + envOct_ * fenv_);
+    if (hz > 0.45f * fs_) hz = 0.45f * fs_;
+    const float x = kPiF * hz * invFs_;
+    g_ = drums::sinSmall(x) / drums::cosSmall(x);
+    gk_ = g_ + k_;
+    d_ = 1.0f / (1.0f + g_ * gk_);
+  }
+  toneDirty_ = false;
+  if (fenv_ > 0.0f) {
+    fenv_ *= fdecCoefQ_;
+    if (fenv_ < 1.0e-5f) fenv_ = 0.0f;
   }
 }
 
@@ -436,35 +474,8 @@ void MelodicSampler::render(float* outL, float* outR, int frames) {
     if ((!n.builtin && n.gen != gen) || int(n.slot) == silent) killNote(n);   // the slot changed / is being recorded
     any = true;
   }
-  // drift: a slow wave and a random wander, shared by every note
-  if (driftDepth_ > 0.0f) {
-    driftPh_ += driftInc_;
-    if (driftPh_ >= 1.0f) {
-      driftPh_ -= 1.0f;
-      rng_ = rng_ * 1664525u + 1013904223u;
-      driftTarget_ = float(int32_t(rng_)) * (1.0f / 2147483648.0f);
-    }
-    driftWander_ += (driftTarget_ - driftWander_) * (4.0f * driftInc_);
-    drift_ = driftDepth_ * (0.6f * sinTurn(driftPh_) + 0.4f * driftWander_);
-  } else {
-    drift_ = 0.0f;
-  }
-  // the filter: its envelope moves the corner every quantum while it decays
-  const bool envMoving = envOct_ > 0.0f && fenv_ > 1.0e-4f;
-  if (filterOn_ && (envMoving || toneDirty_)) {
-    float oct = cutOct_ + envOct_ * fenv_;
-    float hz = 60.0f * exp2Fast(oct);
-    if (hz > 0.45f * fs_) hz = 0.45f * fs_;
-    const float x = kPiF * hz * invFs_;
-    g_ = drums::sinSmall(x) / drums::cosSmall(x);
-    gk_ = g_ + k_;
-    d_ = 1.0f / (1.0f + g_ * gk_);
-  }
-  toneDirty_ = false;
-  if (fenv_ > 0.0f) {
-    fenv_ *= fdecCoefQ_;
-    if (fenv_ < 1.0e-5f) fenv_ = 0.0f;
-  }
+  if (driftDepth_ > 0.0f || fenv_ > 0.0f || toneDirty_) moving();
+  else drift_ = 0.0f;
 
   // ---- the notes into one sum ----
   float acc[kQuantum];

@@ -123,6 +123,9 @@ class MelodicSampler final : public Voice {
     int64_t pos;           // 32.32
     int64_t step;          // 32.32, signed: the direction it runs
     int32_t a, b;          // the window [a, b)
+    int64_t loF, hiF;      // its edges in 32.32 (reads [i, i + 1] stay below b)
+    uint32_t winGen;       // the parameters it was computed from (winGen_)
+    float incSemis;        // the pitch the speed was computed for
     int32_t startPos;      // the latched start (ONE: the window's start)
     float semis, target;   // pitch (from kRootNote), its glide target
     float env;             // amplitude envelope at the start of the next quantum
@@ -138,8 +141,10 @@ class MelodicSampler final : public Voice {
   int allocNote(uint8_t note, uint32_t claimed) const;
   void releaseNote(Note& n);
   void killNote(Note& n);
-  void window(const Note& n, int32_t* a, int32_t* b) const;
+  void window(Note& n) const;
+  bool edge(const Note& n, int64_t& pos, int64_t& step) const;
   void renderNote(Note& n, float* acc);
+  void moving();
   void publish();
 
   const SamplePool* pool_ = nullptr;
@@ -161,6 +166,7 @@ class MelodicSampler final : public Voice {
   float driftDepth_ = 0.0f, driftInc_ = 0.0f;
   uint8_t ftype_ = kLP;
   bool filterOn_ = false, toneDirty_ = true;
+  uint32_t winGen_ = 1;               // bumped when START / LENGTH may have moved
 
   // shared state
   Note n_[mel::kMaxNotes];
