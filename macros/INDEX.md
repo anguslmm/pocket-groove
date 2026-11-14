@@ -6,6 +6,19 @@ Round 1 is not trying to be right. Every set on a voice is built on a different 
 
 Model v2 (2026-11-13) changed five sets to use its new features, so marks on them made before that date name the old version (the mark's `@hash` says which): KEYS and TRIO are native morphs (the pad's edges sound as before, the inside mixes the patches), POLES and CRACK carry their words as end labels and have readable macro names (POLES sounds the same; CRACK's PITCH now also lengthens or shortens the body, which round 1 meant but a later line undid), and VOYAGE covers its last wave jump. Every other set sounds exactly as in round 1; TICK, BOOM, WOOD and ALLOY gained end labels only.
 
+## Velocity and pressure (2026-11-14)
+
+Six sets use the `vel` and `press` lines (docs/MACROLAB.md "Velocity and pressure"). `vel MACRO AMOUNT`: a note's velocity moves that macro for the note (nothing at 100, the default step velocity; AMOUNT of the travel at 127, the same the other way at 1). `press MACRO`: what the pressure on a held pad moves; a set without the line uses what tilt X moves. Only sets that the demo songs do not play at varied velocities got a `vel` line, so the demos sound as before (itest_golden). Not listened to yet.
+
+| set | vel | press | what it should do |
+|---|---|---|---|
+| CRACK | TOUCH 0.5 | (PITCH) | a harder hit is a harder, bent snare; a ghost note a soft tap |
+| ALLOY | DAMP -0.4 | (WD-MTL) | a soft hit is choked, a hard one rings |
+| TAP | HIT 0.5 | PRESS fast | a fingertip tap to an open slap; pressing into the held pad bends the pitch (a talking drum) |
+| PLUCK | TONE 0.3 | (TONE) | a harder strike snaps brighter |
+| ACID | - | BITE | squeeze a held note and it bites |
+| HANDS | - | OPEN | squeeze a held chord and it opens and rings |
+
 ## Bass
 
 | set | file | family | idea | macros | try first |

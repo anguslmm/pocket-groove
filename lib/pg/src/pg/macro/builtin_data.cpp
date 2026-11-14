@@ -82,7 +82,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // snare/crack.pgm
     {1, 3, 13, 39, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
-     {0, 0, 0, 0}, 0x00,   // vel per macro, press
+     {0, 0, 50, 0}, 0x00,   // vel per macro, press
      0x7da7, "CRACK",
      "family: OPPOSITES.",
      "A 909-ish snare. Pitch it, rattle it.", 0,   // voice kind
@@ -210,7 +210,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // chh/alloy.pgm
     {3, 3, 13, 35, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
-     {0, 0, 0, 0}, 0x00,   // vel per macro, press
+     {0, 0, -40, 0}, 0x00,   // vel per macro, press
      0xe0f0, "ALLOY",
      "family: MATERIAL / BODY.",
      "From seed shaker to metal bell.", 0,   // voice kind
@@ -273,7 +273,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // perc/tap.pgm
     {5, 3, 13, 26, 0, 0, 0, 0,
      {0x81, 0x90},   // tilt x, y
-     {0, 0, 0, 0}, 0x00,   // vel per macro, press
+     {50, 0, 0, 0}, 0x81,   // vel per macro, press
      0x088c, "TAP",
      "family: GESTURE.",
      "A hand drum: tap, slap, let it ring.", 0,   // voice kind
@@ -406,7 +406,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // bass/acid.pgm
     {6, 4, 19, 43, 0, 0, 0, 0,
      {0x00, 0x00},   // tilt x, y
-     {0, 0, 0, 0}, 0x00,   // vel per macro, press
+     {0, 0, 0, 0}, 0x91,   // vel per macro, press
      0xd9d2, "ACID",
      "family: INTERACTION.",
      "The 303 squelch. Open it, then bite.", 0,   // voice kind
@@ -526,7 +526,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/hands.pgm
     {7, 4, 22, 49, 0, 0, 0, 0,
      {0x00, 0x92},   // tilt x, y
-     {0, 0, 0, 0}, 0x00,   // vel per macro, press
+     {0, 0, 0, 0}, 0x90,   // vel per macro, press
      0xfd8f, "HANDS",
      "family: GESTURE.",
      "Open your hand, push, shake, hold.", 0,   // voice kind
@@ -641,7 +641,7 @@ PG_BULK_ATTR extern const MacroSet kBuiltin[] = {
     // lead/pluck.pgm
     {7, 4, 13, 41, 0, 0, 0, 2,
      {0x90, 0x91},   // tilt x, y
-     {0, 0, 0, 0}, 0x00,   // vel per macro, press
+     {30, 0, 0, 0}, 0x00,   // vel per macro, press
      0x22c6, "PLUCK",
      "family: GESTURE (sampler).",
      "The sample struck like a key.", 1,   // voice kind

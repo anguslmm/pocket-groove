@@ -15,6 +15,7 @@ name PLUCK
 about "The sample struck like a key."
 tilt x TONE
 tilt y LENGTH
+vel TONE 0.3                  # a harder strike: a brighter snap
 base loop=one attack=0 sustain=0 fdcy=44 filter=lp glide=40
 
 macro TONE 0.5 "DARK" "BRIGHT" "a dark thud .. a bright snap"

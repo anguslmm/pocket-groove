@@ -14,6 +14,8 @@ name TAP
 about "A hand drum: tap, slap, let it ring."
 tilt x PRESS fast             # press the head: the pitch bends
 tilt y HIT
+vel HIT 0.5                   # a harder hit: from a fingertip tap to an open slap
+press PRESS fast              # press into the held pad: the pitch bends (a talking drum)
 base modl=tom tune=78 decay=48 tone=50 bend=24 harm=64 noise=30 drive=24
 
 macro HIT 0.35
