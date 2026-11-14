@@ -94,12 +94,14 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   poolLoaded_ = mem.poolImage && mirror_.loadFrom();
   if (mem.poolImage) {
     pool_.attach(mirror_.image());
+    poolDropped_ = mirror_.dropBadSlots(pool_);
     writer_.attach(&mirror_, &pool_);
   } else {
     pool_.attach(nullptr);
   }
   int used = 0;
   for (int i = 0; i < pg::sampler::kPoolSlots; ++i) used += pool_.header(i) ? 1 : 0;
+  if (poolDropped_) sp("[boot] samples: %d slot(s) whose audio did not match the header emptied\n", poolDropped_);
   sp("[boot] samples: pool %s, %d of %d slots hold a sample (%lu ms)\n",
      !mem.poolImage ? "NONE" : poolLoaded_ ? "loaded from flash" : "flash unreadable: empty", used,
      pg::sampler::kPoolSlots, static_cast<unsigned long>(hal.millis() - t1));
@@ -567,10 +569,10 @@ void App::printReport() {
     for (int i = 0; i < pg::sampler::kPoolSlots; ++i) used += pool_.header(i) ? 1 : 0;
     const MirrorFlash::Stats& ms = mirror_.stats();
     sp("[samples] pool in RAM %s, %d of %d slots hold a sample; flash copy: %d sectors to write, %lu written, "
-       "%lu failed\n",
+       "%lu failed; %d bad slot(s) emptied at boot\n",
        mem_.poolImage ? (poolLoaded_ ? "(loaded at boot)" : "(flash unreadable at boot)") : "NONE", used,
        pg::sampler::kPoolSlots, mirror_.dirtySectors(), static_cast<unsigned long>(ms.flushed),
-       static_cast<unsigned long>(ms.flushFailures));
+       static_cast<unsigned long>(ms.flushFailures), poolDropped_);
     for (int i = 0; i < pg::sampler::kPoolSlots; ++i) {
       const pg::sampler::SlotHeader* sh = pool_.header(i);
       if (!sh) continue;

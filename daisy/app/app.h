@@ -223,6 +223,7 @@ class App {
   uint32_t samplesChanged_ = 0;
   FsPersist::Load fsLoad_ = FsPersist::Load::Empty;
   bool poolLoaded_ = false;
+  int poolDropped_ = 0;
   uint32_t bootMs_ = 0;
 
   // The boot log, replayed by 'l' (the computer usually opens the port after boot).

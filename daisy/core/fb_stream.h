@@ -20,7 +20,7 @@ namespace pgd {
 
 class FbStream {
  public:
-  static constexpr size_t kMaxLine = 360;   // the longest line (a row) incl. newline
+  static constexpr size_t kMaxLine = 360;   // a row line incl. newline (the palette line is ~700)
   using Sink = void (*)(void* user, const char* line, size_t len);
 
   // Starts sending rows [y0, y1) of fb (clamped). A frame already being sent is

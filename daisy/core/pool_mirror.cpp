@@ -34,6 +34,21 @@ bool MirrorFlash::loadFrom() {
   return true;
 }
 
+int MirrorFlash::dropBadSlots(pg::sampler::FlashPool& pool) {
+  int dropped = 0;
+  for (int i = 0; i < pg::sampler::kPoolSlots; ++i) {
+    const pg::sampler::SlotHeader* h = pool.header(i);
+    if (!h) continue;
+    const uint32_t off = uint32_t(i) * pg::sampler::kSlotBytes;
+    const uint32_t crc = pg::sampler::crc32(img_ + off + kSector, h->samples * 2u);
+    if (crc == h->dataCrc) continue;
+    erase(off, kSector);
+    pool.rescan(i);
+    ++dropped;
+  }
+  return dropped;
+}
+
 void MirrorFlash::mark(uint32_t offset, uint32_t bytes) {
   if (!bytes) return;
   const uint32_t a = offset / kSector, b = (offset + bytes - 1) / kSector;
@@ -68,6 +83,10 @@ int MirrorFlash::pickSector() const {
 
 bool MirrorFlash::flushStep() {
   if (!img_ || !back_ || !stage_ || hold_) return false;
+  if (backoff_) {   // after a failure: leave the flash alone for a while (~1 s of 5 ms steps)
+    --backoff_;
+    return false;
+  }
   const int s = pickSector();
   if (s < 0) return false;
   const uint32_t off = uint32_t(s) * kSector;
@@ -82,6 +101,7 @@ bool MirrorFlash::flushStep() {
     }
   if (!back_->erase(off, kSector) || (!blank && !back_->write(off, stage_, kSector))) {
     ++stats_.flushFailures;
+    backoff_ = kBackoffSteps;
     dirty_[uint32_t(s) >> 5] |= 1u << (uint32_t(s) & 31);   // try again later
     return true;
   }

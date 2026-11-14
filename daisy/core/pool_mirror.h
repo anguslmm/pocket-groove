@@ -12,10 +12,11 @@
 //                 first (the RAM may change meanwhile: the sector is then dirty again
 //                 and flushed again), erased and programmed on the backing flash. A
 //                 slot's header sector (its first, pg's layout) goes last of the
-//                 slot's dirty sectors, so a power cut mid-flush leaves on the flash a
-//                 slot whose header does not match its audio: the pool's own CRC
-//                 check (FlashPool::rescan) then reads it as empty, never as a wrong
-//                 sample.
+//                 slot's dirty sectors, so a power cut mid-flush leaves on the flash at
+//                 worst a slot whose header does not match its audio; dropBadSlots()
+//                 at boot checks every slot's audio against its header's data CRC (pg's
+//                 rescan checks only the header) and empties such a slot, so it reads
+//                 as empty, never as a wrong sample.
 //   loadFrom()    boot: the backing flash's copy into the RAM image (one pass,
 //                 ~3.2 MB).
 // So a sample put or a recording never waits for the flash, the transport may
@@ -42,6 +43,11 @@ class MirrorFlash final : public pg::sampler::FlashDriver {
   // Boot: the flash copy into RAM (no dirty bits). false if the backing read failed
   // (the image is then all 0xFF: an empty pool).
   bool loadFrom();
+  // Boot, after the pool is attached to image(): every slot whose header is valid but
+  // whose audio does not match the header's data CRC is emptied (its header sector
+  // erased here, so the flash copy is repaired by the next flushes) and rescanned.
+  // Returns the number of slots dropped.
+  int dropBadSlots(pg::sampler::FlashPool& pool);
   // Main loop: flushes one dirty sector. Returns true if it did some work.
   bool flushStep();
   // Do not flush while true (e.g. a slot is being written right now and the caller
@@ -72,6 +78,8 @@ class MirrorFlash final : public pg::sampler::FlashDriver {
   pg::sampler::FlashDriver* back_ = nullptr;
   uint32_t dirty_[(kSectors + 31) / 32] = {};
   bool hold_ = false;
+  static constexpr int kBackoffSteps = 200;
+  int backoff_ = 0;
   Stats stats_{};
 };
 
