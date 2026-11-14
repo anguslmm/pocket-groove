@@ -35,9 +35,10 @@ char* cat(char* o, const char* s) {
   return o;
 }
 char* catInt(char* o, int v) { return o + itoa10(v, o); }
-// "1.4S" from samples at 22,050 Hz
-char* catSecs(char* o, uint32_t samples) {
-  const int tenths = int((uint64_t(samples) * 10 + sampler::kPoolRate / 2) / sampler::kPoolRate);
+// "1.4S" from samples at `rate` Hz (the pool's stored rate: 22,050 on the Cardputer)
+char* catSecs(char* o, uint32_t samples, uint32_t rate) {
+  if (rate == 0) rate = sampler::kPoolRate;
+  const int tenths = int((uint64_t(samples) * 10 + rate / 2) / rate);
   return cat(catInt(cat(catInt(o, tenths / 10), "."), tenths % 10), "S");
 }
 // 0..1 across -60..0 dBFS
@@ -166,7 +167,7 @@ void Ui::micTick() {
       sampler::resolve(samplePool(), micSlot_, &r);
       char* o = cat(catInt(cat(buf, "SLOT "), micSlot_ + 1), " ");
       o = cat(cat(o, r.builtin ? "?" : r.name), " ");
-      o = catSecs(o, r.builtin ? v.samples : r.length);
+      o = r.builtin ? catSecs(o, v.samples, v.rate) : catSecs(o, r.length, r.rate);
       if (v.resample && v.why && *v.why) cat(cat(o, ": "), v.why);   // NO WHOLE BAR (a bar longer than the slot)
       toast(buf, 0);
       micState_ = kMicIdle;
@@ -219,7 +220,7 @@ void Ui::drawMic(Framebuffer& fb) {
   if (rec) {
     g.rect(lx + 3, y0 + 3, 5, 5, RED);
     g.text(lx + 11, y0 + 3, "REC", RED);
-    catSecs(buf, v.samples);
+    catSecs(buf, v.samples, v.rate);
     g.textR(x0 + w - 3, y0 + 3, buf, WHITE);
   } else {
     g.frame(lx + 3, y0 + 3, 5, 5, RED);
@@ -245,7 +246,7 @@ void Ui::drawMic(Framebuffer& fb) {
   // and bottom); counting in: the beats to the bar line where it starts, large
   if (v.resample && v.barAt)
     for (int b = 0; b < v.bars; ++b) {
-      const int c = int(uint64_t(v.barAt[b]) * uint32_t(w) / sampler::kSlotMaxSamples);
+      const int c = int(uint64_t(v.barAt[b]) * uint32_t(w) / (v.capacity ? v.capacity : sampler::kSlotMaxSamples));
       if (c <= 0 || c >= w) continue;
       g.rect(x0 + c, top, 1, 3, WHITE);
       g.rect(x0 + c, bot - 2, 1, 3, WHITE);

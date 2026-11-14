@@ -35,8 +35,11 @@ struct VecSink final : pg::sampler::RecordSink {
 class HostResample final : public pg::sampler::MicInput {
  public:
   static constexpr uint32_t kRing = 1u << 17;   // 3 s at 44.1 kHz: the UI thread may stall
-  // Keeps the recording: (slot, raw samples at 22,050 Hz, count, error) -> ok. The
+  // Keeps the recording: (slot, raw samples at storedRate(), count, error) -> ok. The
   // samples are as recorded (not levelled: the commit levels, as the platforms do).
+  // STORED RATE (recorder.h RecRates): at 44.1 kHz the pool's 22,050 Hz slots (the
+  // Cardputer's); at 48 kHz the engine's own rate (the Daisy's); other rates are not
+  // offered (32 kHz: as on the Cardputer's USB build).
   using Commit = std::function<bool(int slot, const int16_t* data, uint32_t n, std::string* err)>;
 
   void init(pg::Engine* eng, pg::sampler::SamplerVoice* voice, float sampleRate, Commit commit,
@@ -57,8 +60,8 @@ class HostResample final : public pg::sampler::MicInput {
       *why = "NO ENGINE";
       return false;
     }
-    if (std::lround(rate_) != 44100) {   // the recorder halves 44.1 kHz into the pool's 22,050
-      *why = "RESAMPLE: 44.1K ONLY";
+    if (!rates().valid() || (std::lround(rate_) != 44100 && std::lround(rate_) != 48000)) {
+      *why = "RESAMPLE: 44.1K ONLY";   // the message the Cardputer gives at 32 kHz
       return false;
     }
     return true;
@@ -74,7 +77,7 @@ class HostResample final : public pg::sampler::MicInput {
     }
     sink_.v.clear();
     sink_.v.reserve(pg::sampler::kSlotMaxSamples + 1024);
-    rs_.start(&rec_, &sink_, ring_.data(), kRing, eng_->isPlaying(), maxSamples);
+    rs_.start(&rec_, &sink_, ring_.data(), kRing, eng_->isPlaying(), maxSamples, rates());
     slot_ = slot;
     voice_->setSilentSlot(slot);   // the slot plays nothing while it records
     eng_->setOutputTap(&rs_);
@@ -118,7 +121,7 @@ class HostResample final : public pg::sampler::MicInput {
     lastEndFrame = rs_.endFrame();
     if (log) {
       std::printf("[resample] slot %d: %s, %.3f s (%u samples), %s, %d bar line(s), peak %d\n", slot_ + 1,
-                  pg::sampler::recStateName(s), double(rs_.length()) / pg::sampler::kPoolRate, unsigned(rs_.length()),
+                  pg::sampler::recStateName(s), double(rs_.length()) / double(storedRate()), unsigned(rs_.length()),
                   rs_.sync() ? "in time" : "from the first sound", rs_.bars(), int(rec_.peak()));
       std::fflush(stdout);
     }
@@ -127,6 +130,11 @@ class HostResample final : public pg::sampler::MicInput {
     return true;
   }
 
+  // What a recording stores: the engine's rate in, the pool's rate (or the engine's) out.
+  pg::sampler::RecRates rates() const {
+    return pg::sampler::recRatesFor(uint32_t(std::lround(rate_)), pg::sampler::kPoolRate);
+  }
+  uint32_t storedRate() const { return rates().out; }
   bool armed() const { return armed_; }
   const pg::sampler::Resampler& resampler() const { return rs_; }
   const std::vector<int16_t>& recorded() const { return sink_.v; }   // raw, as the recorder wrote it
@@ -141,6 +149,8 @@ class HostResample final : public pg::sampler::MicInput {
     v->state = rs_.state();
     v->slot = slot_;
     v->samples = rs_.ended() ? rs_.length() : rec_.recorded();
+    v->rate = storedRate();
+    v->capacity = maxSamples;
     v->level = rec_.level();
     v->peak = rec_.peak();
     v->cols = rec_.cols();
@@ -167,9 +177,10 @@ class HostResample final : public pg::sampler::MicInput {
 
 // The commit the tests and ui_shot use: into a MemoryPool slot, levelled as both
 // platforms play it (the peak at -1 dBFS, at most +24 dB: the device's header gain,
-// the desktop's converter), named RESnn. bufs: one kSlotMaxSamples buffer per slot.
+// the desktop's converter), named RESnn, at `rate` (the recording's stored rate).
+// bufs: one kSlotMaxSamples buffer per slot.
 inline bool commitToPool(pg::sampler::MemoryPool* pool, std::vector<int16_t>* bufs, int slot, const int16_t* d,
-                         uint32_t n, std::string* err) {
+                         uint32_t n, std::string* err, uint32_t rate = pg::sampler::kPoolRate) {
   std::vector<int16_t>& b = bufs[slot];
   b.assign(pg::sampler::kSlotMaxSamples, 0);
   int pk = 1;
@@ -183,7 +194,7 @@ inline bool commitToPool(pg::sampler::MemoryPool* pool, std::vector<int16_t>* bu
   }
   char name[16];
   std::snprintf(name, sizeof name, "RES%02d", (slot + 1) % 100);
-  if (!pool->set(slot, b.data(), n, name)) {
+  if (!pool->set(slot, b.data(), n, name, rate)) {
     *err = "pool refused it";
     return false;
   }

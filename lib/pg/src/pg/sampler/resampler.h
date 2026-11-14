@@ -39,6 +39,11 @@
 // drops the first kSkip outputs, so output sample k IS the half-band's value
 // centred on input frame start + 2k: a bar of N frames (N even) is N / 2 samples,
 // the first on the bar line's frame (host/tests/test_sampler_resample.cpp).
+// RATES (recorder.h RecRates): in = the engine's rate, out = the pool's stored rate.
+// The half-band runs only when out = in / 2 (the Cardputer: 44.1 kHz into 22,050 Hz
+// slots); with out = in (the Daisy: 48 kHz stored as it is) sample k IS frame
+// start + k (no history, no skip): a bar of N frames is N samples, the engine's own
+// mono sum bit for bit.
 //
 // THREADS: start() before the tap is installed, release() from any thread, quantum()
 // on the audio thread only, pump() on one writer thread; the view's getters from any
@@ -76,9 +81,10 @@ class Resampler final : public OutputTap {
   };
 
   // Writer side, before the tap is installed: everything is reset. ring: power of two.
-  // sync = the transport is playing now (in time); maxSamples at 22,050 Hz.
+  // sync = the transport is playing now (in time); maxSamples at the stored rate.
+  // rates.in must be the engine's rate; !rates.valid(): the Recorder Fails at once.
   void start(Recorder* rec, RecordSink* sink, int16_t* ring, uint32_t ringSize, bool sync,
-             uint32_t maxSamples = kSlotMaxSamples);
+             uint32_t maxSamples = kSlotMaxSamples, RecRates rates = RecRates{});
   // The key went up (any thread).
   void release() { released_.store(true, std::memory_order_release); }
 
@@ -100,6 +106,9 @@ class Resampler final : public OutputTap {
   bool started() const { return startPub_.load(std::memory_order_acquire); }
   End endReason() const { return End(endPub_.load(std::memory_order_acquire)); }
   uint32_t length() const { return length_; }   // samples, after ended()
+  // Input frames per stored sample (1 or 2) and the stored rate.
+  uint32_t factor() const { return f_; }
+  uint32_t storedRate() const { return rate_; }
   // Bar lines inside the recording so far, in samples from its start (in time).
   int bars() const { return bars_.load(std::memory_order_acquire); }
   const uint32_t* barAt() const { return barAt_; }
@@ -118,6 +127,9 @@ class Resampler final : public OutputTap {
   uint32_t mask_ = 0;
   uint32_t maxF_ = 0;          // the slot in input frames
   uint32_t maxS_ = 0;
+  uint32_t f_ = 2;             // input frames per stored sample
+  uint32_t pre_ = kPre, post_ = kPost;   // the filter's history (0 without one)
+  uint32_t rate_ = kPoolRate;
   // audio thread
   int16_t hist_[kHist];
   uint32_t n_ = 0;             // frames seen since start()

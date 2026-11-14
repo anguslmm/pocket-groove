@@ -246,10 +246,11 @@ int main(int argc, char** argv) {
        "//   cmake --build build/host --target macro_builtin && build/host/macro_builtin\n"
        "// and commit the result (ctest check_builtin fails while this file is stale).\n"
        "// Fields in pg::macro::MacroSet order (macro.h); unused pool entries are zero.\n"
-       "#include \"builtin_data.h\"\n\n"
+       "#include \"../table_attr.h\"\n#include \"builtin_data.h\"\n\n"
        "namespace pg {\nnamespace macro {\nnamespace detail {\n\n"
        "extern const int kBuiltinCount = " << files.size() << ";\n\n"
-       "extern const MacroSet kBuiltin[] = {\n";
+       "// PG_BULK_ATTR (table_attr.h): where a platform puts the big cold data (empty by default).\n"
+       "PG_BULK_ATTR extern const MacroSet kBuiltin[] = {\n";
   for (size_t i = 0; i < files.size(); ++i) o << emit(sets[i], files[i].second) << (i + 1 < files.size() ? ",\n" : "\n");
   o << "};\n\n}  // namespace detail\n}  // namespace macro\n}  // namespace pg\n";
   const std::string text = o.str();

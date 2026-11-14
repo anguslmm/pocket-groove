@@ -44,12 +44,12 @@ void cleanName(const char* in, char out[kNameLen]) {
   }
 }
 
-void makeHeader(const int16_t* data, uint32_t samples, const char* name, SlotHeader* h) {
+void makeHeader(const int16_t* data, uint32_t samples, const char* name, SlotHeader* h, uint32_t rate) {
   std::memset(h, 0, sizeof(*h));
   h->magic = kHeaderMagic;
   h->version = kHeaderVersion;
   h->samples = samples;
-  h->rate = kPoolRate;
+  h->rate = rate;
   cleanName(name, h->name);
   int peak = 0;
   for (uint32_t i = 0; i < samples; ++i) {
@@ -80,9 +80,9 @@ void setPlaybackGain(SlotHeader* h) {
   h->headerCrc = crc32(h, offsetof(SlotHeader, headerCrc));
 }
 
-bool headerValid(const SlotHeader& h) {
-  return h.magic == kHeaderMagic && h.version == kHeaderVersion && h.rate == kPoolRate &&
-         h.samples >= kMinSamples && h.samples <= kSlotMaxSamples &&
+bool headerValid(const SlotHeader& h, uint32_t maxSamples) {
+  return h.magic == kHeaderMagic && h.version == kHeaderVersion && h.rate >= kMinRate && h.rate <= kMaxRate &&
+         h.samples >= kMinSamples && h.samples <= maxSamples &&
          h.headerCrc == crc32(&h, offsetof(SlotHeader, headerCrc));
 }
 

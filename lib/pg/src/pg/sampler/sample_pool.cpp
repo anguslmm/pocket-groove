@@ -17,7 +17,7 @@ void resolve(const SamplePool* pool, int slot, SampleRef* out) {
   const RomSample& r = kRom[slot % kRomCount];
   out->data = r.data;
   out->length = r.length;
-  out->rate = kPoolRate;
+  out->rate = kRomRate;
   out->overview = r.overview;
   std::memset(out->name, 0, sizeof(out->name));
   std::strncpy(out->name, r.name, kNameLen);
@@ -43,14 +43,14 @@ bool MemoryPool::user(int slot, SampleRef* out) const {
   return true;
 }
 
-bool MemoryPool::set(int slot, const int16_t* data, uint32_t samples, const char* name) {
+bool MemoryPool::set(int slot, const int16_t* data, uint32_t samples, const char* name, uint32_t rate) {
   if (slot < 0 || slot >= kPoolSlots) return false;
   Slot& s = slots_[slot];
   s.valid.store(false, std::memory_order_release);
   bump();
-  if (!data || samples < kMinSamples || samples > kSlotMaxSamples) return false;
+  if (!data || samples < kMinSamples || samples > kSlotMaxSamples || rate < kMinRate || rate > kMaxRate) return false;
   s.data = data;
-  makeHeader(data, samples, name, &s.hdr);
+  makeHeader(data, samples, name, &s.hdr, rate);
   s.valid.store(true, std::memory_order_release);
   bump();
   return true;

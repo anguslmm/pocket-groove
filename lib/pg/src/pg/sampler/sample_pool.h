@@ -24,7 +24,7 @@ namespace sampler {
 struct SampleRef {
   const int16_t* data = nullptr;
   uint32_t length = 0;             // samples (>= kMinSamples when resolved)
-  uint32_t rate = kPoolRate;
+  uint32_t rate = kPoolRate;      // Hz: the voices play it at rate / engine rate (natural pitch)
   const int8_t (*overview)[2] = nullptr;   // kOverviewCols min/max pairs
   char name[kNameLen + 1] = {};
   uint16_t peak = 0;
@@ -59,8 +59,9 @@ void resolve(const SamplePool* pool, int slot, SampleRef* out);
 class MemoryPool final : public SamplePool {
  public:
   bool user(int slot, SampleRef* out) const override;
-  // false (and the slot is left empty) if the length is out of range or data is nullptr.
-  bool set(int slot, const int16_t* data, uint32_t samples, const char* name);
+  // false (and the slot is left empty) if the length or rate is out of range or data is
+  // nullptr. rate: the sample's own rate (the header's), any of kMinRate..kMaxRate.
+  bool set(int slot, const int16_t* data, uint32_t samples, const char* name, uint32_t rate = kPoolRate);
   void clear(int slot);
   const SlotHeader* header(int slot) const;   // nullptr if empty
 

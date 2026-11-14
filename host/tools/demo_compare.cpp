@@ -17,6 +17,10 @@
 //       before it). With --wav, writes the mixes as 16-bit WAVs:
 //       WAVDIR/demoN_pP_before.wav / _after.wav (song: _song_); --wav-track T also
 //       writes track T's dry stem, WAVDIR/demoN_pP_TRACK_before.wav / _after.wav.
+//   demo_compare --rates A B [--demo N] [--pattern P|song] [--song] [--wav WAVDIR]
+//       the same comparison between two engine sample rates: every demo as built
+//       now, rendered at A Hz ("before") and at B Hz ("after"), e.g. 44100 48000
+//       (the Daisy's rate, docs/ARCHITECTURE.md "Sample rates")
 //   demo_compare --fit FILE --track T --pattern P [--top K] [--grid G] [--only NAME]
 //       FILE is a CLASSIC project (from --dump). For every built-in instrument
 //       of track T, a grid of macro positions (G levels per macro) is ranked by
@@ -57,7 +61,8 @@ Instrument g_inst;
 macro::ParamTable g_pt;
 uint8_t g_def[kNumTracks][kParamsPerTrack];
 const char* kTrackNames[kNumTracks] = {"kick", "snare", "clap", "chh", "ohh", "perc", "bass", "lead"};
-constexpr float kSr = 44100.0f;
+float kSr = 44100.0f;                 // the rate of what is being rendered / analysed now
+float g_rateA = 0.0f, g_rateB = 0.0f;  // --rates: before / after
 
 void mkdirs(const std::string& path) {
   for (size_t i = 1; i <= path.size(); ++i)
@@ -294,7 +299,11 @@ int compare(const std::string& dir, int onlyDemo, int onlyPattern, bool songToo,
   int bad = 0;
   for (int d = 0; d < demo::count(); ++d) {
     if (onlyDemo >= 0 && d != onlyDemo) continue;
-    if (!readProject(dir + "/demo" + std::to_string(d) + ".prj", before)) {
+    if (g_rateA > 0.0f) {   // --rates: both sides are the demo as built now
+      kSr = g_rateA;
+      g_inst.init(kSr, false);
+      demo::build(g_inst.engine(), before, d);
+    } else if (!readProject(dir + "/demo" + std::to_string(d) + ".prj", before)) {
       std::fprintf(stderr, "cannot read %s/demo%d.prj\n", dir.c_str(), d);
       return 2;
     }
@@ -336,29 +345,46 @@ int compare(const std::string& dir, int onlyDemo, int onlyPattern, bool songToo,
     if (songToo) pats.push_back(-1);
     for (int pt : pats) {
       Render a, b;
-      if (!render(before, pt, 0xFF, a) || !render(after, pt, 0xFF, b)) return 2;
+      const float ra = g_rateA > 0.0f ? g_rateA : kSr, rb = g_rateB > 0.0f ? g_rateB : kSr;
+      kSr = ra;
+      if (!render(before, pt, 0xFF, a)) return 2;
+      kSr = rb;
+      if (!render(after, pt, 0xFF, b)) return 2;
+      // each side analysed at its own rate
+      auto an = [&](const std::vector<float>& l, const std::vector<float>& r, float sr) {
+        const float keep = kSr;
+        kSr = sr;
+        const Features f = analyse(l, r);
+        kSr = keep;
+        return f;
+      };
       if (pt < 0) std::printf(" -- song\n");
       else std::printf(" -- P%d\n", pt + 1);
       for (int t = 0; t < kNumTracks; ++t) {
-        const Features fa = analyse(a.trk[t][0], a.trk[t][1]), fb = analyse(b.trk[t][0], b.trk[t][1]);
+        const Features fa = an(a.trk[t][0], a.trk[t][1], ra), fb = an(b.trk[t][0], b.trk[t][1], rb);
         if (fa.silent && fb.silent) continue;
         printRow(kTrackNames[t], fa, fb);
         if (std::fabs(fb.rmsDb - fa.rmsDb) > 1.5) std::printf("         ^ level differs by more than 1.5 dB\n");
       }
-      printRow("delay", analyse(a.dly[0], a.dly[1]), analyse(b.dly[0], b.dly[1]));
-      printRow("reverb", analyse(a.rev[0], a.rev[1]), analyse(b.rev[0], b.rev[1]));
-      printRow("MIX", analyse(a.mix[0], a.mix[1]), analyse(b.mix[0], b.mix[1]));
+      printRow("delay", an(a.dly[0], a.dly[1], ra), an(b.dly[0], b.dly[1], rb));
+      printRow("reverb", an(a.rev[0], a.rev[1], ra), an(b.rev[0], b.rev[1], rb));
+      printRow("MIX", an(a.mix[0], a.mix[1], ra), an(b.mix[0], b.mix[1], rb));
+      kSr = ra;
+      const double pumpA = pumpDb(before, pt, a.trk[kTrackBass][0], a.trk[kTrackBass][1]);
+      kSr = rb;
+      const double pumpB = pumpDb(after, pt, b.trk[kTrackBass][0], b.trk[kTrackBass][1]);
       std::printf("  clipped %ld -> %ld  faults %u -> %u  duck min %.2f -> %.2f mean %.2f -> %.2f  "
                   "bass pump %.1f -> %.1f dB\n",
                   a.clipped, b.clipped, a.faults, b.faults, a.duckMin, b.duckMin, a.duckMean, b.duckMean,
-                  pumpDb(before, pt, a.trk[kTrackBass][0], a.trk[kTrackBass][1]),
-                  pumpDb(after, pt, b.trk[kTrackBass][0], b.trk[kTrackBass][1]));
+                  pumpA, pumpB);
       if (b.clipped || b.faults) ++bad;
       if (!wavDir.empty()) {
         mkdirs(wavDir);
         const std::string stem =
             wavDir + "/demo" + std::to_string(d) + (pt < 0 ? std::string("_song") : "_p" + std::to_string(pt + 1));
+        kSr = ra;
         writeWav(stem + "_before.wav", a.mix);
+        kSr = rb;
         writeWav(stem + "_after.wav", b.mix);
         if (wavTrack >= 0) {   // the track's own stem too (dry: without the FX returns)
           writeWav(stem + "_" + kTrackNames[wavTrack] + "_before.wav", a.trk[wavTrack]);
@@ -581,6 +607,11 @@ int main(int argc, char** argv) {
     };
     if (!std::strcmp(a, "--dump")) dump = next();
     else if (!std::strcmp(a, "--compare")) cmp = next();
+    else if (!std::strcmp(a, "--rates")) {
+      g_rateA = float(std::atof(next()));
+      g_rateB = float(std::atof(next()));
+      cmp = "-";
+    }
     else if (!std::strcmp(a, "--fit")) fitFile = next();
     else if (!std::strcmp(a, "--wav")) wavDir = next();
     else if (!std::strcmp(a, "--wav-track")) wavTrack = std::atoi(next());

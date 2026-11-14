@@ -121,6 +121,15 @@ endif()
 if(TARGET macro_audit)
   add_test(NAME macro_audit COMMAND macro_audit --hard macros WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(macro_audit PROPERTIES TIMEOUT 600)
+  # ... and at 48 kHz (the Daisy's rate, docs/ARCHITECTURE.md "Sample rates"), the
+  # sampler sets on the test sample too.
+  add_test(NAME macro_audit_48k COMMAND macro_audit --hard --rate 48000 macros WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(macro_audit_48k PROPERTIES TIMEOUT 600)
+  add_test(NAME macro_audit_48k_test_sample
+           COMMAND macro_audit --hard --rate 48000 --test-sample macros/perc macros/lead/pluck.pgm
+                   macros/lead/cloud.pgm macros/lead/reel.pgm
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(macro_audit_48k_test_sample PROPERTIES TIMEOUT 600)
   # The sampler sets (voice perc sampler) again, on a test sample in pool slot 1 instead
   # of the built-in sound an empty slot plays (macro_audit --test-sample).
   add_test(NAME macro_audit_test_sample COMMAND macro_audit --hard --test-sample macros/perc

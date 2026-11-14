@@ -31,6 +31,17 @@ constexpr int kSampleSlots    = 12;   // the sample pool (pg/sampler/sample_form
 // ---- Audio ----------------------------------------------------------------
 constexpr int   kQuantum           = 16;       // frames per control block; all events land on quantum edges
 constexpr float kDefaultSampleRate = 44100.0f; // engine must work at 32000 too (fallback if CPU is short)
+// SAMPLE RATES (docs/ARCHITECTURE.md "Sample rates"): the engine runs at any rate
+// Engine::init is given; 32, 44.1 and 48 kHz are tested (48 kHz: the Daisy). The FX
+// buffers (the delay line, the reverb pool) are sized at compile time for the
+// highest rate the platform runs: PG_MAX_SAMPLE_RATE (default 48000; the Cardputer
+// builds with 44100, which keeps its RAM what it was). Above it the engine still
+// works, with a delay line and a reverb shorter in time than at the rates below.
+#ifndef PG_MAX_SAMPLE_RATE
+#define PG_MAX_SAMPLE_RATE 48000
+#endif
+constexpr int   kMaxSampleRate     = PG_MAX_SAMPLE_RATE;
+static_assert(kMaxSampleRate >= 44100 && kMaxSampleRate <= 192000, "PG_MAX_SAMPLE_RATE: 44100 .. 192000");
 constexpr int   kLeadVoices        = 4;
 // Control rate of macro motion: while a macro moves, the engine evaluates the
 // track's instrument and hands the voice fractional parameters every this many
