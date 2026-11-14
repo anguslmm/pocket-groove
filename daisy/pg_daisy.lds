@@ -6,8 +6,9 @@
  *   - The image (vectors, code, constants, .data's initial values) is what the Daisy
  *     bootloader copies: exactly 0x78000 bytes (480 KB) from QSPI 0x90040000 to AXI
  *     SRAM 0x24000000 (checked in the bootloader binary). ASSERTed below.
- *   - The big constant tables the audio and UI read rarely (the sampler's built-in
- *     sounds, pg/sampler/rom_samples_data.cpp) do not fit there: they form .qspi_rom,
+ *   - The big cold constant data (the core's PG_BULK_ATTR, lib/pg/src/pg/table_attr.h:
+ *     the sampler's built-in sounds and the built-in instrument library; the Makefile
+ *     defines it as this section) does not fit there: it forms .qspi_rom,
  *     loaded right after the image in the same .bin (QSPI 0x900B8000, which the
  *     bootloader leaves alone) and copied to SDRAM by the firmware at boot
  *     (daisy/src/memory.cpp). Nothing runs or reads from QSPI afterwards, so the QSPI
@@ -58,8 +59,6 @@ SECTIONS
 		. = ALIGN(32);
 		_sqspi_rom = .;
 		KEEP(*(.qspi_rom.marker))
-		*rom_samples_data.o(.rodata .rodata.*)
-		*macro/builtin_data.o(.rodata .rodata.*)
 		*(.qspi_rom .qspi_rom.*)
 		. = ALIGN(32);
 		_eqspi_rom = .;
