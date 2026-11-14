@@ -49,14 +49,15 @@ I2C1 next to the BMI270 behind a stuck-bus guard, reported ([touch]) and mirrore
 a dot in tools/pg-daisy mirror), not yet consumed by the UI; four force-sensor pads on A5..A8
 (daisy/core/pads.h: conductance, scanned at 500 Hz in the audio interrupt, velocity from the
 rise over a 2-scan window, hysteresis, crosstalk rejection, per-pad calibration over serial
-saved in /int/pg/daisy.cfg; each pad plays kick/snare/clap/closed hat through the engine's
-NoteOn in ONE function, App::padEvent, to switch to the core's pad API after the merge); line-in
+saved in /int/pg/daisy.cfg; the pads now play through the core's pad API: entry "DAISY PADS
+JOINED" below); line-in
 recording (daisy/core/line_mic.h: hold L on a sampler page, 48 kHz stored, (L+R)/2 or L alone
-when R is silent, survives a restart; commits its own header because the core's
-SampleWriter::commitRecording writes 22,050 Hz: a seam to add); FPSCR flush-to-zero /
+when R is silent, survives a restart; the header at 48,000 through the core's commit, entry
+"DAISY PADS JOINED"); FPSCR flush-to-zero /
 default-NaN set before main and checked in the audio interrupt ([fpu] line). libDaisy is now
 built -Os (rerun tools/daisy-setup.sh): images stage 0 431.6 KB (58.5 KB free), stage 1 463.1
-KB (27.7 KB free), zero warnings. Host 111/111 (new test_daisy_pads, _touch, _linein, _stage1;
+KB (27.7 KB free; after the join below 436.7 / 468.2 KB, 53.5 / 22.7 KB free), zero warnings.
+Host 111/111 (new test_daisy_pads, _touch, _linein, _stage1;
 tools/test_pg_daisy.py records in daisy_sim --line-in). Cardputer build unchanged.
 docs/DAISY.md sections 5 (stage 1 checklist steps 10-16), 8, 10 (wiring, algorithms), 14 (seams,
 risks).
@@ -68,6 +69,25 @@ report, screen mirror), tools/pg on the same port, four pots on the macros, the 
 itself. Host-verified: ctest -L daisy (core, /int with power cuts, sample pool, display path,
 BMI270) and tools/test_pg_daisy.py against the firmware's App in daisy_sim. docs/DAISY.md has the
 flashing steps and the first-power-on checklist. Entry "DAISY TARGET BUILT" below.
+
+DAISY PADS JOINED (2026-11-14, the two branches above joined up; NOTHING HAS RUN ON A SEED, no
+sensors wired, not listened to). (1) The Daisy's pads use the core's pad API: App::padEvent is
+Ui::padDown / padPressure / padUp; the job (drums: KICK SNARE CHH PERC, notes: the selected track
+up the scale) is switched by `>tap padjob` (the desktop's F4 name) or `>pads job drums|notes` and
+saved in /int/pg/daisy.cfg (settings version 2; version 1 still read). The interrupt's event ring
+keeps 8 places pressure may not take (no lost hit or release); the main loop merges pressure to
+the newest per pad, at most one per 8 ms. (2) Pads without sensors: `>hit N VEL [hold MS] [press
+P]`, `tools/pg-daisy pad N VEL [hold MS] [press P]`, through App::padEvent; `>pads` shows what
+each pad plays and what the engine hears; the report has the output peak. (3) Velocity defaults
+ceiling 650 uS, curve 0.5 (were 1000, 1): a medium hit (steepest rise ~100 uS/ms, 400 uS in 4 ms)
+is 0.79 = note velocity 101, a hard one (160 uS/ms, or 650 uS inside the window) 127; a GUESS
+until real sensors (docs/DAISY.md "The velocity curve", "Tuning the velocity"). (4) Core:
+SampleWriter::commitRecording(samples, name, rate) writes the stored rate (Cardputer 22,050 as
+before, Daisy 48,000); LineMic::commitAt is gone; the host's resample commit and the desktop's
+WAVs carry the rate too. Measured: host ctest 114/114 (bench and desktop tests alone when loaded),
+tools/test_pg_daisy.py 4/4 (new PadTest), itest_golden / itest_golden48 unchanged; Daisy images
+stage 0 436,748 B (53.5 KB free), stage 1 468,232 B (22.7 KB free), zero warnings; Cardputer RAM
+unchanged (202,284 USB, 201,764), flash +24 / +28 (1,336,247 / 1,274,211).
 
 Velocity and pressure for the pads (2026-11-14, branch of the pads worktree; NOT LISTENED TO, no
 pad hardware wired). (Correction to PROTOTYPE HARDWARE above: a step already had a velocity, 1..127,
@@ -84,7 +104,8 @@ velocity. (4) Desktop: F5..F8 pads, the mouse's height the force, F4 the job (do
 "Pads"). (5) vel on CRACK, ALLOY, TAP, PLUCK; press on TAP, ACID, HANDS (only sets the demos do not
 play at varied velocities got vel lines: itest_golden / itest_golden48 unchanged). Cardputer: built
 with PG_MAX_PADS=0, static RAM unchanged (202,284 USB, 201,764 non-USB), flash +1,064 / +1,088.
-Host-verified: ctest 110 of 110 (new test_macro_vel, itest_velocity, itest_pads; desktop part 10).
+Host-verified: ctest 110 of 110 on its branch (114 of 114 merged with Daisy stage 1; new test_macro_vel,
+itest_velocity, itest_pads; desktop part 10).
 docs/MACROLAB.md "Velocity and pressure", UX.md 10.3 "Velocity" / "Pads", MANUAL.md.
 
 
