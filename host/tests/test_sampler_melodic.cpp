@@ -1,6 +1,8 @@
 // MelodicSampler (pg/sampler/melodic.h), the LEAD track's sampler, on the host:
 //   pitch     a 441 Hz sine (at note 48 = as recorded) plays at the right pitch from
 //             note 24 to 84 (four octaves and more), with PITCH and FINE, and reversed
+//   tune      the track's tune (setTune) +-12, +7, +-50 cents, with PITCH / FINE, to 0.2 %;
+//             changed under a sounding note: the pitch follows, no jump
 //   chords    a chord plays its notes at their pitches; MIN9 four of them
 //   cap       four notes at most: a fifth steals the oldest gated one; a steal never
 //             jumps by more than the material's own steepest step
@@ -141,6 +143,54 @@ void testPitch() {
     check(std::fabs(f / c.hz - 1.0) < 0.001, what, f, c.hz);
     g.v.choke();
     g.run(20, o);
+  }
+}
+
+// The track's tune (Voice::setTune, params.h kMixTune): on top of PITCH / FINE, every
+// note, exact to 0.2 %; a change while notes sound moves them at the next quantum
+// without a jump, and survives a parameter change (updateTone keeps it).
+void testTune() {
+  std::printf("tune\n");
+  Rig g;
+  std::vector<int16_t> s = sine(441.0f, kSlotMaxSamples);
+  g.pool.set(0, s.data(), kSlotMaxSamples, "sine");
+  g.set(kRelease, 10);
+  struct C { int note, pitch, fine; float tune; double hz; } cs[] = {
+      {48, 64, 64, 12.0f, 882.0}, {48, 64, 64, -12.0f, 220.5}, {48, 64, 64, 7.0f, 441.0 * std::pow(2.0, 7.0 / 12.0)},
+      {48, 64, 64, 0.5f, 441.0 * std::pow(2.0, 0.5 / 12.0)}, {48, 64, 64, -0.5f, 441.0 / std::pow(2.0, 0.5 / 12.0)},
+      {60, 71, 96, -9.5f, 882.0 * std::pow(2.0, -2.0 / 12.0)},   // PITCH +7, FINE +0.5, tune -9.5: -2
+      {48, 64, 64, 0.0f, 441.0}};
+  for (const C& c : cs) {
+    g.set(kPitch, c.pitch);
+    g.set(kFine, c.fine);
+    g.v.setTune(c.tune);
+    g.set(kCutoff, 127);   // a parameter change after the tune keeps it
+    g.on(c.note);
+    std::vector<float> o;
+    g.run(400, o);
+    const double f = freq(o, 2000, o.size());
+    char what[64];
+    std::snprintf(what, sizeof what, "tune %+.1f note %d PTCH %d FINE %d", double(c.tune), c.note, c.pitch, c.fine);
+    check(std::fabs(f / c.hz - 1.0) < 0.002, what, f, c.hz);
+    g.v.choke();
+    g.run(20, o);
+  }
+  g.set(kPitch, 64);
+  g.set(kFine, 64);
+  const float sineStep = 0.9f * MelodicSampler::kLevel * 6.2831853f * 441.0f / kFs;
+  for (int k = 0; k < 8; ++k) {
+    Rig h;
+    h.pool.set(0, s.data(), kSlotMaxSamples, "sine");
+    h.on(48);
+    std::vector<float> o;
+    h.run(100 + k, o);
+    const size_t at = o.size();
+    h.v.setTune(k & 1 ? 2.0f : -2.0f);
+    h.run(300, o);
+    const float w = maxStep(o, at - 64, at + 64);
+    check(w < 1.3f * 1.13f * sineStep, "tune change: no jump", w, sineStep);
+    const double f = freq(o, at + 1000, o.size()), want = 441.0 * std::pow(2.0, (k & 1 ? 2.0 : -2.0) / 12.0);
+    check(std::fabs(f / want - 1.0) < 0.002, "tune change: the sounding note follows", f, want);
   }
 }
 
@@ -538,6 +588,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   testPitch();
+  testTune();
   testChords();
   testCapAndSteal();
   testPong();

@@ -229,6 +229,29 @@ void testPut() {
   }
 }
 
+// The tracks' tune (params.h kMixTune / kMixTuneCents: signed bytes in the spare mixer
+// slots) travels both ways byte for byte.
+void testTune() {
+  Rig g;
+  auto p = iot::newProject();
+  iot::initProject(*p);
+  p->tracks[kTrackPerc].params[kMixTune] = tuneByte(-3);
+  p->tracks[kTrackPerc].params[kMixTuneCents] = tuneByte(15);
+  p->tracks[kTrackLead].params[kMixTune] = tuneByte(24);
+  p->tracks[kTrackLead].params[kMixTuneCents] = tuneByte(-50);
+  std::vector<uint8_t> buf(80 * 1024);
+  size_t len = 0;
+  CHECK_ST(encodeToBuffer(*p, "TUNED", buf.data(), buf.size(), &len), Status::Ok);
+  buf.resize(len);
+  CHECK(put(g, "int", "TUNED", buf) == "SAVED int TUNED");
+  const std::vector<uint8_t> back = get(g, "int", "TUNED");
+  CHECK(back == buf);
+  auto q = iot::newProject();
+  CHECK_ST(decodeFromBuffer(back.data(), back.size(), *q), Status::Ok);
+  CHECK(tuneValue(q->tracks[kTrackPerc].params[kMixTune]) == -3 && tuneValue(q->tracks[kTrackPerc].params[kMixTuneCents]) == 15);
+  CHECK(tuneValue(q->tracks[kTrackLead].params[kMixTune]) == 24 && tuneValue(q->tracks[kTrackLead].params[kMixTuneCents]) == -50);
+}
+
 void testPutRefusals() {
   Rig g;
   const std::vector<uint8_t> old = pgvBytes("SONG", 7), d = pgvBytes("SONG", 8);
@@ -391,6 +414,7 @@ int main() {
   testVersions();
   testListGet();
   testPut();
+  testTune();
   testPutRefusals();
   testCorruption();
   testRecovery();
