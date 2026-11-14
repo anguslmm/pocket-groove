@@ -225,7 +225,7 @@ Cmd+B (or STEMS) opens a list over the screen (framed in cyan: it is the app's, 
 
 ## Samples
 
-The sampler instruments on PERC (CHOP, TAPE, STUTTER; MANUAL.md chapter 20) play one of twelve sample slots. On the desktop the slots are the folder **`samples/`** next to the projects directory (`./samples` with the default `--dir projects`; `--samples PATH` for another), one audio file per slot, named by the slot number:
+The sampler instruments on PERC (CHOP, TAPE, STUTTER) and on the LEAD (PLUCK, CLOUD, REEL; MANUAL.md chapter 20) play one of twelve sample slots. On the desktop the slots are the folder **`samples/`** next to the projects directory (`./samples` with the default `--dir projects`; `--samples PATH` for another), one audio file per slot, named by the slot number:
 
 ```
 samples/01-ohyeah.wav     slot 1
@@ -240,7 +240,7 @@ samples/03-hey there.wav  slot 3 (01..12, then '-', '_' or '.', then any name)
 
 ### Recording a sample
 
-The device's gesture works here with the Mac's microphone (MANUAL.md chapter 20, "Recording with the microphone"; UX.md 10.3): on CHOP, TAPE or STUTTER **hold `L`**, make the sound, let go. The page shows `WAITING` with the level, then `REC` with the wave growing across the slot, then the new sample (`SLOT 3 REC03 1.6S`).
+The device's gesture works here with the Mac's microphone (MANUAL.md chapter 20, "Recording with the microphone"; UX.md 10.3): on a sampler instrument (CHOP, TAPE, STUTTER, PLUCK, CLOUD, REEL) **hold `L`**, make the sound, let go. The page shows `WAITING` with the level, then `REC` with the wave growing across the slot, then the new sample (`SLOT 3 REC03 1.6S`).
 
 - The recording becomes the slot's file **`samples/NN-recNN.wav`** (22,050 Hz mono 16-bit, exactly what the recorder kept; the slot's other files are removed) and loads like any file there: trimmed and levelled to -1 dBFS on load. Copy it to the device with `tools/pg sample put`, or keep it.
 - The input is opened only while `L` is held, asked for mono 16-bit at 44.1 kHz so SDL converts whatever the Mac has. **Which input** (chosen again at every hold, so plugging the device in or out is followed):
@@ -260,7 +260,7 @@ The device's gesture works here with the Mac's microphone (MANUAL.md chapter 20,
 
 ### Resampling
 
-**`SHIFT`+`L`** held on CHOP, TAPE or STUTTER records what the app plays into the slot, exactly as on the device (MANUAL.md chapter 20, "Resampling"; UX.md 10.3): solo or mute to choose what is heard, hold `SHIFT`+`L` while the groove plays, the page counts the beats to the bar line, records from it, and after `L` goes up ends on the next bar line; stopped, it starts on the first sound and ends on the release.
+**`SHIFT`+`L`** held on a sampler instrument records what the app plays into the slot, exactly as on the device (MANUAL.md chapter 20, "Resampling"; UX.md 10.3): solo or mute to choose what is heard, hold `SHIFT`+`L` while the groove plays, the page counts the beats to the bar line, records from it, and after `L` goes up ends on the next bar line; stopped, it starts on the first sound and ends on the release.
 
 - **No input device is needed.** The source is the engine's own output, tapped inside the audio callback (the same `pg::sampler::Resampler` as the device: host/common/host_resample.h), so it works with no microphone, with `--mic-device` pointing anywhere and with the Mac's input permission refused. Nothing is opened.
 - The take becomes **`samples/NN-resNN.wav`** (22,050 Hz mono 16-bit, the slot's other files removed) and loads like any file there, levelled to -1 dBFS, but **not trimmed**: a resample is whole bars from bar line to bar line, its silent start included, so the converter keeps it whole (`sconv::isWholeFile`: exactly the name `NN-resNN.wav`; rename it and it is trimmed like any file). `tools/pg sample put` trims on the way to the device: put it from the desktop only if the bar starts with sound, or record it on the device.

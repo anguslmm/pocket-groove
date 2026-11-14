@@ -39,6 +39,33 @@ constexpr ParamInfo kTable[sampler::kNumParams] = {
 };
 static_assert(sampler::kNumParams <= kSoundParams, "the sampler has at most 24 sound parameters");
 
+const char* const kLoopNames[] = {"ONE", "PONG"};
+
+constexpr ParamInfo kMelTable[sampler::mel::kNumParams] = {
+    {"STRT", "Start", 0, 127, 0, ParamFormat::Percent, nullptr},
+    {"LEN", "Length", 0, 127, 127, ParamFormat::Percent, nullptr},
+    {"PTCH", "Pitch", 16, 112, 64, ParamFormat::Semitones, nullptr},
+    {"FINE", "Fine", 0, 127, 64, ParamFormat::Bipolar, nullptr},
+    {"CUT", "Cutoff", 0, 127, 127, ParamFormat::Number, nullptr},
+    {"RES", "Resonance", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"ATK", "Attack", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"REL", "Release", 0, 127, 40, ParamFormat::Number, nullptr},
+    {"DCY", "Decay", 0, 127, 64, ParamFormat::Number, nullptr},
+    {"SUS", "Sustain", 0, 127, 127, ParamFormat::Number, nullptr},
+    {"LOOP", "Loop", 0, sampler::mel::kNumLoopModes - 1, 0, ParamFormat::Enum, kLoopNames},
+    {"FILT", "Filter", 0, sampler::kNumFilters - 1, 0, ParamFormat::Enum, kFilterNames},
+    {"ENV", "Env amount", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"FDCY", "Filter decay", 0, 127, 50, ParamFormat::Number, nullptr},
+    {"GLID", "Glide", 0, 127, 50, ParamFormat::Number, nullptr},
+    {"RVRS", "Reverse", 0, 1, 0, ParamFormat::OnOff, nullptr},
+    {"BITS", "Bits", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"DOWN", "Downsample", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"DRV", "Drive", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"DRFT", "Drift", 0, 127, 0, ParamFormat::Number, nullptr},
+    {"DRAT", "Drift rate", 0, 127, 50, ParamFormat::Number, nullptr},
+};
+static_assert(sampler::mel::kNumParams <= kSoundParams, "the melodic sampler has at most 24 sound parameters");
+
 }  // namespace
 
 const char* voiceKindName(int kind) {
@@ -62,13 +89,16 @@ bool voiceKindOnTrack(int kind, int track) {
   return false;
 }
 
-const ParamInfo* voiceKindParam(int kind, int index) {
-  if (kind == kVoiceSampler) return sampler::paramInfo(index);
-  return nullptr;
+const ParamInfo* voiceKindParam(int kind, int track, int index) {
+  if (kind != kVoiceSampler || !voiceKindOnTrack(kind, track)) return nullptr;
+  return track == kTrackLead ? sampler::mel::paramInfo(index) : sampler::paramInfo(index);
 }
 
 namespace sampler {
 const ParamInfo* paramInfo(int index) { return index >= 0 && index < kNumParams ? &kTable[index] : nullptr; }
+namespace mel {
+const ParamInfo* paramInfo(int index) { return index >= 0 && index < kNumParams ? &kMelTable[index] : nullptr; }
+}  // namespace mel
 }  // namespace sampler
 
 }  // namespace pg

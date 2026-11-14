@@ -1023,6 +1023,7 @@ int main(int argc, char** argv) {
   }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
+  g_ui.setMelodic(&g_inst.melodic());
   g_ui.setMic(&app.mic);                 // L on a sampler page records the Mac's microphone
   g_ui.setResample(&app.resample);       // SHIFT+L resamples what it plays (docs/DESKTOP.md "Resampling")
   g_ui.setGhostFilter(opt.deviceKeys);   // a computer keyboard has no phantoms to filter

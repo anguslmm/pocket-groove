@@ -2,7 +2,8 @@
 // player holds is what the pattern plays back (MANUAL 4.3 / 6.3, the "long held
 // notes come back as stabs" report). Each scenario records with the note keys,
 // checks the recorded steps (gate, slide, chord), and measures how long the
-// lead actually sounds on a later pass against how it sounded while held.
+// lead actually sounds on a later pass against how it sounded while held. Each
+// scenario runs on the synth lead (HANDS), CLASSIC and the lead sampler (CLOUD).
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -345,6 +346,12 @@ int main() {
   testHandChord(nullptr);
   testChordMode("HANDS");
   testChordMode(nullptr);
+  // the same on a lead SAMPLER instrument (CLOUD: a held note loops, so a long gate sounds long)
+  testLegatoLongNotes("CLOUD");
+  testHeldPastLoop("CLOUD");
+  testLegatoAcrossLoop("CLOUD");
+  testHandChord("CLOUD");
+  testChordMode("CLOUD");
   testUpcomingAndQueued();
   testStepEditLongGate();
   std::printf("itest_live_record: %d checks, %d failed\n", g_checks, g_fail);

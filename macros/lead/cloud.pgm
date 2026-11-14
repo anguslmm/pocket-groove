@@ -1,0 +1,35 @@
+# CLOUD -- family: MOVEMENT (sampler).
+# Idea: the sample as a pad. A held note loops a window of the sample forward
+# and backward for as long as it is held, so any sample becomes a sustained
+# tone; the macros move the window through the sample while the chord holds.
+#   SCAN    where the window sits in the sample: its head .. its tail. Moved
+#           while notes hold, the playheads travel there through the sample
+#   SPAN    the window's length: a tight, grainy buzz .. a wide, slow sway
+#   SWELL   a soft, quick swell .. a slow fade in and a long release
+#   SHADE   dark and close .. open, with reverb
+# Feel if it works: hold a chord and tilt: the sound walks through the sample
+# without a click or a gap.
+# Try: a held chord, SCAN on X (wide), SHADE on Y; SPAN low for a buzzing drone.
+voice lead sampler
+name CLOUD
+about "The sample held as a slow pad."
+tilt x SCAN wide
+tilt y SHADE
+base loop=pong decay=90 sustain=112 filter=lp reso=12 glide=64
+
+macro SCAN 0.15 "HEAD" "TAIL" "where the loop sits in the sample"
+  start    0:6 1:104
+
+macro SPAN 0.5 "TIGHT" "WIDE" "a grainy buzz .. a slow sway"
+  length   0:8 0.5:36 1:84
+
+macro SWELL 0.4 "SOFT" "SLOW" "a quick swell .. a slow fade in"
+  attack   0:40 0.5:80 1:104
+  release  0:52 1:104
+  trim     0:0 0.5:0 0.75:2 1:5
+
+macro SHADE 0.6 "DARK" "OPEN" "dark and close .. open, in reverb"
+  cutoff   0:38 0.6:92 1:122
+  reso     0:20 1:8
+  rev      0:10 1:60
+  lvl      0:108 0.6:100 1:96

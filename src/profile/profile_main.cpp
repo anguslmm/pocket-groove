@@ -27,6 +27,10 @@
 //            a share of one core, and the worst blocks of the sweep
 //   SAMPLER  ACIDJAM with PERC on CHOP, then STUTTER (stage F1): the sampler voice's own
 //            render cost while it sounds (cycles per frame and % of a core), its noteOn
+//   MELODIC  ACIDJAM with the LEAD on a sampler instrument (CLOUD single notes, CLOUD and
+//            PLUCK with a MIN7 chord on every lead step: four notes): the melodic
+//            sampler's render cost while it sounds, the notes sounding on average, its
+//            noteOn and setParams
 //   TAIL     cost of each voice over its decay after one note, and of the engine after
 //            Stop (FX tails): a rise at the end = denormals
 //   LIVE     the real audio task + I2S for 20 s per configuration (DMA 4/8, UI on/off,
@@ -256,6 +260,9 @@ class Probe final : public pg::Voice {
 
 Probe g_probe[pg::kNumTracks];
 Probe g_smpProbe;   // the PERC track's sampler (VOICE KINDS), when a sampler instrument plays
+Probe g_melProbe;   // the LEAD track's sampler (the melodic sampler), likewise
+uint64_t g_melNoteSum = 0;   // MELODIC: notes sounding, summed over the quanta it rendered
+uint32_t g_melNoteQ = 0;
 const char* const kTrackName[pg::kNumTracks] = {"kick", "snare", "clap", "hatC", "hatO", "perc", "bass", "lead"};
 
 size_t voiceSize(int t) {
@@ -300,6 +307,7 @@ struct RunCfg {
   int leadChord = -1;       // >= 0: every lead step plays this ChordType (0 = single note)
   int motion = 0;           // 1: bass ACID + lead HANDS bound, still; 2: the same with two macros of each sweeping
   const char* percInst = nullptr;   // PERC plays this instrument (a sampler one: CHOP, TAPE, STUTTER)
+  const char* leadInst = nullptr;   // LEAD plays this instrument (a sampler one: PLUCK, CLOUD, REEL)
 };
 
 constexpr int kBins = 1024, kBinCyc = 2048;   // block histogram: 2048-cycle bins up to 2.1 M
@@ -353,6 +361,14 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
   g_smpProbe.warm = false;
   g_smpProbe.st = VStat{};
   eng.setAltVoice(pg::kTrackPerc, pg::kVoiceSampler, &g_smpProbe);
+  g_melProbe.in = &g_inst.melodic();
+  g_melProbe.size = sizeof(pg::sampler::MelodicSampler);
+  g_melProbe.gate = true;
+  g_melProbe.warm = false;
+  g_melProbe.st = VStat{};
+  g_melNoteSum = 0;
+  g_melNoteQ = 0;
+  eng.setAltVoice(pg::kTrackLead, pg::kVoiceSampler, &g_melProbe);
   pg::demo::build(eng, p, demo);
   if (c) {
     for (int t = 0; t < pg::kNumTracks; ++t) {
@@ -384,6 +400,11 @@ void setupProject(int demo, int pattern, const RunCfg* c) {
     const pg::macro::MacroSet* hands = byName(pg::kTrackLead, "HANDS");
     if (acid) eng.post(pg::setInstrumentCommand(pg::kTrackBass, acid->id, bassPos));
     if (hands) eng.post(pg::setInstrumentCommand(pg::kTrackLead, hands->id, leadPos));
+  }
+  if (c && c->leadInst) {
+    const uint8_t mid[4] = {128, 128, 128, 128};
+    if (const pg::macro::MacroSet* m = byName(pg::kTrackLead, c->leadInst))
+      eng.post(pg::setInstrumentCommand(pg::kTrackLead, m->id, mid));
   }
   if (c && c->percInst) {
     const uint8_t mid[4] = {128, 128, 128, 128};
@@ -454,12 +475,15 @@ void runEngine(const RunCfg& c) {
     for (int q = 0; q < audio::kBlockFrames / pg::kQuantum; ++q) {
       for (auto& p : g_probe) { p.qCyc = 0; p.qExcl = 0; p.qNotes = 0; }
       g_smpProbe.qCyc = 0; g_smpProbe.qExcl = 0; g_smpProbe.qNotes = 0;
+      g_melProbe.qCyc = 0; g_melProbe.qExcl = 0; g_melProbe.qNotes = 0;
       const uint32_t t0 = cyc();
       g_inst.process(g_buf + 2 * pg::kQuantum * q, pg::kQuantum);
       uint32_t dt = cyc() - t0;
       uint32_t vc = 0, ex = 0, qn = 0, a = 0;
       for (auto& p : g_probe) { vc += p.qCyc; ex += p.qExcl; qn += p.qNotes; a += p.active() ? 1 : 0; }
       vc += g_smpProbe.qCyc; ex += g_smpProbe.qExcl; qn += g_smpProbe.qNotes;
+      vc += g_melProbe.qCyc; ex += g_melProbe.qExcl; qn += g_melProbe.qNotes;
+      if (g_inst.melodic().active()) { g_melNoteSum += static_cast<uint64_t>(g_inst.melodic().soundingNotes()); ++g_melNoteQ; }
       dt = dt > ex ? dt - ex : 0;
       const uint32_t own = dt > vc ? dt - vc : 0;
       blk += dt;
@@ -1183,6 +1207,33 @@ void profileTask(void*) {
         rp("SAMPLER %dHz %s: render c/f while sounding %d.%d = %d.%d %% of a core | quanta sounding %lu of %lu | "
            "noteOn n %lu mean %lu max %lu cyc | setParams mean %lu max %lu cyc | pool %s\n",
            g_rate, name, DF(cf), DF(pc), static_cast<unsigned long>(v.rN),
+           static_cast<unsigned long>(g_res.ownN), static_cast<unsigned long>(v.nN),
+           static_cast<unsigned long>(v.nN ? v.nSum / v.nN : 0), static_cast<unsigned long>(v.nMax),
+           static_cast<unsigned long>(v.pN ? v.pSum / v.pN : 0), static_cast<unsigned long>(v.pMax),
+           plat::samples::info().ok ? "app1 mapped" : "built-in sounds only");
+      }
+    }
+
+    // The melodic sampler (the LEAD's sampler instruments): ACIDJAM with the lead on
+    // CLOUD (a held ping-pong loop) with its own single notes, then CLOUD and PLUCK with
+    // a MIN7 chord on every lead step (four notes: the paraphonic worst case), at the
+    // macros' middle. Its own render cost while it sounds and the notes sounding then.
+    {
+      struct M { const char* tag; const char* inst; int chord; };
+      const M runs[3] = {{"mel-cloud-1", "CLOUD", 0}, {"mel-cloud-4", "CLOUD", 6}, {"mel-pluck-4", "PLUCK", 6}};
+      for (const M& m : runs) {
+        RunCfg S{m.tag, 0, 0, 8, all, false, false, false, 0, 0, m.chord, 0, nullptr, m.inst};
+        snprintf(st, sizeof(st), "%dHZ: MELODIC %s", g_rate, m.tag);
+        setStatus(st);
+        runEngine(S); printRun(S);
+        const VStat& v = g_melProbe.st;
+        const Dec cf = dec(v.rSum, static_cast<uint64_t>(v.rN) * pg::kQuantum);
+        const uint64_t perFrame = 240000000ull / static_cast<uint64_t>(g_rate);
+        const Dec pc = dec(v.rSum * 100ull, static_cast<uint64_t>(v.rN) * pg::kQuantum * perFrame);
+        const Dec nt = dec(g_melNoteSum, g_melNoteQ);
+        rp("MELODIC %dHz %s %s: render c/f while sounding %d.%d = %d.%d %% of a core | notes sounding %d.%d avg | "
+           "quanta %lu of %lu | noteOn n %lu mean %lu max %lu cyc | setParams mean %lu max %lu cyc | pool %s\n",
+           g_rate, m.tag, m.inst, DF(cf), DF(pc), DF(nt), static_cast<unsigned long>(v.rN),
            static_cast<unsigned long>(g_res.ownN), static_cast<unsigned long>(v.nN),
            static_cast<unsigned long>(v.nN ? v.nSum / v.nN : 0), static_cast<unsigned long>(v.nMax),
            static_cast<unsigned long>(v.pN ? v.pSum / v.pN : 0), static_cast<unsigned long>(v.pMax),

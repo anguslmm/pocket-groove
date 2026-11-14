@@ -822,11 +822,13 @@ void Ui::drawWave(Framebuffer& fb) {
   const int x0 = kScopeX0, y0 = kScopeY0, h = kScopeY1 - kScopeY0 + 1, w = Scope::kCols;
   const int slot = sampleSlotOf(t);
   sampler::SampleRef r;
-  sampler::resolve(sampler_ ? sampler_->pool() : nullptr, slot, &r);
+  sampler::resolve(samplePool(), slot, &r);
   uint8_t p[kSoundParams];
   for (int i = 0; i < kSoundParams; ++i) p[i] = uint8_t(paramValue(t, i));
   int32_t a = 0, b = 0;
-  sampler::SamplerVoice::region(p, r.length, r.rate, &a, &b);
+  const bool lead = t == kTrackLead;   // the melodic sampler: its window, no slices
+  if (lead) sampler::MelodicSampler::region(p, r.length, r.rate, &a, &b);
+  else sampler::SamplerVoice::region(p, r.length, r.rate, &a, &b);
   const int64_t L = r.length ? int64_t(r.length) : 1;
   const int ca = int(int64_t(a) * w / L), cb = int((int64_t(b) * w + L - 1) / L);   // the region's columns
   const bool muted = this->muted(t);
@@ -834,7 +836,7 @@ void Ui::drawWave(Framebuffer& fb) {
   g.rrect(x0, y0, w, h, PANEL);
   g.rect(x0 + ca, y0 + 1, (cb > ca ? cb - ca : 1), h - 2, RAISED);
   // slices
-  const int n = p[sampler::kSlices] < 1 ? 1 : (p[sampler::kSlices] > 16 ? 16 : p[sampler::kSlices]);
+  const int n = lead ? 1 : (p[sampler::kSlices] < 1 ? 1 : (p[sampler::kSlices] > 16 ? 16 : p[sampler::kSlices]));
   const int pick = p[sampler::kSlice] % n;
   for (int k = 1; k < n; ++k) {
     const int sx = x0 + k * w / n;
@@ -851,11 +853,20 @@ void Ui::drawWave(Framebuffer& fb) {
     if (yb < yt) { const int s = yt; yt = yb; yb = s; }
     g.rect(x0 + c, yt, 1, yb - yt + 1, c >= ca && c < cb ? in : out);
   }
-  // the playhead: a chop of this slot sounding on this track
-  int32_t ph = -1;
-  if (sampler_ && sampler_->playingSlot() == slot) ph = sampler_->playhead();
-  if (ph >= 0 && ph < int32_t(L)) g.rect(x0 + int(int64_t(ph) * w / L), y0 + 1, 1, h - 2, WHITE);
-  wavePlayhead_ = ph;
+  // the playhead: a chop of this slot sounding on this track (the lead: each note's)
+  if (lead && melodic_) {
+    for (int k = 0; k < sampler::mel::kMaxNotes; ++k) {
+      const int32_t pk = melodic_->playhead(k);
+      const int ph = sampler::MelodicSampler::playheadPos(pk);
+      if (sampler::MelodicSampler::playheadSlot(pk) == slot && ph >= 0 && ph < int32_t(L))
+        g.rect(x0 + int(int64_t(ph) * w / L), y0 + 1, 1, h - 2, WHITE);
+    }
+  } else if (!lead) {
+    int32_t ph = -1;
+    if (sampler_ && sampler_->playingSlot() == slot) ph = sampler_->playhead();
+    if (ph >= 0 && ph < int32_t(L)) g.rect(x0 + int(int64_t(ph) * w / L), y0 + 1, 1, h - 2, WHITE);
+  }
+  wavePlayhead_ = wavePlayheads();
   // the slot and the sample's name; its length
   char buf[24];
   catInt(buf, slot + 1);

@@ -39,6 +39,9 @@ void Instrument::init(float sampleRate, bool monoOutput) {
   lead_.~LeadVoice();         new (&lead_) lead::LeadVoice();
   sampler_.~SamplerVoice();   new (&sampler_) sampler::SamplerVoice();
   sampler_.setPool(pool_);
+  melodic_.~MelodicSampler(); new (&melodic_) sampler::MelodicSampler();
+  melodic_.setPool(pool_);
+  melodic_.followSilent(&sampler_);
   for (int t = 0; t < kNumTracks; ++t) {
     Voice* v = voice(t);
     v->init(sampleRate);
@@ -46,6 +49,8 @@ void Instrument::init(float sampleRate, bool monoOutput) {
   }
   sampler_.init(sampleRate);
   engine_.setAltVoice(kTrackPerc, kVoiceSampler, &sampler_);
+  melodic_.init(sampleRate);
+  engine_.setAltVoice(kTrackLead, kVoiceSampler, &melodic_);
   // initProject reads the voices' ParamInfo defaults, so it comes after setVoice.
   engine_.initProject(project_);
   engine_.init(sampleRate, &project_);
@@ -55,6 +60,7 @@ void Instrument::init(float sampleRate, bool monoOutput) {
 void Instrument::setSamplePool(const sampler::SamplePool* pool) {
   pool_ = pool;
   sampler_.setPool(pool);
+  melodic_.setPool(pool);
 }
 
 size_t Instrument::staticRamBytes() { return sizeof(Instrument) + engine_detail::staticRamBytes(); }

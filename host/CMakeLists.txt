@@ -45,6 +45,10 @@ endif()
 if(TARGET pg_macro AND TARGET pg_sampler)
   target_link_libraries(pg_macro PUBLIC pg_sampler)
 endif()
+# the melodic sampler (pg/sampler/melodic.cpp) expands chords with the lead's table
+if(TARGET pg_sampler AND TARGET pg_lead)
+  target_link_libraries(pg_sampler PUBLIC pg_lead)
+endif()
 # ... and by the transfer protocol (the sample pool's write side, pg/sampler/flash_pool.h)
 if(TARGET pg_io AND TARGET pg_sampler)
   target_link_libraries(pg_io PUBLIC pg_sampler)
@@ -122,6 +126,11 @@ if(TARGET macro_audit)
   add_test(NAME macro_audit_test_sample COMMAND macro_audit --hard --test-sample macros/perc
            WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(macro_audit_test_sample PROPERTIES TIMEOUT 600)
+  # ... and the lead's sampler sets (voice lead sampler) the same way.
+  add_test(NAME macro_audit_lead_sampler
+           COMMAND macro_audit --hard --test-sample macros/lead/pluck.pgm macros/lead/cloud.pgm macros/lead/reel.pgm
+           WORKING_DIRECTORY ${PG_ROOT})
+  set_tests_properties(macro_audit_lead_sampler PROPERTIES TIMEOUT 600)
   set(why_silent "HARD  silent at GONE=0.00")
   set(why_clips "HARD  clips .stem peak above 0 dBFS. at HOT=1.00")
   set(why_typo "typo.pgm:5: unknown parameter 'cutx' for bass")

@@ -13,6 +13,7 @@
 #include "../platform.h"
 #include "../project.h"
 #include "../sampler/recorder.h"
+#include "../sampler/melodic.h"
 #include "../sampler/sampler.h"
 #include "format.h"
 #include "ghost.h"
@@ -199,6 +200,12 @@ class Ui {
   // voice, for the waveform picture (its pool and playhead). Call after init() (which
   // forgets it); without it the picture shows the built-in sounds and no playhead.
   void setSampler(const sampler::SamplerVoice* v) { sampler_ = v; ++serial_; }
+  // The LEAD track's sampler (the melodic sampler: its notes' playheads), likewise.
+  void setMelodic(const sampler::MelodicSampler* v) { melodic_ = v; ++serial_; }
+  // The pool the samplers read (nullptr: the built-in sounds only).
+  const sampler::SamplePool* samplePool() const {
+    return sampler_ && sampler_->pool() ? sampler_->pool() : (melodic_ ? melodic_->pool() : nullptr);
+  }
   // Track t plays a sampler instrument (its set is of the sampler kind and the
   // engine hosts that kind on t).
   bool samplerOn(int t) const;
@@ -590,7 +597,9 @@ class Ui {
   uint8_t pendSlot_[kNumTracks] = {};        // 0 none, else the sample slot + 1
   uint8_t pendSlotFrame_[kNumTracks] = {};
   const sampler::SamplerVoice* sampler_ = nullptr;
-  int32_t wavePlayhead_ = -1;                // the playhead the picture last drew (-1 none)
+  const sampler::MelodicSampler* melodic_ = nullptr;
+  int32_t wavePlayhead_ = -1;                // the playhead(s) the picture last drew (-1 none; the lead's: a signature)
+  int32_t wavePlayheads() const;             // the same now, from the track's sampler voice
   uint32_t wavePoolGen_ = 0;
   // microphone (ui_mic.cpp)
   sampler::MicInput* mic_ = nullptr;

@@ -245,7 +245,7 @@ struct Parser {
       if (n == 3) {
         const int k = voiceKindFromName(w[2]);
         if (k < 0) return fail("unknown voice kind '%s' (sampler, or nothing for the track's own voice)", w[2]);
-        if (!voiceKindOnTrack(k, t)) return fail("a %s instrument cannot go on %s (only perc hosts one today)", w[2], w[1]);
+        if (!voiceKindOnTrack(k, t)) return fail("a %s instrument cannot go on %s (perc and lead host one)", w[2], w[1]);
         set->voice = uint8_t(k);
       }
       tp = kindParams(pt, t, set->voice, kindScratch);

@@ -644,6 +644,24 @@ bool Ui::samplerOn(int t) const {
   return s && s->voice == kVoiceSampler && eng_->hostsKind(t & 7, kVoiceSampler);
 }
 
+// What the picture's playheads are now: PERC's chop (its position), or the lead's
+// notes on the shown slot (a signature of their positions). -1: none.
+int32_t Ui::wavePlayheads() const {
+  const int t = sel_ & 7;
+  const int slot = sampleSlotOf(t);
+  if (t == kTrackLead) {
+    if (!melodic_) return -1;
+    int32_t sig = -1;
+    for (int k = 0; k < sampler::mel::kMaxNotes; ++k) {
+      const int32_t p = melodic_->playhead(k);
+      if (sampler::MelodicSampler::playheadSlot(p) != slot) continue;
+      sig = int32_t((uint32_t(sig < 0 ? 0 : sig) * 31u + uint32_t(sampler::MelodicSampler::playheadPos(p)) + 1u) & 0x7FFFFFFFu);
+    }
+    return sig;
+  }
+  return sampler_ && sampler_->playingSlot() == slot ? sampler_->playhead() : -1;
+}
+
 int Ui::sampleSlotOf(int t) const {
   t &= 7;
   if (pendSlot_[t]) return pendSlot_[t] - 1;
@@ -683,7 +701,7 @@ bool Ui::stepSampleSlot(int dir) {
   slotUndoMs_ = now_;
   setSampleSlot(t, sampleSlotOf(t) + dir);
   sampler::SampleRef r;
-  sampler::resolve(sampler_ ? sampler_->pool() : nullptr, sampleSlotOf(t), &r);
+  sampler::resolve(samplePool(), sampleSlotOf(t), &r);
   char buf[40];
   char* o = cat(catInt(cat(buf, "SLOT "), sampleSlotOf(t) + 1), " ");
   cat(o, r.builtin ? "BUILT-IN" : r.name);
@@ -1847,9 +1865,8 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
     if (scope_.track() >= 0 && instrumentOf(sel_)) refreshJumps();
     if (samplerOn(sel_)) {
       // the sampler's picture: its playhead moves it; a pool change (a new sample) redraws all
-      const int32_t ph = sampler_ ? sampler_->playhead() : -1;
-      if (ph != wavePlayhead_) scopeMoved = true;
-      const uint32_t gen = sampler_ && sampler_->pool() ? sampler_->pool()->generation() : 0;
+      if (wavePlayheads() != wavePlayhead_) scopeMoved = true;
+      const uint32_t gen = samplePool() ? samplePool()->generation() : 0;
       if (gen != wavePoolGen_) {
         wavePoolGen_ = gen;
         ++serial_;

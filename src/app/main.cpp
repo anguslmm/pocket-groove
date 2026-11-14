@@ -965,6 +965,7 @@ void setup() {
   }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
   g_ui.setSampler(&g_inst.sampler());
+  g_ui.setMelodic(&g_inst.melodic());
   g_ui.setMic(&plat::mic::input());   // L on a sampler page (stage F2); it says why when it cannot
   // SHIFT+L: resampling, the engine's own output (docs/UX.md 10.3 "Resampling")
   g_ui.setResample(&plat::mic::resampleInput(&g_inst.engine(), &g_inst.sampler(), sampleRate()));
