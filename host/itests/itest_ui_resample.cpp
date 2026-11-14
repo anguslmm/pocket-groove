@@ -310,7 +310,7 @@ static void testElsewhere() {
   R->run(1500);
   hostrs::HostResample slow;
   slow.init(&R->eng, &R->inst.sampler(), 32000.0f,
-            [](int, const int16_t*, uint32_t, std::string*) { return true; });
+            [](int, const int16_t*, uint32_t, uint32_t, std::string*) { return true; });
   R->ui.setResample(&slow);
   down("shift");
   tap("l");
@@ -354,8 +354,8 @@ int main() {
   mic.pool = &pool;
   mic.clockMs = [] { return R->now(); };
   rs.init(&rig.eng, &rig.inst.sampler(), uih::Rig::kSr,
-          [](int slot, const int16_t* d, uint32_t n, std::string* err) {
-            return hostrs::commitToPool(P, g_bufs, slot, d, n, err);
+          [](int slot, const int16_t* d, uint32_t n, uint32_t rate, std::string* err) {
+            return hostrs::commitToPool(P, g_bufs, slot, d, n, rate, err);
           },
           [](int slot) {
             P->clear(slot);

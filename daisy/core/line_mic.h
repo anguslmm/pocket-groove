@@ -29,11 +29,8 @@
 // RATES: 48 kHz in, 48 kHz stored (recRatesFor(48000, kPoolRate)): no filter. A pool
 // slot holds kSlotMaxSamples = 137,216 samples: 2.86 s at 48 kHz (the Cardputer's
 // 22,050 Hz slot: 6.22 s). The slot's header says 48,000 Hz.
-// THE CORE'S SampleWriter::commitRecording writes the header at kPoolRate (22,050)
-// whatever the recording's rate, so this commits the header itself (commitAt():
-// the same steps, the same checks, the rate passed in) and lets the writer go with
-// cancel(), which rescans the now valid slot. A seam in the core would remove this
-// (docs/DAISY.md "Seams").
+// The commit: SampleWriter::commitRecording with the Recorder's stored rate
+// (rates().out), so the header says 48,000 and the voices play it at its pitch.
 // Portable (host/daisy/test_daisy_linein.cpp; the App in daisy_sim with --line-in).
 #pragma once
 #include <atomic>
@@ -49,8 +46,7 @@ class LineMic final : public pg::sampler::MicInput {
   static constexpr int16_t kSilentPeak = 33;   // -60 dBFS: below it a block is silent
 
   // ring: ringSamples int16 (a power of two). rate: the codec's (48000).
-  void init(pg::sampler::SampleWriter* writer, pg::sampler::FlashDriver* driver, pg::sampler::FlashPool* pool,
-            int16_t* ring, uint32_t ringSamples, uint32_t rate);
+  void init(pg::sampler::SampleWriter* writer, int16_t* ring, uint32_t ringSamples, uint32_t rate);
   // Whether the input runs (the device: the audio started). false: ready() says NO INPUT.
   void setAvailable(bool on) { available_ = on; }
 
@@ -64,11 +60,6 @@ class LineMic final : public pg::sampler::MicInput {
   bool start(int slot) override;
   void release() override;
   bool poll(pg::sampler::RecView* v) override;
-
-  // The commit with the slot's rate (see above). Public for the tests.
-  static pg::sampler::SampleWriter::Result commitAt(pg::sampler::SampleWriter& w, pg::sampler::FlashDriver& drv,
-                                                    pg::sampler::FlashPool& pool, uint32_t samples, const char* name,
-                                                    uint32_t rate);
 
   // For the report.
   enum class Mono : uint8_t { LeftOnly, Sum };
@@ -96,8 +87,6 @@ class LineMic final : public pg::sampler::MicInput {
   void end(pg::sampler::RecState st, const char* why);
 
   pg::sampler::SampleWriter* writer_ = nullptr;
-  pg::sampler::FlashDriver* drv_ = nullptr;
-  pg::sampler::FlashPool* pool_ = nullptr;
   int16_t* ring_ = nullptr;
   uint32_t mask_ = 0;
   uint32_t rate_ = 48000;

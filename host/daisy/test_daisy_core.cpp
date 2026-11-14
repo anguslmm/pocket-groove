@@ -139,6 +139,16 @@ void testKeyScript() {
   CHECK_EQ(queued, KeyScript::kQueue);
   CHECK_EQ(f.dropped(), 200u - KeyScript::kQueue);
   CHECK(f.parse("tap q") == KeyScript::Parse::Full);
+  // The desktop's padjob key (F4): one key id more than the Cardputer's.
+  KeyScript j;
+  g_ev.clear();
+  CHECK(j.parse("down padjob") == KeyScript::Parse::Queued);
+  CHECK(j.parse("tap F4") == KeyScript::Parse::Queued);
+  j.step(0, collect, nullptr);
+  CHECK(g_ev.size() == 2u && g_ev[0].key == KeyScript::kKeyPadJob && g_ev[0].down);
+  CHECK(j.held() == (1ull << KeyScript::kKeyPadJob));
+  j.releaseAll(10, collect, nullptr);
+  CHECK(j.held() == 0 && !g_ev.back().down && g_ev.back().key == KeyScript::kKeyPadJob);
 }
 
 void testSerialLink() {

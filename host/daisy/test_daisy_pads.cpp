@@ -6,7 +6,11 @@
 // one-scan bounce do not re-trigger), noise and one-scan spikes (nothing), flams on
 // two pads and on one (both play), crosstalk (a hard hit's leak into the next pad is
 // dropped, a deliberate soft hit later is not), calibration changes and a pad turned
-// off; and the settings file (settings.h): round trip, a corrupt file refused.
+// off; the default curve (a medium hit at 0.79 = note velocity 100, a hard one at 1 =
+// 127, pads.h THE VELOCITY CURVE); pressure never takes the ring's last places (a
+// stalled main loop loses pressure values, not a note's start or end); and the
+// settings file (settings.h): round trip with the pads' job, a version 1 file still
+// read, a corrupt file refused.
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -14,6 +18,8 @@
 #include "check.h"
 #include "core/pads.h"
 #include "core/settings.h"
+#include "pg/sampler/sample_format.h"
+#include "pg/ui/pads.h"
 
 using namespace pgd;
 
@@ -110,8 +116,8 @@ void testSoftHardAndLatency() {
   if (d) CHECK(d->scan - cross[0] <= 1u);
   const float vs = soft.velocity(0), vh = hard.velocity(0);
   std::printf("  soft hit velocity %.3f, hard hit %.3f\n", double(vs), double(vh));
-  CHECK(vs > 0.0f && vs < 0.3f);
-  CHECK(vh > 0.7f);
+  CHECK(vs > 0.0f && vs < 0.4f);
+  CHECK(vh > 0.95f);
   // velocity rises with the force (same rise time, peaks 40..1000 uS)
   float prev = -1.0f;
   bool mono = true;
@@ -147,7 +153,7 @@ void testSlowPress() {
   Run r = scanFor(s, 800, [](int p, float t) { return p == 3 ? hit(600, 300, 200, 100, t) : 0.0f; });
   CHECK_EQ(r.downs(3), 1);
   CHECK_EQ(r.ups(3), 1);
-  CHECK(r.velocity(3) < 0.1f);
+  CHECK(r.velocity(3) < 0.15f);
   float maxP = 0.0f, lastP = 0.0f;
   int pressures = 0;
   bool upLast = false;
@@ -161,7 +167,7 @@ void testSlowPress() {
   }
   std::printf("  slow press: velocity %.3f, %d pressure events, max %.3f\n", double(r.velocity(3)), pressures, double(maxP));
   CHECK(pressures > 20);
-  CHECK(std::fabs(maxP - (600.0f - 10.0f) / 990.0f) < 0.02f);
+  CHECK(std::fabs(maxP - (600.0f - 10.0f) / (PadCal{}.ceiling - 10.0f)) < 0.02f);
   CHECK(lastP < 0.1f);
   CHECK(upLast);
 }
@@ -282,10 +288,13 @@ void testCalibration() {
   CHECK_EQ(lo.downs(3), 0);
   Run hi = scanFor(s, 100, [](int p, float t) { return p == 3 ? hit(300, 3, 20, 5, t) : 0.0f; });
   CHECK_EQ(hi.downs(3), 1);
-  // the curve: 0.5 lifts a soft hit
+  // the curve: 0.5 (the default) lifts a soft hit over a linear 1
   PadScanner a, b;
   defaults(a);
   defaults(b);
+  PadCal linear;
+  linear.curve = 1.0f;
+  a.setCal(0, linear);
   PadCal lift;
   lift.curve = 0.5f;
   b.setCal(0, lift);
@@ -302,6 +311,70 @@ void testCalibration() {
   CHECK(ok.threshold > 0.0f && ok.ceiling > ok.threshold && ok.curve <= 4.0f);
 }
 
+// The default curve (pads.h): medium = the force's steepest rise about 100 uS per ms
+// (400 uS in 4 ms) at 0.79, note velocity 100 within 5; hard = 160 uS per ms or more
+// across the window (640 uS in 4 ms), or the ceiling inside it, at 1 (127); a soft
+// tap well below. At four phases
+// of the crossing between two scans.
+void testDefaultCurve() {
+  struct Case {
+    const char* what;
+    float peak, riseMs;
+    int lo, hi;   // the note velocity (pg::ui::padVelocity)
+  };
+  const Case cases[] = {{"medium", 400, 4, 95, 105},   {"hard 640/4ms", 640, 4, 125, 127},
+                        {"hard 1000/2ms", 1000, 2, 127, 127}, {"hard 900/3ms", 900, 3, 125, 127},
+                        {"soft", 120, 8, 30, 50}};
+  for (const Case& c : cases) {
+    int lo = 200, hi = -1;
+    for (float off : {0.0f, 0.5f, 1.0f, 1.5f}) {
+      PadScanner s;
+      defaults(s);
+      Run r = scanFor(s, 150, [&](int p, float t) { return p == 0 ? hit(c.peak, c.riseMs, 30, 10, t - off) : 0.0f; });
+      CHECK_EQ(r.downs(0), 1);
+      const int v = pg::ui::padVelocity(r.velocity(0));
+      lo = v < lo ? v : lo;
+      hi = v > hi ? v : hi;
+    }
+    std::printf("  default curve, %-13s (%4.0f uS in %.0f ms): note velocity %d..%d\n", c.what, double(c.peak),
+                double(c.riseMs), lo, hi);
+    CHECK(lo >= c.lo && hi <= c.hi);
+  }
+}
+
+// Pressure fills the ring while nobody pops (a stalled main loop): a release and a
+// new hit still get in.
+void testReserve() {
+  PadScanner s;
+  defaults(s);
+  float x[PadScanner::kPads] = {};
+  auto scanG = [&](float g0, float g1) {
+    x[0] = PadScanner::readingFor(g0);
+    x[1] = PadScanner::readingFor(g1);
+    s.scan(x);
+  };
+  scanG(600, 0);
+  scanG(600, 0);   // pad 0 down
+  for (int i = 0; i < 300; ++i) scanG(100.0f + float(i % 50) * 10.0f, 0);   // pressure, every scan moving
+  CHECK(s.dropped() > 0);
+  scanG(0, 0);
+  scanG(0, 0);        // pad 0 released (2 scans below)
+  scanG(0, 600);
+  scanG(0, 600);      // pad 1 hit
+  int downs = 0, ups = 0, press = 0;
+  PadEvent e;
+  while (s.pop(&e)) {
+    downs += e.type == PadEvent::Down;
+    ups += e.type == PadEvent::Up;
+    press += e.type == PadEvent::Pressure;
+  }
+  std::printf("  ring full of pressure: %d pressure events kept, %u dropped; downs %d, ups %d\n", press,
+              unsigned(s.dropped()), downs, ups);
+  CHECK_EQ(downs, 2);
+  CHECK_EQ(ups, 1);
+  CHECK(press <= PadScanner::kRing - PadScanner::kReserve);
+}
+
 void testSettings() {
   DaisySettings s;
   s.pads[1].threshold = 22.5f;
@@ -313,13 +386,27 @@ void testSettings() {
   s.displayTurned = true;
   s.touchOrientation = 5;
   s.spiDivider = 4;
+  s.padJob = 1;
   uint8_t b[DaisySettings::kBytes];
   CHECK_EQ(s.encode(b, sizeof(b)), DaisySettings::kBytes);
   DaisySettings t;
   CHECK(t.decode(b, sizeof(b)));
   CHECK(t.pads[1].threshold == 22.5f && t.pads[2].ceiling == 700.0f && t.pads[3].curve == 0.6f && !t.pads[0].on);
   CHECK(t.padGlobal.windowScans == 3 && t.padGlobal.xtalkRatio == 0.3f);
-  CHECK(t.displayTurned && t.touchOrientation == 5 && t.spiDivider == 4);
+  CHECK(t.displayTurned && t.touchOrientation == 5 && t.spiDivider == 4 && t.padJob == 1);
+  // a version 1 file (no job): read, the job drums
+  {
+    uint8_t v1[DaisySettings::kBytesV1];
+    std::memcpy(v1, b, DaisySettings::kBytesV1 - 4);
+    v1[4] = 1;
+    v1[5] = uint8_t(DaisySettings::kBytesV1);
+    const uint32_t crc = pg::sampler::crc32(v1, DaisySettings::kBytesV1 - 4);
+    std::memcpy(v1 + DaisySettings::kBytesV1 - 4, &crc, 4);
+    DaisySettings o;
+    o.padJob = 1;
+    CHECK(o.decode(v1, sizeof(v1)));
+    CHECK(o.padJob == 0 && o.pads[1].threshold == 22.5f && o.spiDivider == 4);
+  }
   b[20] ^= 1;   // one flipped bit: refused, nothing changed
   DaisySettings u;
   CHECK(!u.decode(b, sizeof(b)));
@@ -339,6 +426,8 @@ int main() {
   testFlams();
   testCrosstalk();
   testCalibration();
+  testDefaultCurve();
+  testReserve();
   testSettings();
   return pgdt::finish("test_daisy_pads");
 }

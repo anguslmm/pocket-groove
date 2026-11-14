@@ -5,12 +5,18 @@
 //              l" with a tone on the line input's L, ">up l": the slot's header says
 //              48,000 Hz; after a reboot (the App booted again from the same flash) the
 //              slot is still there; the [linein] report line says what happened
-//   pads       a synthetic hard hit on pad 1 through Hal::readPads (from render): one
-//              note on the kick, posted to the engine, then its note-off
+//   pads       a synthetic hard hit on pad 1 through Hal::readPads (from render): the
+//              core's padDown (the Ui holds pad 1, the kick fires), then padUp; a
+//              slow press on pad 2: its pressure merged to at most one per 8 ms on the
+//              way to the Ui, which ends at the press's offset and returns to 0 at the
+//              release; ">hit 3 0.5 hold 50" from the computer: the same path; the job
+//              by ">tap padjob" (the desktop's F4) and ">pads job drums", kept over a
+//              reboot
 //   settings   ">pad 1 thr 20 ceil 500 curve 0.5" changes the scanner and survives a
 //              reboot (/int's snapshot); ">display turn" reaches Hal::applySettings
 //   touch      ">touch 10 20 50" with the mirror on: "~PGT D 10 20", then "~PGT U"
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -20,6 +26,7 @@
 #include "core/layout.h"
 #include "core/nor_sim.h"
 #include "core/ring.h"
+#include "pg/ui/pads.h"
 
 using namespace pgd;
 
@@ -174,20 +181,88 @@ void testRecording() {
 }
 
 void testPads() {
-  const uint32_t notes0 = g_app.padNotes();
+  const uint32_t notes0 = g_app.padNotes(), ups0 = g_app.padUps();
+  const uint8_t kickTrig0 = g_app.ui().engineStatus().trig[pg::kTrackKick];
   // a hard hit on pad 1: 900 uS over 2 ms, held 40 ms
+  bool held = false;
   for (int i = 0; i < 30; ++i) {
     const float t = float(i) * 2.0f;
     const float g = t < 2.0f ? 450.0f * t : (t < 42.0f ? 900.0f : 0.0f);
     g_hal.pad[0] = PadScanner::readingFor(g);
     run(2);
+    held = held || g_app.ui().padHeld(0);
   }
   g_hal.pad[0] = 0.0f;
-  run(20);
+  run(40);   // a UI frame: the engine's status
+  CHECK(held);
+  CHECK(!g_app.ui().padHeld(0));
   CHECK_EQ(g_app.padNotes(), notes0 + 1);
+  CHECK_EQ(g_app.padUps(), ups0 + 1);
+  CHECK(g_app.ui().engineStatus().trig[pg::kTrackKick] != kickTrig0);   // the kick played
   CHECK(g_app.pads().lastVelocity(0) > 0.9f);
   CHECK(g_app.pads().state(0) == PadScanner::State::Idle);
   CHECK(g_app.pads().hits(1) == 0 && g_app.pads().hits(2) == 0);
+
+  // a slow press on pad 2 (the snare): 0 -> 400 uS over 200 ms, held 300 ms. The
+  // scanner sends a pressure event at nearly every scan; the Ui gets at most one per 8 ms.
+  const uint32_t pIn0 = g_app.padPressures();
+  int maxOffset = 0;
+  for (int ms = 0; ms < 500; ms += 2) {
+    const float g = ms < 200 ? 2.0f * float(ms) : 400.0f;
+    g_hal.pad[1] = PadScanner::readingFor(g);
+    run(2);
+    const int o = g_app.ui().pressOffset(pg::kTrackSnare);
+    maxOffset = o > maxOffset ? o : maxOffset;
+  }
+  const uint32_t toUi = g_app.padPressures() - pIn0;
+  const float pEnd = (400.0f - PadCal{}.threshold) / (PadCal{}.ceiling - PadCal{}.threshold);
+  const int want = pg::ui::pressOffset16(pEnd, 1);   // BITE: no press line, the default response (smooth)
+  std::printf("  slow press: %u pressure values to the Ui in 500 ms, offset %d (want %d), macro %d\n", unsigned(toUi),
+              g_app.ui().pressOffset(pg::kTrackSnare) / pg::kOffsetScale, want / pg::kOffsetScale,
+              g_app.ui().pressMacro(pg::kTrackSnare));
+  CHECK(g_app.ui().padHeld(1));
+  CHECK(toUi >= 10 && toUi <= 500 / pg::ui::kPressEveryMs + 2);
+  CHECK(g_app.ui().pressMacro(pg::kTrackSnare) >= 0);
+  // the last value got through (to the scanner's step of 1/128: 1.25 units at most)
+  CHECK(std::abs(g_app.ui().pressOffset(pg::kTrackSnare) - want) <= 2 * pg::kOffsetScale);
+  g_hal.pad[1] = 0.0f;
+  run(50);
+  CHECK(!g_app.ui().padHeld(1));
+  CHECK_EQ(g_app.ui().pressOffset(pg::kTrackSnare), 0);
+
+  // from the computer: the same path
+  const uint32_t notes1 = g_app.padNotes();
+  send(">hit 3 0.5 hold 50\n", 20);
+  CHECK(g_app.ui().padHeld(2));
+  CHECK_EQ(g_app.padNotes(), notes1 + 1);
+  run(60);
+  CHECK(!g_app.ui().padHeld(2));
+  send(">hit 3 1 hold 0 press 0.5\n", 20);
+  CHECK(g_app.ui().padHeld(2) && g_app.ui().pressOffset(pg::kTrackHatClosed) > 0);
+  run(200);
+  CHECK(g_app.ui().padHeld(2));   // hold 0: until ">hit 3 up"
+  send(">hit 3 up\n", 20);
+  CHECK(!g_app.ui().padHeld(2) && g_app.ui().pressOffset(pg::kTrackHatClosed) == 0);
+  g_hal.out.clear();
+  send(">hit 9\n>hit 0 1\n", 20);
+  CHECK(g_hal.out.find("[pads] ? >hit N VEL") != std::string::npos);
+
+  // the job: the desktop's key, a command; saved with the Daisy's settings
+  CHECK(g_app.ui().padJob() == pg::ui::PadJob::Drums);
+  send(">tap padjob\n", 100);
+  CHECK(g_app.ui().padJob() == pg::ui::PadJob::Notes);
+  CHECK(std::strcmp(g_app.ui().toastText(), "PADS: NOTES") == 0);
+  CHECK_EQ(g_app.ui().padTrack(0), g_app.ui().selTrack());
+  CHECK_EQ(int(g_app.settings().padJob), 1);
+  run(3000);   // /int's snapshot
+  boot();
+  run(50);
+  CHECK(g_app.ui().padJob() == pg::ui::PadJob::Notes);
+  g_hal.out.clear();
+  send(">pads job drums\n", 50);
+  CHECK(g_app.ui().padJob() == pg::ui::PadJob::Drums && g_app.settings().padJob == 0);
+  CHECK(g_hal.out.find("[pads] job drums") != std::string::npos);
+  CHECK(g_hal.out.find("[pads] 1 plays KICK note 60") != std::string::npos);
 }
 
 void testSettings() {

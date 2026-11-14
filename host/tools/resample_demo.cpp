@@ -94,7 +94,7 @@ int main(int argc, char** argv) {
               unsigned(rs.startFrame()));
   static std::vector<int16_t> bufs[sampler::kPoolSlots];
   std::string err;
-  if (rs.state() != sampler::RecState::Done || !hostrs::commitToPool(&pool, bufs, 0, sink.v.data(), len, &err)) {
+  if (rs.state() != sampler::RecState::Done || !hostrs::commitToPool(&pool, bufs, 0, sink.v.data(), len, rs.storedRate(), &err)) {
     std::fprintf(stderr, "resample_demo: no take (%s)\n", err.c_str());
     return 1;
   }

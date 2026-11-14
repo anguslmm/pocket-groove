@@ -97,12 +97,18 @@ class SampleWriter {
   //   commitRecording     the first `samples` samples are the sample (the tail after
   //                       them is left as written: a filled slot's tail is never read);
   //                       CRC through the driver vs the mapping as for commit(), then the
-  //                       header with the playback gain (setPlaybackGain), read back
+  //                       header with the playback gain (setPlaybackGain), read back.
+  //                       `rate`: the recording's STORED rate, what its header says and
+  //                       the voices play it at (Recorder::rates().out,
+  //                       Resampler::storedRate(); the Cardputer's is kPoolRate, the
+  //                       Daisy's 48,000). Outside kMinRate..kMaxRate: kBadSize, nothing
+  //                       written. Every caller passes it (the default only keeps the
+  //                       Cardputer-era tests' two-argument form)
   //   cancel()            nothing was committed: the slot stays empty (and dirty: the
   //                       next recording finds it not erased and erases it first)
   bool erased(int slot) const;
   Result beginRecording(int slot);
-  Result commitRecording(uint32_t samples, const char* name);
+  Result commitRecording(uint32_t samples, const char* name, uint32_t rate = kPoolRate);
   bool recording() const { return slot_ >= 0 && rec_; }
 
  private:

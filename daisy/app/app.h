@@ -18,8 +18,9 @@
 //               starting '>'), and from the hardware when it exists (Hal::pollKey:
 //               G0 on the breadboard, stage 1); G0 as on the Cardputer:
 //               held = tilt (if there is an IMU), held + '-' / '=' = output level
-//   pads        four force sensors (pads.h), scanned in render(); each plays a
-//               drum track (App::padEvent, the one place to change)
+//   pads        four force sensors (pads.h), scanned in render(), into the core's
+//               pad API (pg/ui/pads.h: velocity, pressure, the drums / notes job;
+//               App::padEvent); also from the computer (">hit N VEL ..."), the same way
 //   touch       the 2090's FT6206 (Hal::pollPointer): reported, mirrored as ~PGT
 //   recording   hold L on a sampler page: the codec's line in (line_mic.h)
 //   transfer    tools/pg's protocol (pg::io::Xfer) on the same port: projects on /int
@@ -31,6 +32,7 @@
 //   storage     /int in RAM with snapshots on the flash (ramfs.h, fs_persist.h); the
 //               sample pool in RAM with a flash mirror (pool_mirror.h)
 #pragma once
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
@@ -186,7 +188,11 @@ class App {
   LineMic& lineMic() { return lineMic_; }
   const DaisySettings& settings() const { return settings_; }
   uint32_t padNotes() const { return padNotes_; }
+  uint32_t padUps() const { return padUps_; }
+  uint32_t padPressures() const { return padPressures_; }   // handed to the UI (after merging)
   uint32_t pointerEvents() const { return pointerEvents_; }
+  // The largest |sample| of the output since the last report (or the last call), 0..32768.
+  uint32_t takeOutputPeak() { return outPeak_.exchange(0, std::memory_order_relaxed); }
 
   // printf to the serial port (and the boot log while booting).
   void sp(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -217,6 +223,8 @@ class App {
   void servicePots(uint32_t now);
   void servicePads(uint32_t now);
   void padEvent(const PadEvent& e);
+  bool hitCommand(char** w, int n);
+  void printPadPlay();
   void servicePointer(uint32_t now);
   void pointer(const Hal::Pointer& p);
   bool settingsCommand(const char* line);
@@ -287,6 +295,22 @@ class App {
   uint32_t padsWatchMs_ = 0;          // >pads watch: a [pads] line this often (0: off)
   uint32_t padsWatchLast_ = 0;
   uint32_t padNotes_ = 0, padUps_ = 0, padPressures_ = 0;
+  uint32_t padPressuresIn_ = 0;       // pressure events popped (before merging)
+  // Pressure waiting to go to the UI: the newest per pad, at most one per pad every
+  // pg::ui::kPressEveryMs (servicePads).
+  static constexpr int kAppPads = pg::ui::kMaxPads > 0 ? pg::ui::kMaxPads : 1;
+  float pendPress_[kAppPads] = {};
+  uint32_t pendMask_ = 0;
+  uint32_t pressMs_[kAppPads] = {};
+  // >hit: pads hit from the computer, released at upAt (0: held until ">hit N up")
+  struct InjPad {
+    bool down;
+    uint32_t upAt;
+  };
+  InjPad inj_[kAppPads] = {};
+  uint32_t padInjected_ = 0;
+  int8_t lastPad_ = -1;               // the last pad hit, its velocity (the report)
+  float lastPadVel_ = 0.0f;
   uint32_t pointerEvents_ = 0, pointerDowns_ = 0;
   Hal::Pointer lastPointer_{};
   bool pointerSeen_ = false;
@@ -295,6 +319,7 @@ class App {
   bool injDown_ = false;
   const char* settingsLoad_ = "defaults";
   bool lineIn_ = false;               // the codec's input reaches render() (Hal::lineInput)
+  std::atomic<uint32_t> outPeak_{0};  // render(): the output's largest |sample| (the report)
 
   // The boot log, replayed by 'l' (the computer usually opens the port after boot).
   static constexpr size_t kBootLog = 3072;

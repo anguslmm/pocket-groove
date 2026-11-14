@@ -182,10 +182,11 @@ SampleWriter::Result SampleWriter::beginRecording(int slot) {
   return kOk;
 }
 
-SampleWriter::Result SampleWriter::commitRecording(uint32_t samples, const char* name) {
+SampleWriter::Result SampleWriter::commitRecording(uint32_t samples, const char* name, uint32_t rate) {
   if (slot_ < 0 || !rec_) return kNoSession;
   const int slot = slot_;
   if (samples < kMinSamples || samples > kSlotMaxSamples || samples * 2u > written_) return kBadSize;
+  if (rate < kMinRate || rate > kMaxRate) return kBadSize;
   const uint32_t bytes = samples * 2u;
   uint8_t buf[256];
   uint32_t c = 0;
@@ -196,7 +197,7 @@ SampleWriter::Result SampleWriter::commitRecording(uint32_t samples, const char*
     o += n;
   }
   SlotHeader h;   // ... and as the CPU reads it: the same CRC
-  makeHeader(reinterpret_cast<const int16_t*>(pool_->base() + audioOffset(slot)), samples, name, &h);
+  makeHeader(reinterpret_cast<const int16_t*>(pool_->base() + audioOffset(slot)), samples, name, &h, rate);
   if (h.dataCrc != c) return kVerify;
   setPlaybackGain(&h);
   if (!drv_->write(slotOffset(slot), &h, sizeof h)) return kFlash;

@@ -1068,8 +1068,8 @@ int main(int argc, char** argv) {
       desk::Samples* smp = &app.samples;
       app.resample.init(
           &g_inst.engine(), &g_inst.sampler(), float(opt.sr),
-          [smp](int slot, const int16_t* d, uint32_t n, std::string* err) {
-            return smp->putRecording(slot, d, n, err, "res");
+          [smp](int slot, const int16_t* d, uint32_t n, uint32_t rate, std::string* err) {
+            return smp->putRecording(slot, d, n, rate, err, "res");
           },
           [smp](int slot) {
             std::string msg;

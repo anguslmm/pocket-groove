@@ -458,7 +458,7 @@ void testSlices() {
             "slices: one bar (%u samples)", unsigned(len));
   static std::vector<int16_t> bufs[sampler::kPoolSlots];
   std::string err;
-  it::check(hostrs::commitToPool(&g_pool, bufs, 1, tk.sink.v.data(), len, &err), "slices: committed");
+  it::check(hostrs::commitToPool(&g_pool, bufs, 1, tk.sink.v.data(), len, tk.rs.storedRate(), &err), "slices: committed");
   // where step n's notes start in the recording: the quantum edge the engine fires it at
   const double step = barFrames(bpm) / 16.0;
   const long start = tk.startAt();

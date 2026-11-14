@@ -13,8 +13,8 @@
 //   overrun   the main loop away for longer than the ring: counted, the recording ends
 //   restart   the mirror flushed to its flash, a new image loaded from it: the slot
 //             is there with its rate and audio (a reboot)
-//   the seam  the core's SampleWriter::commitRecording writes the header at 22,050 Hz
-//             whatever the recording's rate (why line_mic.h commits it itself)
+//   commit    the core's SampleWriter::commitRecording at the stored rate: 48,000 in
+//             the header; a rate outside kMinRate..kMaxRate refused, nothing written
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -49,7 +49,7 @@ struct Rig {
     mirror.loadFrom();
     pool.attach(mirror.image());
     writer.attach(&mirror, &pool);
-    mic.init(&writer, &mirror, &pool, ring.data(), uint32_t(ring.size()), kRate);
+    mic.init(&writer, ring.data(), uint32_t(ring.size()), kRate);
     mic.setAvailable(true);
   }
 };
@@ -242,32 +242,26 @@ void testSilenceAndOverrun() {
   }
 }
 
-// The core's own commit: the header at kPoolRate whatever the recording's rate.
-void testCoreSeam() {
+// The core's commit at the recording's rate (what LineMic::poll calls).
+void testCoreCommit() {
   Rig rig;
-  CHECK(rig.writer.beginRecording(kSlot) == pg::sampler::SampleWriter::kOk);
   std::vector<int16_t> d(48000);
   for (size_t i = 0; i < d.size(); ++i) d[i] = int16_t(8000.0 * std::sin(double(i) * 0.0576));
-  CHECK(rig.writer.write(0, reinterpret_cast<const uint8_t*>(d.data()), uint32_t(d.size() * 2)) ==
-        pg::sampler::SampleWriter::kOk);
-  CHECK(rig.writer.commitRecording(uint32_t(d.size()), "CORE") == pg::sampler::SampleWriter::kOk);
-  const pg::sampler::SlotHeader* h = rig.pool.header(kSlot);
-  CHECK(h && h->rate == pg::sampler::kPoolRate);   // 22,050: a 48 kHz recording would play 2.2x slow
-  // ... and LineMic::commitAt with the rate
-  CHECK(rig.writer.remove(kSlot) == pg::sampler::SampleWriter::kOk);
   CHECK(rig.writer.beginRecording(kSlot) == pg::sampler::SampleWriter::kOk);
   CHECK(rig.writer.write(0, reinterpret_cast<const uint8_t*>(d.data()), uint32_t(d.size() * 2)) ==
         pg::sampler::SampleWriter::kOk);
-  CHECK(LineMic::commitAt(rig.writer, rig.mirror, rig.pool, uint32_t(d.size()), "OURS", kRate) ==
-        pg::sampler::SampleWriter::kOk);
-  h = rig.pool.header(kSlot);
+  // a rate no header may hold: refused, the session still open, nothing written
+  CHECK(rig.writer.commitRecording(uint32_t(d.size()), "X", 200000) == pg::sampler::SampleWriter::kBadSize);
+  CHECK(rig.writer.recording() && !rig.pool.header(kSlot));
+  CHECK(rig.writer.commitRecording(uint32_t(d.size()), "OURS", kRate) == pg::sampler::SampleWriter::kOk);
+  const pg::sampler::SlotHeader* h = rig.pool.header(kSlot);
   CHECK(h && h->rate == kRate && h->samples == d.size());
   CHECK(!rig.writer.active());
   // refused: no session, a bad length
-  CHECK(LineMic::commitAt(rig.writer, rig.mirror, rig.pool, 1000, "X", kRate) == pg::sampler::SampleWriter::kNoSession);
+  CHECK(rig.writer.commitRecording(1000, "X", kRate) == pg::sampler::SampleWriter::kNoSession);
   CHECK(rig.writer.remove(kSlot) == pg::sampler::SampleWriter::kOk);
   CHECK(rig.writer.beginRecording(kSlot) == pg::sampler::SampleWriter::kOk);
-  CHECK(LineMic::commitAt(rig.writer, rig.mirror, rig.pool, 1000, "X", kRate) == pg::sampler::SampleWriter::kBadSize);
+  CHECK(rig.writer.commitRecording(1000, "X", kRate) == pg::sampler::SampleWriter::kBadSize);
   rig.writer.cancel();
 }
 
@@ -277,6 +271,6 @@ int main() {
   testMono();
   testStereoAndHum();
   testSilenceAndOverrun();
-  testCoreSeam();
+  testCoreCommit();
   return pgdt::finish("test_daisy_linein");
 }

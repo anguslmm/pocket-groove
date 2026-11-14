@@ -176,7 +176,7 @@ int main(int argc, char** argv) {
   const uint32_t len = rs.length();
   static std::vector<int16_t> bufs[sampler::kPoolSlots];
   std::string err;
-  if (rs.state() != sampler::RecState::Done || !hostrs::commitToPool(&pool, bufs, 1, sink.v.data(), len, &err)) {
+  if (rs.state() != sampler::RecState::Done || !hostrs::commitToPool(&pool, bufs, 1, sink.v.data(), len, rs.storedRate(), &err)) {
     std::fprintf(stderr, "melodic_demo: no take (%s)\n", err.c_str());
     return 1;
   }

@@ -179,8 +179,8 @@ int main(int argc, char** argv) {
       }
     } else if (op == "resample") {
       resample.init(&rig.eng, &rig.inst.sampler(), uih::Rig::kSr,
-                    [](int slot, const int16_t* d, uint32_t n2, std::string* err) {
-                      return hostrs::commitToPool(&pool, resampleBufs, slot, d, n2, err);
+                    [](int slot, const int16_t* d, uint32_t n2, uint32_t rate, std::string* err) {
+                      return hostrs::commitToPool(&pool, resampleBufs, slot, d, n2, rate, err);
                     },
                     [](int slot) {
                       pool.clear(slot);

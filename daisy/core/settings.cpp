@@ -52,18 +52,19 @@ size_t DaisySettings::encode(uint8_t* out, size_t cap) const {
   w.u8(displayTurned ? 1 : 0);
   w.u8(uint8_t(touchOrientation));
   w.u8(spiDivider);
+  w.u8(padJob);
   const uint32_t crc = pg::sampler::crc32(out, size_t(w.p - out));
   std::memcpy(w.p, &crc, 4);
   return kBytes;
 }
 
 bool DaisySettings::decode(const uint8_t* in, size_t n) {
-  if (!in || n != kBytes || std::memcmp(in, "PGDS", 4) != 0 || in[4] != kVersion || in[5] != kBytes ||
-      in[6] != PadScanner::kPads)
-    return false;
+  if (!in || n < 8 || std::memcmp(in, "PGDS", 4) != 0 || in[6] != PadScanner::kPads) return false;
+  const size_t want = in[4] == 1 ? kBytesV1 : in[4] == kVersion ? kBytes : 0;
+  if (!want || n != want || in[5] != want) return false;
   uint32_t crc;
-  std::memcpy(&crc, in + kBytes - 4, 4);
-  if (crc != pg::sampler::crc32(in, kBytes - 4)) return false;
+  std::memcpy(&crc, in + want - 4, 4);
+  if (crc != pg::sampler::crc32(in, want - 4)) return false;
   DaisySettings s;
   R r{in + 8};
   for (PadCal& c : s.pads) {
@@ -84,6 +85,8 @@ bool DaisySettings::decode(const uint8_t* in, size_t n) {
   if (s.touchOrientation < -1 || s.touchOrientation > 7) s.touchOrientation = -1;
   s.spiDivider = r.u8();
   if (s.spiDivider != 2 && s.spiDivider != 4 && s.spiDivider != 8 && s.spiDivider != 16) s.spiDivider = 2;
+  s.padJob = want == kBytes ? r.u8() : 0;
+  if (s.padJob > 1) s.padJob = 0;
   *this = s;
   return true;
 }

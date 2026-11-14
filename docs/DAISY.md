@@ -9,7 +9,8 @@ Read the first-power-on checklist before plugging anything in.
 STM32H750 without warnings, in both stages. Everything portable runs on the host: the scheduler,
 the serial protocol, /int, the sample pool, the display path (now the Adafruit 2090's ILI9341),
 the BMI270 and FT6206 drivers on their shared I2C bus, the force-sensor pad scanner and the
-line-in recorder are unit-tested, and the firmware's whole `App` runs in `daisy_sim` and in
+line-in recorder are unit-tested, the pads play through the core's pad API (velocity, pressure,
+the drums / notes job) and can be hit from the computer without sensors (`tools/pg-daisy pad`), and the firmware's whole `App` runs in `daisy_sim` and in
 `test_daisy_stage1` against the real computer tools. Only the hardware can show the rest (see
 "What only the hardware can show").
 
@@ -310,13 +311,16 @@ in section 10. Each step: what you should see, and what to paste back if you do 
 14. **One force sensor** (pad 1, with its 10 k resistor; section 10's diagram). Then
     `tools/pg-daisy pads`: at rest the pad's `uS` reads below 1; pressing it lightly gives tens,
     hard a few hundred to over a thousand. Tap it: the kick plays (louder for a harder tap) and
-    `vel` shows the velocity. Ctrl-C, then wire the other three (snare, clap, closed hat) and check
-    each the same way. Tuning, while `pads` runs in one terminal and `cmd` in another: a pad that
-    triggers too easily, `cmd pad N thr 20`; one that needs too much force, `cmd pad N thr 5`; hard
-    hits not reaching full velocity, `cmd pad N ceil 500`; soft hits too quiet, `cmd pad N curve
-    0.6`; a hard hit also playing the pad next to it, `cmd pads xtalk 0.5`. All saved at once.
-    **Paste back:** about ten seconds of `tools/pg-daisy pads` output with one soft tap, one hard
-    tap and one slow press on each pad, and the `cmd pads` lines.
+    `vel` shows the velocity and the note velocity it makes (`0.79=101`). Ctrl-C, then wire the
+    other three (snare, closed hat, perc: the drums job) and check each the same way. Then tune the
+    velocity (section 10, "Tuning the velocity"): hard hits should read 1.00, medium ones about
+    0.79. Other tuning, while `pads` runs in one terminal and `cmd` in another: a pad that triggers
+    too easily, `cmd pad N thr 20`; one that needs too much force, `cmd pad N thr 5`; a hard hit
+    also playing the pad next to it, `cmd pads xtalk 0.5`. All saved at once. Squeeze a held pad
+    on PERC with TAP on it: the pitch bends (`press`); `tools/pg-daisy cmd pads job notes` and the
+    pads play the selected track up the scale. **Paste back:** about ten seconds of
+    `tools/pg-daisy pads` output with one soft, one medium and one hard tap and one slow press on
+    each pad, and the `cmd pads` lines.
 15. **microSD** (Adafruit 4682). Expect: `[sd] mounted (FatFS result 0)`, `tools/pg ls` lists
     `/sd` too. **Paste back:** the `[sd]` line.
 16. **Line in** (a phone or a computer's headphone output, volume at about half, section 10).
@@ -354,13 +358,17 @@ One USB serial port carries everything, as on the Cardputer:
   `tools/pg-daisy mirror` draws a red dot.
 - **Stage 1 commands** (key-script lines too; `daisy/app/app_settings.cpp`), each change saved at
   once to `/int/pg/daisy.cfg` and printed back:
-  `>pads` (the [pads] lines), `>pads watch [MS|off]`, `>pads window N`, `>pads release N`,
-  `>pads hyst R`, `>pads xtalk R [MS]`, `>pads reset`,
+  `>pads` (the [pads] lines: the job, what each pad plays and what the engine hears of its
+  macros, then the sensors), `>pads watch [MS|off]`, `>pads job [drums|notes]` (alone: the other
+  job), `>pads window N`, `>pads release N`, `>pads hyst R`, `>pads xtalk R [MS]`, `>pads reset`,
   `>pad N|all [thr US] [ceil US] [curve X] [on|off]`,
+  `>hit N VEL [hold MS] [press P]`, `>hit N press P`, `>hit N up` (a pad from the computer),
   `>touch X Y [MS]` (a touch from the computer), `>touch map N|auto`,
-  `>display turn`, `>display spi 2|4|8|16`.
-  `tools/pg-daisy pads` watches the pads; `tools/pg-daisy cmd WORDS` sends one command
-  (`tools/pg-daisy cmd pad 2 thr 15`).
+  `>display turn`, `>display spi 2|4|8|16`. One key more than the Cardputer's in `>down` /
+  `>up` / `>tap`: `padjob` (or `F4`, the desktop app's key for it), the pads' job.
+  `tools/pg-daisy pads` watches the pads; `tools/pg-daisy pad N VEL [hold MS] [press P]` hits one
+  from the computer; `tools/pg-daisy cmd WORDS` sends one command (`tools/pg-daisy cmd pad 2 thr
+  15`).
 
 `tools/pg-daisy` wraps all of it (section 2 for pyserial). It can be tried without the board:
 `cmake --build build/host --target daisy_sim && build/host/daisy/daisy_sim` prints a pseudo-terminal
@@ -428,7 +436,10 @@ strings that the linker merged across files are counted with the first file that
 2026-11-14 stage 1 commit (`make`'s daisy_size line):** stage 0 image **431,612 bytes, 58.5 KB
 free**; stage 1 image **463,108 bytes, 27.7 KB free** (ROM part 205,248 bytes). Stage 1 adds
 libDaisy's SPI, I2C, SDMMC and FatFS, the drivers, the pads, the line-in recorder and their
-commands. It first came out ~3 KB over the 480 KB; what was done about it:
+commands. **After the pads moved onto the core's pad API** (the velocity and pressure branch's
+UI and engine code now linked in, `>hit`, the [pads] play lines, the output peak): stage 0
+**436,748 bytes, 53.5 KB free**, stage 1 **468,232 bytes, 22.7 KB free** (measured, `make`'s
+daisy_size line). It first came out ~3 KB over the 480 KB; what was done about it:
 - **libDaisy built `-Os`** (section 2): about 20 KB in both stages. libDaisy is the HAL, USB,
   FatFS: main-loop code; its audio-path part is the per-block float conversion (~400 samples).
 - **The Daisy's own main-loop code `-Os`** (`daisy/app`, and `daisy/core` and `daisy/src` except
@@ -475,7 +486,7 @@ pins, the peripherals where the chip routes them.
 | I2C SCL, SDA | D11, D12 | 12, 13 | PB8, PB9 | 1 | I2C1, 400 kHz: BMI270 (Qwiic, 0x68) and the 2090's FT6206 (0x38) |
 | TOUCH INT | D24 | 31 | PA1 | 1 | the 2090's IRQ: input with pull-up, only reported (polling works without it) |
 | G0 BUTTON | D25 | 32 | PA0 | 1 | pull-up, to ground when pressed |
-| **PAD1..PAD4** (kick, snare, clap, closed hat) | **D20..D23 (A5..A8)** | **27..30** | PC1, PC4, PA5, PA4 | 1 | force sensors, each a divider with 10 k to AGND; ADC1 INP11, 4, 19, 18; sampled 32.5 cycles |
+| **PAD1..PAD4** (drums job: kick, snare, closed hat, perc) | **D20..D23 (A5..A8)** | **27..30** | PC1, PC4, PA5, PA4 | 1 | force sensors, each a divider with 10 k to AGND; ADC1 INP11, 4, 19, 18; sampled 32.5 cycles |
 | AUDIO IN L / R | | 16 / 17 | codec | 0 and 1 | line in: the first recording path (both stages); later an analog MEMS capsule |
 | AUDIO OUT L / R | | 18 / 19 | codec | 0 | line out |
 | free | D0, D13, D14 (I2C4), D26, D28 (A11) | 1, 14, 15, 33, 35 | | | more pads through a multiplexer, function buttons |
@@ -503,7 +514,7 @@ libDaisy is bare metal, so there are two contexts:
   tilt), `ui` (every 33 ms: `Ui::update`, the changed rows to the display and the mirror), `screen`
   (the mirror's lines as the transmit buffer has room), `store` (every 5 ms: one flash operation
   for /int's snapshot or the pool's copy; the pool's copy waits while a recording runs), `led`,
-  `stats`, `pots` (every 10 ms), `pads` (every pass: the pads' events to the engine). Each task is a
+  `stats`, `pots` (every 10 ms), `pads` (every pass: the pads' events into the UI's pad API). Each task is a
   state machine that returns quickly; the report lists each one's run time. The engine's command
   queue is the only path from here to the audio.
 
@@ -619,8 +630,8 @@ Pull-ups: libDaisy sets none on the pins. The SparkFun Qwiic board and the 2090 
 
 ### Force-sensor pads: four Adafruit 1075 (Alpha MF02A-N-221-A01)
 
-**Wiring**, the same for each pad (pad 1 = A5 / pin 27 kick, pad 2 = A6 / pin 28 snare, pad 3 =
-A7 / pin 29 clap, pad 4 = A8 / pin 30 closed hat):
+**Wiring**, the same for each pad (pad 1 = A5 / pin 27, pad 2 = A6 / pin 28, pad 3 = A7 / pin 29,
+pad 4 = A8 / pin 30; in the drums job they play kick, snare, closed hat, perc):
 
 ```
   Seed 3V3A (pin 21) ----+---- FSR ----+---- Seed A5 (pin 27)      (A6 / A7 / A8 for pads 2-4)
@@ -657,8 +668,8 @@ AGND fixes it (10 k x 10 nF = 0.1 ms: fast enough for the velocity).
 - **Velocity window**: that scan and the next (**2 scans: the note is decided 2.0 ms after the
   onset scan**, from 2-4 ms of force history). Velocity = the fastest rise seen in the window
   (the onset scan's rise counted from the threshold), scaled so that rising the whole span,
-  threshold to **ceiling** (default 1000 uS), within the window is 1.0; then the pad's **curve**
-  (velocity^curve, default 1). A slope, not a level: where the crossing fell between two scans
+  threshold to **ceiling** (default 650 uS), within the window is 1.0; then the pad's **curve**
+  (velocity^curve, default 0.5; "The velocity curve" below). A slope, not a level: where the crossing fell between two scans
   does not change it (the test moves a hit by 0.5 ms steps: the same velocity). Reaching the
   ceiling ends the window at once (velocity 1). Falling below the release level inside the
   window is a blip (noise, a spike): no note.
@@ -672,8 +683,8 @@ AGND fixes it (10 k x 10 nF = 0.1 ms: fast enough for the velocity).
   hit about as hard plays both, a soft hit 40 ms after a hard one plays.
 
 **Latency, touch to note (estimated from the design, not measured):** the crossing is seen 0-2 ms
-after it happens, the note is decided 2 ms later, the main loop posts it to the engine (within
-one pass: normally well under 1 ms) and the engine plays it in the next block, which the codec
+after it happens, the note is decided 2 ms later, the main loop hands it to the UI's padDown,
+which posts it to the engine at once (within one pass: normally well under 1 ms) and the engine plays it in the next block, which the codec
 outputs one block later: **6-8 ms from the force crossing the threshold to sound** (velocity
 window 2 ms + 0-2 ms scan phase + 4 ms of engine and output buffering). Two things can make it
 worse: a long main-loop pass (a UI frame, a QSPI erase of tens of milliseconds while /int is
@@ -686,17 +697,74 @@ scans, hysteresis, crosstalk ratio and time. `cmd pad N thr .. ceil .. curve ..`
 (section 6); saved at once in `/int/pg/daisy.cfg` with the Daisy's other settings (display
 orientation, SPI speed, touch map), which goes into /int's flash snapshots with the UI's own
 settings. `tools/pg-daisy pads` prints every 100 ms, per pad: the raw reading x, G in uS, the
-peak since the last line, the pressure, the state, the last velocity: enough to choose a
-threshold (above the idle value, below a light touch) and a ceiling (about the G of a hard hit).
+peak since the last line, the pressure, the state, the last velocity and the note velocity it
+makes (`0.79=101`): enough to choose a threshold (above the idle value, below a light touch).
 
-**What it plays (today):** each pad one drum track (kick, snare, clap, closed hat) through the
-engine's live NoteOn (note 60, velocity 1..127), as the UI's own pads do; a release sends the
-NoteOff; pressure goes nowhere yet. All of that is one function, `App::padEvent`
-(`daisy/app/app.cpp`), to be switched to the core's platform-neutral pad API (pad down with
-velocity, pad pressure, pad up) once that branch is merged. Until then the selected track does
-not follow a pad, and a note recorded into a playing pattern gets no undo snapshot. Today's
-drum voices may use the velocity only as far as the engine already does (the core's per-note
-velocity is the other branch's work).
+**What it plays: the core's pad API** (`lib/pg/src/pg/ui/pads.h`, docs/UX.md 10.3 "Pads"), in
+one function, `App::padEvent` (`daisy/app/app.cpp`): a hit is `Ui::padDown(pad, velocity)`, the
+pressure of a held pad `Ui::padPressure`, the release `Ui::padUp`. From there it is the core's:
+- **The job**, drums or notes (saved with the Daisy's settings, so it survives a restart).
+  **Drums**: pad 1-4 play KICK, SNARE, CHH, PERC (note 60), whatever track is selected.
+  **Notes**: the pads play the selected track up its scale (degree 1-4; a synth with the
+  octave and the lead's chord mode as the note keys, a second pad held on a synth slides).
+  Switch: `tools/pg-daisy tap padjob` (the desktop app's F4: a toast says which), or
+  `tools/pg-daisy cmd pads job drums|notes`.
+- **Velocity**: the note's, 1..127, from the hit (below). Live record records it with the note.
+  An instrument with `vel` lines (CRACK, ALLOY, TAP, PLUCK) also moves those macros by it, from
+  the note-on to the track's next note: velocity 100 leaves them where they are.
+- **Pressure**: the held pad's pressure moves the macro the instrument's `press` line names
+  (TAP: PRESS, ACID: BITE, HANDS; others: the macro tilt X moves), after a small dead zone, and
+  glides back in 120 ms when the last pad of the track is let go. Not recorded.
+- **The hand-over**: the scanner runs in the audio interrupt and queues its events (64 places;
+  pressure never takes the last 8, so a stalled main loop drops pressure values, never a hit or a
+  release). The main loop takes them every pass: hits and releases at once, in order; pressure
+  merged to the newest value per pad and handed over at most once per pad every 8 ms (the UI's
+  own limit per track, so nothing waits for the UI's next frame). A sensor sends a pressure
+  event at nearly every scan while the force moves (500 a second): the UI gets about 125.
+`tools/pg-daisy cmd pads` shows, per pad, what it plays now and what the engine hears of the
+track's four macros (`heard`, velocity, pressure and tilt included), and the pressure macro and
+its offset (`press 1 +160`).
+
+**Pads from the computer, without sensors** (testing before the sensors are wired, scripted
+tests): `tools/pg-daisy pad N VEL [hold MS] [press P]` hits pad N (1-16) at velocity VEL (0..1,
+what a sensor gives after its curve: 0.786 is note velocity 100, 1 is 127), lets it go after MS
+(default 100; `hold 0` keeps it down until `tools/pg-daisy cmd hit N up`), with pressure P (0..1)
+while held, and prints what it plays and what the engine hears, held and after. Over serial it
+is `>hit N VEL [hold MS] [press P]`, `>hit N press P`, `>hit N up` (key scripts too:
+`tools/pg-daisy script` passes them through). They go through `App::padEvent` like a sensor's
+events, so everything above applies. Examples, with `daisy_sim` or the board:
+```
+  tools/pg-daisy pad 1 0.3                 # a soft kick
+  tools/pg-daisy pad 1 1                   # a hard one
+  tools/pg-daisy pad 4 0.8 hold 600 press 1    # PERC held 0.6 s, squeezed hard
+  tools/pg-daisy tap padjob                # the notes job: the selected track up the scale
+  tools/pg-daisy pad 2 0.786               # its second degree, at velocity 100
+```
+
+**The velocity curve.** The core makes 0..1 into the note's 1..127 linearly and treats 100 as
+neutral for `vel` lines: a hit below 100 pulls those macros the other way. With a linear curve
+most hits would land below 100 and a pad-played instrument would sound darker or softer than its
+knobs say, so the platform's curve does the work. The defaults (threshold 10 uS, **ceiling 650
+uS, curve 0.5**, window 2 scans) put:
+- a **medium** hit, the force's steepest rise about **100 uS per ms** (from nothing to 400 uS,
+  the FSR at about 2.5 k, in 4 ms), at **0.79 = note velocity 101**;
+- a **hard** hit, **160 uS per ms or more** across the window (640 uS in 4 ms) or **650 uS
+  (about 1.5 k) reached inside it**, at **1.00 = 127**;
+- a soft tap (120 uS in 8 ms, 15 uS per ms) at 0.31 = 40; a slow press at about 0.1.
+`test_daisy_pads` checks these on synthetic hits at four phases of the scan. **What "medium"
+means on real pads is a guess** (a finger on the sensor, or on rubber over it, has not been
+measured); a rise shorter than one 2 ms scan is seen only in part.
+
+**Tuning the velocity** (per pad, saved at once):
+1. `tools/pg-daisy pads` in one terminal. Hit pad N as hard as you would play it, several times.
+   The `vel` column should read `1.00=127` for most of them. If not, lower the ceiling: `cmd pad
+   N ceil 500` (or 400). Reaching 1.00 on hits you would call medium: raise it (`ceil 900`).
+   (The ceiling also sets full pressure: a held pad reaches pressure 1 at the ceiling.)
+2. Then medium hits: they should read about `0.79=100`. Lower: a smaller curve lifts them
+   (`cmd pad N curve 0.4`); higher: a larger one (`curve 0.6`). The curve does not move a hit
+   that is already 1.00. The `[pads]` lines of `cmd pads` give the last hit's velocity before
+   the curve too (`linear`).
+3. `cmd pad all ceil X curve Y` sets all four at once; `cmd pads reset` returns to the defaults.
 
 ### Line in: the first recording path
 
@@ -721,11 +789,9 @@ background after the recording (it waits while one runs), so **the sample surviv
   input peaks.
 - The input runs in the audio interrupt into a 1.37 s ring in SDRAM; the main loop feeds the
   recorder every UI frame. A stall longer than the ring is counted (`ring overruns`).
-- **The core's `SampleWriter::commitRecording` writes the header at 22,050 Hz** whatever was
-  recorded (shown in `test_daisy_linein`): a 48 kHz recording would play 2.2x too slow. So
-  `LineMic::commitAt` makes the same commit with the rate (the same CRC checks through the
-  driver and the mapping, the same playback gain, the header read back) and lets the writer go
-  with `cancel()`. A seam in the core would remove this (section 14).
+- The commit is the core's `SampleWriter::commitRecording(samples, name, rate)` with the
+  recorder's stored rate, so the header says 48,000 (`test_daisy_linein`, and
+  `itest_rate48_record` plays such a recording back at its pitch and length).
 
 **Wiring:** source left to Seed pin 16 (AUDIO IN L), right to pin 17 (AUDIO IN R), the source's
 ground to AGND (pin 20). A mono source: into pin 16, and pin 17 to AGND. A 3.5 mm jack breakout:
@@ -827,13 +893,19 @@ Verified here (sandbox, no hardware):
   register parsing, probe, events, loss and return, the coordinate mapping for both rotations,
   and the I2C guard on a stuck bus shared with the BMI270 (`test_daisy_touch`); the pad scanner
   on synthetic force curves: soft and hard hits, the crossing's phase, a slow press, hover and
-  bounce, noise and spikes, flams, crosstalk, calibration, the settings file (`test_daisy_pads`);
+  bounce, noise and spikes, flams, crosstalk, calibration, the default velocity curve, pressure
+  never crowding out a hit in the queue, the settings file with the pads' job (`test_daisy_pads`);
   line-in recording through the Daisy's pool: the fold-down cases, 48 kHz headers, cancel,
   overrun, the mirror's flash copy read back (`test_daisy_linein`); the whole App with all of
-  it, recording by the UI's gesture over serial and finding it after a reboot, a pad hit
-  playing a note, settings surviving a reboot, touches to the mirror (`test_daisy_stage1`);
-  and `daisy_sim --line-in mono` with `tools/test_pg_daisy.py` (record, restart, `tools/pg
-  sample get` returns REC01).
+  it, recording by the UI's gesture over serial and finding it after a reboot, a sensor hit
+  through the core's padDown / padUp, a slow press's pressure merged on its way to the UI and
+  returning to 0, hits from the computer, the job by `padjob` and `>pads job` kept over a
+  reboot, settings surviving a reboot, touches to the mirror (`test_daisy_stage1`);
+  `daisy_sim --line-in mono` with `tools/test_pg_daisy.py` (record, restart, `tools/pg
+  sample get` returns REC01); and pads from the computer in `daisy_sim` (`tools/test_pg_daisy.py`:
+  TAP hit at 0.3 and 1.0 hears its HIT macro below and above its base and the hard hit is
+  louder in the report's output peak; a squeeze moves PRESS by the full 160 and it returns at the
+  release; the job switch; `tools/pg-daisy pad` itself).
 - The 2090's init values and orientations against Adafruit_ILI9341 1.7.0 and
   Adafruit_FT6206 1.1.1 (read, not run). The TAC5242's input full scale from TI's datasheet
   (search results quoting SLASF27A; the PDF itself was not opened here).
@@ -915,18 +987,18 @@ Not verifiable from the source (assumptions):
 
 ## 14. Seams in the core, risks, licences
 
-Seams in the core wanted by stage 1 (not made: lib/pg is another branch's; worked around here):
-- **`SampleWriter::commitRecording(samples, name, rate)`**: today it writes the header at
-  kPoolRate (22,050) whatever was recorded, so a 48 kHz recording would play 2.2x slow.
-  `LineMic::commitAt` repeats its steps with the rate; with the parameter that copy goes away.
+Seams in the core wanted by stage 1 (the commit at the recording's rate and the pad API are in
+the core now):
 - **An engine command path the audio interrupt can use** (a second single-producer queue the
   engine drains at the start of `process`, or `Engine::postFromAudio`). The pads are scanned in
-  the interrupt, but their notes go through the main loop to `Engine::post` (the queue has one
-  producer). With it, a pad's note would play in the same block it is decided in: 2 ms less
-  latency (4-6 ms instead of 6-8), and no main-loop stall (a UI frame, a QSPI erase) could delay
-  a note.
-- **The platform-neutral pad API in the UI** (being added on another branch): `App::padEvent` is
-  the one function to switch over.
+  the interrupt, but their notes go through the main loop to the UI and `Engine::post` (the
+  queue has one producer). With it, a pad's note would play in the same block it is decided in:
+  2 ms less latency (4-6 ms instead of 6-8), and no main-loop stall (a UI frame, a QSPI erase)
+  could delay a note. Not made: it waits until the latency is measured on a board. What it
+  would take: the hit's note decided in the interrupt as the UI decides it (the job, the track,
+  the note, the slide), which means the UI's pad state on the interrupt side or a second, smaller
+  copy of it; the UI told afterwards (live record, the held pads, pressure) without racing the
+  note; and the engine draining the second queue first in `process`.
 
 Seams in the core (none were needed for stage 0; these would help later):
 - **A float output from the engine** (`Engine::process(float*, ...)`). The engine's output is
@@ -963,8 +1035,9 @@ Stage 1's risks, most likely first:
    the wrong header side. The firmware cannot tell: it only writes. Section 5 step 11.
 2. **The touch axes mirrored or swapped**: the mapping is from Adafruit's example, not tried
    on this board. `cmd touch map N` fixes it without a build.
-3. **The force sensors' numbers**: threshold 10 uS, ceiling 1000 uS, the 4 ms window and the
-   crosstalk ratio are guesses from the FSR family, not this part. Expect to tune them with
+3. **The force sensors' numbers**: threshold 10 uS, ceiling 650 uS, curve 0.5 (a medium hit
+   at 100 uS per ms), the 4 ms window and the crosstalk ratio are guesses from the FSR family,
+   not this part. Expect to tune them with
    `tools/pg-daisy pads` (section 10); a floating pad pin plays random notes.
 4. **The I2C bus** without pull-ups, or with a device holding it: `[i2c]` says "IS HELD".
 5. **The line-in level**: unknown board routing; start with the source at half volume.
