@@ -73,6 +73,18 @@ void testDefaultMap() {
     CHECK(m.lookupCmd(sc) == desk::kUnbound);
   CHECK(desk::bindingFromName("lab-good") == desk::kActLabGood && desk::bindingFromName("lab-4") == desk::kActLabMacro1 + 3);
   CHECK(std::string(desk::bindingName(desk::kActLabDown)) == "lab-down");
+  // the pads (docs/DESKTOP.md "Pads"): F5..F8, F4 the job; by name in a key map file
+  {
+    desk::KeyMap d;
+    CHECK(d.lookup(SDL_SCANCODE_F5) == desk::kActPad1 && d.lookup(SDL_SCANCODE_F8) == desk::kActPad1 + 3);
+    CHECK(d.lookup(SDL_SCANCODE_F4) == desk::kActPadJob);
+    CHECK(desk::bindingFromName("pad1") == desk::kActPad1 && desk::bindingFromName("pad4") == desk::kActPad1 + 3);
+    CHECK(desk::bindingFromName("padjob") == desk::kActPadJob);
+    CHECK(std::string(desk::bindingName(desk::kActPad1 + 2)) == "pad3");
+    CHECK(desk::isPadBinding(desk::kActPad1) && !desk::isPadBinding(desk::kActPadJob) && !desk::isPadBinding(desk::kActLabLast));
+    std::string e;
+    CHECK(d.parse("pad1 = Keypad 1\n", &e) && d.lookup(SDL_SCANCODE_KP_1) == desk::kActPad1);
+  }
   for (int sc = 0; sc < desk::KeyMap::kScancodes; ++sc)   // no Command shortcut is an instrument key
     CHECK(m.lookupCmd(sc) == desk::kUnbound || m.lookupCmd(sc) >= desk::kActRecord);
   CHECK(m.lookup(SDL_SCANCODE_F9) == desk::kActRecord);
@@ -107,7 +119,7 @@ void testParse() {
   CHECK(m.lookup(SDL_SCANCODE_F12) == kKG0);
   CHECK(m.scancodeFor(kKFn) == SDL_SCANCODE_RALT);
   CHECK(m.lookupCmd(SDL_SCANCODE_F5) == desk::kActRecord);
-  CHECK(m.lookup(SDL_SCANCODE_F5) == desk::kUnbound);
+  CHECK(m.lookup(SDL_SCANCODE_F5) == desk::kActPad1);   // the Command shortcut leaves the plain key (pad 1)
   CHECK(m.lookupCmd(SDL_SCANCODE_I) == desk::kUnbound);
   CHECK(m.lookupCmd(SDL_SCANCODE_R) == desk::kActRecord);
   desk::KeyMap b;

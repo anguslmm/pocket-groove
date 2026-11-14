@@ -314,7 +314,9 @@ class App final : public desk::ScriptHost, public desk::LabHost {
       else if (o.binding == desk::kActStats) toggleStats();
       else if (o.binding == desk::kActListen) toggleListen();
       else if (o.binding == desk::kActStems) toggleStems();
-      else if (o.binding >= desk::kActLabGood && o.binding <= desk::kActLast) {
+      else if (o.binding == desk::kActPadJob) g_ui.togglePadJob();
+      else if (desk::isPadBinding(o.binding)) {}   // held keys: onSdlKey handles them (padKey)
+      else if (o.binding >= desk::kActLabGood && o.binding <= desk::kActLabLast) {
         if (lab.enabled() && !stems.isOpen()) {
           lab.action(o.binding, (SDL_GetModState() & KMOD_SHIFT) != 0);
           labTyping();
@@ -327,6 +329,7 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   void releaseAll() {
     desk::KeyOut out[desk::KeyboardInput::kMaxOut];
     deliver(out, keyboard.releaseAll(out));
+    releasePads();
   }
 
   // ---- tilt by mouse --------------------------------------------------------------
@@ -426,10 +429,58 @@ class App final : public desk::ScriptHost, public desk::LabHost {
       needPresent = true;
       return;
     }
+    const int pb = g_map.lookup(sc);
+    if (desk::isPadBinding(pb) && !(k.keysym.mod & KMOD_GUI)) {   // a pad: held, with its up
+      if (!k.repeat) padKey(pb - desk::kActPad1, k.type == SDL_KEYDOWN);
+      return;
+    }
     desk::KeyOut out[desk::KeyboardInput::kMaxOut];
     const int n = keyboard.onScancode(sc, k.type == SDL_KEYDOWN, k.repeat != 0, (k.keysym.mod & KMOD_GUI) != 0,
                                       isCmd, out);
     deliver(out, n);
+  }
+
+  // ---- pads by keys and the mouse (docs/DESKTOP.md "Pads") ------------------------
+  // F5..F8 are pads 1..4. The force is the mouse's height over the device screen: the
+  // top edge 1, the bottom edge 0 (outside the screen: clamped). The hit's velocity is
+  // the force at the key's press; while the key is held the force is the pressure,
+  // read every kPadEveryMs (the Ui sends at most one offset per 8 ms per track).
+  static constexpr uint32_t kPadEveryMs = 5;
+  uint8_t padsDown = 0;
+  uint32_t padNext = 0;
+  float padForce() const {
+    int cx = 0, cy = 0;
+    canvasMouse(&cx, &cy);
+    const float f = 1.0f - float(cy) / float(pg::kScreenH - 1);
+    return f < 0.0f ? 0.0f : (f > 1.0f ? 1.0f : f);
+  }
+  void padKey(int pad, bool down) {
+    const uint32_t now = nowMs();
+    const uint8_t bit = uint8_t(1u << pad);
+    if (down == ((padsDown & bit) != 0)) return;
+    padsDown = uint8_t(down ? (padsDown | bit) : (padsDown & ~bit));
+    if (down) {
+      const float f = padForce();
+      g_ui.padDown(pad, f, now);
+      g_ui.padPressure(pad, f, now);
+      std::printf("[pad] %d down force %.2f\n", pad + 1, double(f));
+    } else {
+      g_ui.padUp(pad, now);
+      std::printf("[pad] %d up\n", pad + 1);
+    }
+    std::fflush(stdout);
+    padNext = now;
+  }
+  void padService(uint32_t now) {
+    if (!padsDown || int32_t(now - padNext) < 0) return;
+    padNext = now + kPadEveryMs;
+    const float f = padForce();
+    for (int p = 0; p < desk::kDeskPads; ++p)
+      if ((padsDown >> p) & 1u) g_ui.padPressure(p, f, now);
+  }
+  void releasePads() {
+    for (int p = 0; p < desk::kDeskPads; ++p)
+      if ((padsDown >> p) & 1u) padKey(p, false);
   }
 
   // ---- the strip's controls ---------------------------------------------------------
@@ -679,6 +730,18 @@ class App final : public desk::ScriptHost, public desk::LabHost {
       e.motion.x = wx;
       e.motion.y = wy;
       SDL_PushEvent(&e);
+      return 0;
+    }
+    if (c == "print-pads") {   // the pads as the Ui and the engine have them (the desktop tests)
+      const pg::EngineStatus& st = g_ui.engineStatus();
+      const int t = g_ui.selTrack();
+      std::printf("[pads] job %s held %d%d%d%d force %.2f sel %d trig", g_ui.padJob() == pg::ui::PadJob::Drums ? "drums" : "notes",
+                  int(g_ui.padHeld(0)), int(g_ui.padHeld(1)), int(g_ui.padHeld(2)), int(g_ui.padHeld(3)), double(padForce()), t);
+      for (int k = 0; k < pg::kNumTracks; ++k) std::printf(" %d", int(st.trig[k]));
+      std::printf(" press %d %d heard %d %d %d %d base %d %d %d %d\n", g_ui.pressMacro(t), g_ui.pressOffset(t) / pg::kOffsetScale,
+                  int(st.macroPos[t][0]), int(st.macroPos[t][1]), int(st.macroPos[t][2]), int(st.macroPos[t][3]),
+                  g_ui.macroValue(t, 0), g_ui.macroValue(t, 1), g_ui.macroValue(t, 2), g_ui.macroValue(t, 3));
+      std::fflush(stdout);
       return 0;
     }
     if (c == "print-tilt") {   // what the Ui and the engine have (the desktop tests)
@@ -1173,6 +1236,7 @@ int main(int argc, char** argv) {
     if (!scriptDone && !script.service(app.nowMs(), app)) scriptDone = true;
 
     app.tiltService(app.nowMs());
+    app.padService(app.nowMs());
     const uint32_t now = app.nowMs();
     if (int32_t(now - nextFrame) >= 0) {
       app.labFrame(now);   // the lab's values go out before the frame, so the SOUND page shows them

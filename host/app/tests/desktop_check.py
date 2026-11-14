@@ -821,6 +821,49 @@ def part_tilt():
     check(c[0] == "0" and c[1] == "0" and c[7] == c[9], "G0 + '-': the tilt is cancelled and glided back (%s)" % " ".join(c))
 
 
+def part_pads():
+    print("10. pads by keys and the mouse: F5..F8 hit with the mouse's height as force, F4 the job, "
+          "a held pad's pressure moves the bass's press macro, the release glides back")
+    cwd = fresh(os.path.join(WORK, "pads"))
+    body = "\n".join([
+        "wait 300",
+        "tap j", "tap 9", "wait 300",                 # the demo's bass (ACID: press = tilt X = OPEN)
+        "app mouse 120 4", "wait 100",                # near the top: a hard hit
+        "app print-pads",
+        "sdl down F5", "wait 150", "app print-pads",   # drums job: pad 1 = KICK
+        "sdl up F5", "wait 100",
+        "sdl tap F4", "wait 100",                     # the notes job
+        "app mouse 120 133", "wait 100",              # the bottom: a soft hit, no pressure
+        "sdl down F6", "wait 150", "app print-pads",
+        "app mouse 120 14", "wait 300", "app print-pads",   # pressing hard
+        "sdl up F6", "wait 400", "app print-pads",
+        "sdl tap F4", "wait 100", "app print-pads",   # back to drums
+        "quit", ""])
+    rc, log = run_app([], cwd, body, "pads")
+    check(rc == 0, "app exited 0")
+    rows = re.findall(r"\[pads\] job (\w+) held (\d)(\d)(\d)(\d) force (\S+) sel (\d+) trig ((?:\d+ ){8})press (-?\d+) (-?\d+) "
+                      r"heard (\d+) (\d+) (\d+) (\d+) base (\d+) (\d+) (\d+) (\d+)", log)
+    check(len(rows) == 6, "six pad reports (%d)" % len(rows))
+    if len(rows) != 6:
+        return
+    trig = [list(map(int, r[7].split())) for r in rows]
+    z, k, soft, hard, up, back = rows
+    check(z[0] == "drums" and float(z[5]) > 0.95 and z[6] == "6", "start: the drums job, the mouse at the top is force 1 (%s)"
+          % " ".join(z[:7]))
+    check(k[1] == "1" and trig[1][0] == trig[0][0] + 1 and trig[1][6] == trig[0][6],
+          "F5 in the drums job: pad 1 held, the kick fired, not the bass (%s -> %s)" % (trig[0], trig[1]))
+    check(soft[0] == "notes" and soft[2] == "1" and trig[2][6] == trig[1][6] + 1 and float(soft[5]) < 0.05,
+          "F4 then F6: the notes job, pad 2 plays the bass, softly (%s, trig %s)" % (" ".join(soft[:7]), trig[2]))
+    pm = int(soft[8])
+    check(pm == 0 and soft[9] == "0", "a soft held pad: pressure in the dead zone moves nothing (macro %s offset %s)"
+          % (soft[8], soft[9]))
+    check(int(hard[9]) > 100 and int(hard[10]) > int(hard[14]),
+          "pressing hard: OPEN heard above its position (offset %s, heard %s base %s)" % (hard[9], hard[10], hard[14]))
+    check(up[2] == "0" and up[9] == "0" and up[10] == up[14] and up[14] == hard[14],
+          "released: back at the position, which never moved (%s)" % " ".join(up))
+    check(back[0] == "drums", "F4 again: the drums job")
+
+
 # PERC (a sampler on demo 0's STUTTER page after four steps), then hold L twice.
 MIC_SCRIPT = """wait 400
 down shift
@@ -916,7 +959,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="host build directory")
     ap.add_argument("--work", required=True, help="scratch directory (wiped)")
-    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt,mic)")
+    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt,pads,mic)")
     a = ap.parse_args()
     b = os.path.abspath(a.bin)
     APP, UI_SHOT = os.path.join(b, "pocket-groove"), os.path.join(b, "ui_shot")
@@ -929,7 +972,7 @@ def main():
     parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
              ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
              ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab), ("tilt", part_tilt),
-             ("mic", part_mic)]
+             ("pads", part_pads), ("mic", part_mic)]
     for name, fn in parts:
         if not only or name in only:
             fn()
