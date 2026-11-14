@@ -135,6 +135,7 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   sched_.add("store", 5, tStore, this);
   sched_.add("led", 10, tLed, this);
   sched_.add("stats", kStatsEveryMs, tStats, this);
+  sched_.add("pots", 10, tPots, this);
 
   script_ = KeyScript{};
   link_ = SerialLink{};
@@ -282,6 +283,7 @@ void App::serviceSerial(uint32_t now) {
 void App::printHelp() {
   sp("Pocket Groove %s on the Daisy, serial commands:\n", cfg_.version);
   sp("  r report   h help   l boot log   f one screen frame   m screen mirror on/off\n");
+  sp("  p pots on/off (the four pots move the selected track's four macros, with pickup)\n");
   sp("  S save /int to flash now   B then y: Daisy bootloader (flash)   R then y: restart\n");
   sp("  >down KEY  >up KEY  >tap KEY [ms]  >wait MS  >release  >shot NAME  >sync TAG\n");
   sp("      keys as in the desktop's key scripts (host/ui_scripts); KEY by legend:\n");
@@ -328,6 +330,10 @@ void App::letter(char c, uint32_t now) {
       fullFrameWanted_ = mirror_on_;
       std::snprintf(shotName_, sizeof(shotName_), "mirror");
       sp("[screen] mirror %s\n", mirror_on_ ? "on" : "off");
+      break;
+    case 'p':
+      pots_.setEnabled(!pots_.enabled());
+      sp("[pots] %s\n", pots_.enabled() ? "on: the four pots move the selected track's macros (pickup)" : "off");
       break;
     case 'S':
       persist_.requestNow();
@@ -455,6 +461,24 @@ void App::serviceStats(uint32_t now) {
   printStatsLine();
 }
 
+void App::servicePots(uint32_t now) {
+  (void)now;
+  float raw[PotMacros::kPots];
+  if (!hal_->readPots(raw)) return;
+  pots_.update(
+      raw, ui_.selTrack(),
+      [](void* u, int m) {
+        App* a = static_cast<App*>(u);
+        const int t = a->ui_.selTrack();
+        return a->ui_.instrumentOf(t) ? a->ui_.macroValue(t, m) : -1;
+      },
+      [](void* u, int m, int v) {
+        App* a = static_cast<App*>(u);
+        a->ui_.setMacro(a->ui_.selTrack(), m, v);
+      },
+      this);
+}
+
 void App::printStatsLine() {
   const uint32_t pm = meter_.nowPermille();
   sp("[stats] t=%lus aud %d.%d%% max %luus/%luus late %lu+%lu q %lu ui %luus%s%s\n",
@@ -563,6 +587,17 @@ void App::printReport() {
        static_cast<unsigned long>(xs.errors), static_cast<unsigned long>(xs.timeouts),
        static_cast<unsigned long>(xs.badCrc), static_cast<unsigned long>(xs.badLines),
        static_cast<unsigned long>(xs.overflows));
+  }
+  {
+    float raw[PotMacros::kPots];
+    if (hal_->readPots(raw)) {
+      sp("[pots] %s, macro moves %lu; positions %d %d %d %d (0..255), engaged %d%d%d%d\n",
+         pots_.enabled() ? "on" : "off", static_cast<unsigned long>(pots_.moves()), static_cast<int>(raw[0] * 255.0f),
+         static_cast<int>(raw[1] * 255.0f), static_cast<int>(raw[2] * 255.0f), static_cast<int>(raw[3] * 255.0f),
+         pots_.engaged(0), pots_.engaged(1), pots_.engaged(2), pots_.engaged(3));
+    } else {
+      sp("[pots] none\n");
+    }
   }
   sp("[led] %s; screen mirror %s, frames sent %lu; script lines %lu (overlong %lu)\n", ledModeName(led_),
      mirror_on_ ? "on" : "off", static_cast<unsigned long>(fbs_.framesSent()),

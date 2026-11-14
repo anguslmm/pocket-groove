@@ -35,6 +35,7 @@
 #include "../core/load_meter.h"
 #include "../core/led.h"
 #include "../core/pool_mirror.h"
+#include "../core/pots.h"
 #include "../core/ramfs.h"
 #include "../core/scheduler.h"
 #include "../core/serial_link.h"
@@ -85,6 +86,8 @@ class Hal {
   virtual pg::sampler::MicInput* mic() { return nullptr; }
   // /sd (stage 1, FatFS on the microSD card). nullptr: no card.
   virtual pg::FileSystem* sdCard() { return nullptr; }
+  // The four pots (stage 0 on the breadboard): 0..1 each, < 0 = no pot. false: none.
+  virtual bool readPots(float* /*out4*/) { return false; }
   virtual uint8_t batteryPercent() { return pg::ui::kBatteryUnknown; }
   virtual int batteryMillivolts() { return -1; }
 
@@ -140,6 +143,7 @@ class App {
   void setRomMissing(bool m) { romMissing_ = m; }
   float outputGainDb() const { return gainDb_; }
   bool mirroring() const { return mirror_on_; }
+  PotMacros& pots() { return pots_; }
 
   // printf to the serial port (and the boot log while booting).
   void sp(const char* fmt, ...) __attribute__((format(printf, 2, 3)));
@@ -155,6 +159,7 @@ class App {
   static void tStore(void* u, uint32_t now) { static_cast<App*>(u)->serviceStore(now); }
   static void tLed(void* u, uint32_t now) { static_cast<App*>(u)->serviceLed(now); }
   static void tStats(void* u, uint32_t now) { static_cast<App*>(u)->serviceStats(now); }
+  static void tPots(void* u, uint32_t now) { static_cast<App*>(u)->servicePots(now); }
   static uint32_t msClock(void* u) { return static_cast<App*>(u)->hal_->millis(); }
   static uint32_t usClock(void* u) { return static_cast<App*>(u)->hal_->micros(); }
 
@@ -165,6 +170,7 @@ class App {
   void serviceStore(uint32_t now);
   void serviceLed(uint32_t now);
   void serviceStats(uint32_t now);
+  void servicePots(uint32_t now);
   void serviceXfer(uint32_t now);
   void letter(char c, uint32_t now);
   void scriptLine(const char* line, uint32_t now);
@@ -197,6 +203,7 @@ class App {
   FbStream fbs_;
   Scheduler sched_;
   LoadMeter meter_;
+  PotMacros pots_;
 
   // state
   LedMode led_ = LedMode::Booting;

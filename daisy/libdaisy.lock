@@ -1,0 +1,7 @@
+# libDaisy, the Electrosmith Daisy hardware library (MIT), pinned for the Daisy target.
+# tools/daisy-setup.sh clones it into daisy/libDaisy at exactly this commit (with the
+# submodules it needs: CMSIS, the STM32H7 HAL and the USB device library) and builds
+# daisy/libDaisy/build/libdaisy.a. To move to a newer libDaisy: change the commit,
+# run tools/daisy-setup.sh, rebuild, re-run the checks in docs/DAISY.md.
+LIBDAISY_URL=https://github.com/electro-smith/libDaisy
+LIBDAISY_COMMIT=1289a000bc29dae1bc0ed4129cfa2df40ef71574
