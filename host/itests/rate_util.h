@@ -160,10 +160,12 @@ inline double centroid(const Spectrum& s, double lo = 20.0, double hi = 20000.0)
   return den > 0.0 ? num / den : 0.0;
 }
 
-// The envelope (RMS over 5 ms windows, hop 1 ms) and the time in ms from its peak to
-// the first window `dropDb` below it; -1 if it never gets there.
-inline double decayMs(const std::vector<float>& x, double fs, double dropDb, size_t from = 0) {
-  const size_t w = size_t(0.005 * fs), hop = size_t(0.001 * fs);
+// The envelope (RMS over winMs windows, hop 1 ms) and the time in ms from its peak
+// (fromStart: from its first window, at `from`) to the first window `dropDb` below
+// it; -1 if it never gets there.
+inline double decayMs(const std::vector<float>& x, double fs, double dropDb, size_t from = 0, bool fromStart = false,
+                      double winMs = 5.0) {
+  const size_t w = size_t(winMs * 0.001 * fs), hop = size_t(0.001 * fs);
   std::vector<double> env;
   for (size_t i = from; i + w <= x.size(); i += hop) {
     double s = 0.0;
@@ -171,8 +173,9 @@ inline double decayMs(const std::vector<float>& x, double fs, double dropDb, siz
     env.push_back(std::sqrt(s / double(w)));
   }
   size_t pk = 0;
-  for (size_t i = 0; i < env.size(); ++i)
-    if (env[i] > env[pk]) pk = i;
+  if (!fromStart)
+    for (size_t i = 0; i < env.size(); ++i)
+      if (env[i] > env[pk]) pk = i;
   const double thr = env.empty() ? 0.0 : env[pk] * std::pow(10.0, -dropDb / 20.0);
   for (size_t i = pk; i < env.size(); ++i)
     if (env[i] < thr) return double(i - pk) * double(hop) * 1000.0 / fs;
@@ -191,6 +194,31 @@ inline double rmsDb(const std::vector<float>& x, size_t from = 0, size_t to = si
   double s = 0.0;
   for (size_t i = from; i < to; ++i) s += double(x[i]) * double(x[i]);
   return to > from ? 10.0 * std::log10(s / double(to - from) + 1e-30) : -300.0;
+}
+
+// Time in ms from the envelope's (RMS, winMs windows, hop 1 ms) first fall below
+// fromDb under its peak to its first fall below toDb (a slope, not the attack).
+inline double fallMs(const std::vector<float>& x, double fs, double fromDb, double toDb, double winMs = 5.0) {
+  const size_t w = size_t(winMs * 0.001 * fs), hop = size_t(0.001 * fs);
+  std::vector<double> env;
+  for (size_t i = 0; i + w <= x.size(); i += hop) {
+    double s = 0.0;
+    for (size_t j = 0; j < w; ++j) s += double(x[i + j]) * double(x[i + j]);
+    env.push_back(std::sqrt(s / double(w)));
+  }
+  size_t pk = 0;
+  for (size_t i = 0; i < env.size(); ++i)
+    if (env[i] > env[pk]) pk = i;
+  long a = -1, b = -1;
+  for (size_t i = pk; i < env.size(); ++i) {
+    const double d = dB(env[i]) - dB(env[pk]);
+    if (a < 0 && d < -fromDb) a = long(i);
+    if (b < 0 && d < -toDb) {
+      b = long(i);
+      break;
+    }
+  }
+  return a >= 0 && b >= 0 ? double(b - a) * double(hop) * 1000.0 / fs : -1.0;
 }
 
 }  // namespace rt
