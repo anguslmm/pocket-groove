@@ -964,7 +964,7 @@ void Ui::keyDown(int k, bool shift) {
     }
   }
   if (step >= 0) { stepDown(k, step, shift, false); return; }
-  if (pad >= 0) { padDown(k, pad, shift); return; }
+  if (pad >= 0) { trackKeyDown(k, pad, shift); return; }
   if (note >= 0) { noteDown(k, note, shift); return; }
   switch (k) {
     case kKSemicolon: if (shift && stepSampleSlot(-1)) return; semicolonDot(1, false); return;
@@ -1155,7 +1155,7 @@ void Ui::stepUp(int k) {
 
 // ---- pads (4.3) and step-edit field selection ---------------------------------
 
-void Ui::padDown(int k, int t, bool shift) {
+void Ui::trackKeyDown(int k, int t, bool shift) {
   if (heldStep_ >= 0) {
     if (view_ == View::Groove && fieldAvailable(heldTrack_, t)) {
       // The MOTION field again on an instrument track: the next macro (its value is the one edited).
@@ -1778,6 +1778,7 @@ void Ui::runRepeat() {
 }
 
 void Ui::runTimers() {
+  pressTick();   // pad pressure that waited for its rate limit (ui_pads.cpp)
   // tilt: a hold past the tap time engages (also without input: CLASSIC's toast);
   // the handles follow the glide back for a moment after the release
   if (tilt_.down && !tilt_.cancelled && !tilt_.engaged && after(now_, tilt_.downMs + kTiltEngageMs)) tiltEngage();
