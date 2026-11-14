@@ -18,16 +18,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "i2c_bus.h"
+
 namespace pgd {
-
-class I2cBus {
- public:
-  virtual bool write(uint8_t addr, uint8_t reg, const uint8_t* data, size_t n) = 0;
-  virtual bool read(uint8_t addr, uint8_t reg, uint8_t* data, size_t n) = 0;
-
- protected:
-  ~I2cBus() = default;
-};
 
 class Bmi270 {
  public:
