@@ -19,9 +19,13 @@ PROTOTYPE HARDWARE (owner and conductor, 2026-11-14). The owner has an Erica Syn
 (breadboard, pots, output amp with headphone and line out; facts from search snippets, manual not
 read): stage 0 is the Seed3 on the Labor, codec line out into the Labor's amp, pots from the
 Seed's own 3V3 (the Labor's rails are +-12 V and will destroy the Seed). The Labor Scope is a
-self-contained oscilloscope, not a display we can drive. Parts as of today: screen Adafruit 6113
-(same 240x135 ST7789 panel as the Cardputer; no reset pin, no card slot; replaces the 4383),
-microSD Adafruit 4682 on SDMMC (the only card slot), tilt SparkFun BMI270 Qwiic board (on a lead:
+self-contained oscilloscope, not a display we can drive. Parts as of today: screen Adafruit 2090
+(2.8" 320x240, ILI9341 over SPI, FT6206 capacitive touch on I2C; owner: "the goal is to experiment
+and build an initial prototype, not pick final hardware", so not the Cardputer's 240x135 panel;
+the 3.5" 480x320 capacitive 5846 was out of stock; the current UI shows at 1x with a border until
+it is redrawn for 320x240; the panel and its size are target configuration, never constants),
+4 square force sensors Adafruit 1075 for the first pad experiment,
+microSD Adafruit 4682 on SDMMC (the only card slot; the one on the screen board is SPI, unused), tilt SparkFun BMI270 Qwiic board (on a lead:
 the first accessory). Dropped: the MAX9814 mic board (its automatic gain is wrong for sampling;
 use an analog MEMS capsule at fixed gain into the codec input, part not chosen; the Cardputer's
 mic is a 65 dB SNR MEMS capsule and the owner likes it). ON HOLD, OWNER'S DECISION: the key
