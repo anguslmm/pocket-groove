@@ -6,8 +6,8 @@
 //   loopOnce()        forever, from the main loop (no operating system: this is the
 //                     cooperative scheduler, daisy/core/scheduler.h)
 //   render()          from the audio callback (the interrupt): the pads' scan, the
-//                     line input into its ring, Instrument::process and the load
-//                     meter, nothing else
+//                     line input into its ring, Instrument::processFloat, the output
+//                     level and the load meter, nothing else
 // The same single-writer contract as the Cardputer and the desktop: the main loop
 // changes the engine only through Engine::post (the UI does), and the audio
 // interrupt is the only code that runs the engine.
@@ -76,8 +76,6 @@ class Hal {
   // 'B' + 'y': into the Daisy bootloader (DFU) for flashing; 'R' + 'y': a reset.
   virtual void restart(bool intoBootloader) = 0;
 
-  // Output level (the codec's line out has no analog volume in libDaisy: digital).
-  virtual void setOutputGain(float linear) = 0;
   virtual bool audioRunning() = 0;
   virtual uint32_t sampleRate() = 0;
   virtual uint32_t blockFrames() = 0;
@@ -164,10 +162,14 @@ class App {
  public:
   void boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg);
   void loopOnce();
-  // Audio interrupt: frames (a multiple of 16) of interleaved stereo int16; in: the
-  // codec's input block (interleaved stereo float), nullptr when there is none. Also
-  // scans the pads (Hal::readPads), before the engine runs.
-  void render(int16_t* out, int frames, const float* in = nullptr);
+  // Audio interrupt: frames (a multiple of 16) of interleaved stereo float for the
+  // codec, +-1.0 full scale: the engine's full-resolution output
+  // (Instrument::processFloat) times the output level, clamped to +-1.0 (only a level
+  // above 0 dB can reach it: the engine's limiter keeps its own output within +-1).
+  // No 16-bit step on the way: the codec's 24 bits get the mix as the master made
+  // it. in: the codec's input block (interleaved stereo float), nullptr when there
+  // is none. Also scans the pads (Hal::readPads), before the engine runs.
+  void render(float* out, int frames, const float* in = nullptr);
 
   pg::Instrument& instrument() { return inst_; }
   pg::ui::Ui& ui() { return ui_; }
@@ -182,6 +184,9 @@ class App {
   LedMode ledMode() const { return led_; }
   void setRomMissing(bool m) { romMissing_ = m; }
   float outputGainDb() const { return gainDb_; }
+  // The output level (the codec's line out has no analog volume in libDaisy, so it is
+  // digital: render() applies it in float). -40 .. +6 dB; G0 + '-' / '=' steps it.
+  void setOutputGainDb(float db);
   bool mirroring() const { return mirror_on_; }
   PotMacros& pots() { return pots_; }
   PadScanner& pads() { return pads_; }
@@ -191,7 +196,8 @@ class App {
   uint32_t padUps() const { return padUps_; }
   uint32_t padPressures() const { return padPressures_; }   // handed to the UI (after merging)
   uint32_t pointerEvents() const { return pointerEvents_; }
-  // The largest |sample| of the output since the last report (or the last call), 0..32768.
+  // The largest |sample| of the output (after the output level) since the last report
+  // (or the last call), on a 0..32767 scale.
   uint32_t takeOutputPeak() { return outPeak_.exchange(0, std::memory_order_relaxed); }
 
   // printf to the serial port (and the boot log while booting).
@@ -241,7 +247,6 @@ class App {
     ++a->injected_;
     a->handleKey(e, a->hal_->millis());
   }
-  void setGainDb(float db);
   void writeRaw(const char* p, size_t n);
 
   Hal* hal_ = nullptr;
@@ -279,6 +284,7 @@ class App {
   bool g0Held_ = false, g0UsedForGain_ = false;
   uint64_t swallow_ = 0;
   float gainDb_ = 0.0f;
+  volatile float gain_ = 1.0f;        // render()'s output level (linear), from setOutputGainDb
   char pending_ = 0;                // 'B' or 'R' waiting for 'y'
   uint32_t pendingMs_ = 0;
   uint32_t injected_ = 0, physical_ = 0;

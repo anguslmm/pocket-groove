@@ -50,11 +50,11 @@ void App::sp(const char* fmt, ...) {
   if (n > 0) writeRaw(buf, static_cast<size_t>(n) < sizeof(buf) ? static_cast<size_t>(n) : sizeof(buf) - 1);
 }
 
-void App::setGainDb(float db) {
+void App::setOutputGainDb(float db) {
   if (db < kGainMinDb) db = kGainMinDb;
   if (db > kGainMaxDb) db = kGainMaxDb;
   gainDb_ = db;
-  hal_->setOutputGain(powf(10.0f, db / 20.0f));
+  gain_ = powf(10.0f, db / 20.0f);
 }
 
 // ---- boot ------------------------------------------------------------------------------
@@ -147,7 +147,7 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
 
   meter_.configure(hal.cpuHz(), static_cast<uint32_t>(static_cast<uint64_t>(hal.cpuHz()) * hal.blockFrames() /
                                                       (hal.sampleRate() ? hal.sampleRate() : 48000u)));
-  setGainDb(gainDb_);
+  setOutputGainDb(gainDb_);
   if (cfg.autoplay) {
     pg::Command c{};
     c.type = pg::CmdType::Play;
@@ -176,7 +176,7 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
   logging_ = false;
 }
 
-void App::render(int16_t* out, int frames, const float* in) {
+void App::render(float* out, int frames, const float* in) {
   meter_.begin(hal_->cycles());
   // The pads first: one scan per block, so the scan interval is the block's and
   // never waits for the main loop (pads.h LATENCY).
@@ -186,14 +186,20 @@ void App::render(int16_t* out, int frames, const float* in) {
     padsSeen_ = true;
   }
   if (in) lineMic_.audioIn(in, frames);
-  inst_.process(out, frames);
-  int pk = 0;
+  inst_.processFloat(out, frames);
+  // The output level in float, on the engine's full-resolution output: the codec's
+  // conversion (libDaisy: x 2^23, clamped to 0.999985) is the only rounding after it.
+  const float g = gain_;
+  float pk = 0.0f;
   for (int i = 0; i < 2 * frames; ++i) {
-    const int a = out[i] < 0 ? -out[i] : out[i];
+    float y = out[i] * g;
+    y = y > 1.0f ? 1.0f : (y < -1.0f ? -1.0f : y);
+    out[i] = y;
+    const float a = y < 0.0f ? -y : y;
     pk = a > pk ? a : pk;
   }
-  if (static_cast<uint32_t>(pk) > outPeak_.load(std::memory_order_relaxed))
-    outPeak_.store(static_cast<uint32_t>(pk), std::memory_order_relaxed);
+  const uint32_t pk16 = static_cast<uint32_t>(pk * 32767.0f + 0.5f);
+  if (pk16 > outPeak_.load(std::memory_order_relaxed)) outPeak_.store(pk16, std::memory_order_relaxed);
   meter_.end(hal_->cycles());
 }
 
@@ -247,7 +253,7 @@ void App::handleKey(const pg::KeyEvent& e, uint32_t now) {
     }
     g0UsedForGain_ = true;
     swallow_ |= bit;
-    setGainDb(gainDb_ + (k == kKEquals ? kGainStepDb : -kGainStepDb));
+    setOutputGainDb(gainDb_ + (k == kKEquals ? kGainStepDb : -kGainStepDb));
     char t[32];
     std::snprintf(t, sizeof(t), "OUTPUT %+d DB", static_cast<int>(lrintf(gainDb_)));
     ui_.notify(t);
