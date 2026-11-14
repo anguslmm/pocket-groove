@@ -1,4 +1,20 @@
-# Work state (2026-11-13)
+# Work state (2026-11-14)
+
+DIRECTION (owner, 2026-11-14): THE TARGET IS A PURPOSE-MADE DEVICE ON AN ELECTROSMITH DAISY SEED
+(STM32H750, 480 MHz, 64 MB SDRAM, PCM3060 / TAC5242 stereo codec, 48 kHz). The Cardputer is no
+longer the product (owner: the M-VAVE FM-1 class replaces it and its headphone output is noisy and
+mono); it stays as the development device and must keep building. The port itself "means nothing,
+it is a technical step that opens doors": better and more complex engines, more sophisticated
+sampling, an OP-1-style digital tape, instruments and engines designed with AI. Prototype: Seed3
+(65 MB, with headers) on a breadboard first, Seed2 DFM on a carrier board later. Feasibility
+study (2026-11-14, facts from libDaisy source at commit 1289a00 and search snippets, official
+sites not reachable from the sandbox): no 44.1 kHz (48 kHz), no USB audio class in libDaisy
+(CDC or MIDI only), bare metal single core, BOOT_SRAM app limit 480 KB (ROM sounds and big tables
+must live in QSPI / SDRAM), line-level output needs a headphone amp (TPA6132 board), 64 MB at
+48 kHz mono 16-bit is about 11 minutes of sample memory, audio load estimated 10-17 % of the
+core. Estimated unit cost at 500 with the module: $90-125, so a $249-299 product. Work started:
+(1) the core at 48 kHz and rate-clean, (2) a Daisy target that builds in the sandbox.
+
 
 v0.1 complete and host-verified: 55/55 host tests pass; both firmware envs build clean.
 Nothing has run on real hardware yet. Waiting on the user for: smoke-test report
