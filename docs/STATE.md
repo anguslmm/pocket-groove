@@ -15,7 +15,24 @@ must live in QSPI / SDRAM), line-level output needs a headphone amp (TPA6132 boa
 core. Estimated unit cost at 500 with the module: $90-125, so a $249-299 product. Work started:
 (1) the core at 48 kHz and rate-clean, (2) a Daisy target that builds in the sandbox.
 
-The core at 48 kHz (2026-11-14, branch of the rate-48k worktree): 48 kHz is a first-class rate
+PROTOTYPE HARDWARE (owner and conductor, 2026-11-14). The owner has an Erica Synths EDU DIY Labor
+(breadboard, pots, output amp with headphone and line out; facts from search snippets, manual not
+read): stage 0 is the Seed3 on the Labor, codec line out into the Labor's amp, pots from the
+Seed's own 3V3 (the Labor's rails are +-12 V and will destroy the Seed). The Labor Scope is a
+self-contained oscilloscope, not a display we can drive. Parts as of today: screen Adafruit 6113
+(same 240x135 ST7789 panel as the Cardputer; no reset pin, no card slot; replaces the 4383),
+microSD Adafruit 4682 on SDMMC (the only card slot), tilt SparkFun BMI270 Qwiic board (on a lead:
+the first accessory). Dropped: the MAX9814 mic board (its automatic gain is wrong for sampling;
+use an analog MEMS capsule at fixed gain into the codec input, part not chosen; the Cardputer's
+mic is a 65 dB SNR MEMS capsule and the owner likes it). ON HOLD, OWNER'S DECISION: the key
+layout. The owner wants velocity-sensitive rubber pads ("playing the drums and synths feels WAY
+better on rubber pads"); do not buy or wire the 56-key matrix. Likely shape: 16 pads on force
+sensors (one ADC input each, through a 16:1 multiplexer) plus function buttons; pressure on a
+held pad can drive a macro. The core needs a velocity per note for this (today a step has only
+the accent flag): engine, sequencer and song file, to be done with the pads, not before. The
+breakout boards are for the prototype only; a product carries the same chips on its own board.
+
+The core at 48 kHz (2026-11-14, merged to main as 9e12a5d): 48 kHz is a first-class rate
 (docs/ARCHITECTURE.md "Sample rates"); 44.1 and 32 kHz bit-identical (itest_golden unchanged).
 Host-verified (101/101; new itest_rate48, itest_rate48_record, itest_golden48, macro_audit_48k),
 Cardputer firmware builds clean with its static RAM unchanged. Entry "48 KHZ CORE BUILT" below.
