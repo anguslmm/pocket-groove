@@ -25,6 +25,11 @@ Model v2 (2026-11-13) changed five sets to use its new features, so marks on the
 | KEYS | lead/keys.pgm | Morph | three patches on the pad: organ, pulse pluck, FM bell (native morph; top right mixes pluck and bell) | PLUCK BELL (was OR-PLK BELL) | chords, sweep slowly round the pad |
 | VOYAGE | lead/voyage.pgm | Journey | TRIP goes FLUTE > SAW LEAD > HOLLOW BP > SUPERSAW > FM METAL; every wave jump now covered by osc 2 | TRIP GRIT SPACE | hold a chord, walk TRIP over eight bars |
 | SWAP | lead/swap.pgm | Odd | stepped: six whole leads, six parallel intervals; WARP is dull alone, wild on the FM / organ / bell steps | FLAV INTV WARP | click on the beat; then WARP with FLAV past the middle |
+| PLUCK | lead/pluck.pgm | Gesture (sampler) | the sample struck like a key: a one-shot from one start point, the strike's tone and length are the macros | TONE LENGTH START SNAP | chord mode AUTO, TONE x LENGTH; a line with slides |
+| CLOUD | lead/cloud.pgm | Movement (sampler) | the sample as a pad: a held note loops a window forward and backward; SCAN walks the window through the sample while chords hold | SCAN SPAN SWELL SHADE | hold a chord and tilt SCAN; SPAN low for a buzzing drone |
+| REEL | lead/reel.pgm | Material (sampler) | the sample on worn tape: one slow pitch drift for every note, a crushed dull copy, held loops | WOW WORN HOLD ECHO | a slow line, WOW x WORN; chords with HOLD up |
+
+The three sampler sets play the track's sample slot from the keyboard (`voice lead sampler`, docs/MACROLAB.md "The melodic sampler"): note C3 (the first note key at the lead's default octave) plays the sample as recorded, up to four notes at once.
 
 ## Kick
 

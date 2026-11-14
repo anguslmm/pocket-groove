@@ -444,6 +444,43 @@ void testSilentAndGen() {
   check(g.v.soundingNotes() == 0, "replaced slot fades the note");
 }
 
+// The ESP32-S3's FPU is slow on subnormal operands: no output sample and no tail may be one.
+void testSubnormal() {
+  std::printf("subnormal\n");
+  std::vector<int16_t> s = sine(300.0f, 30000);
+  for (int cfg = 0; cfg < 4; ++cfg) {
+    Rig g;
+    g.pool.set(0, s.data(), 30000, "s");
+    g.set(kLoop, cfg & 1);
+    g.set(kCutoff, 60);
+    g.set(kReso, 100);
+    g.set(kEnvAmt, 60);
+    g.set(kDrift, 90);
+    if (cfg & 2) {
+      g.set(kBits, 70);
+      g.set(kDown, 50);
+      g.set(kDrive, 40);
+    }
+    g.set(kRelease, 90);
+    std::vector<float> o;
+    g.on(48, 127, 3);
+    g.run(400, o);
+    g.off(48);
+    int q = 0;
+    while (g.v.active() && q < 200000) {
+      g.run(1, o);
+      ++q;
+    }
+    bool sub = false;
+    for (size_t i = 0; i < o.size(); ++i)
+      if (o[i] != 0.0f && std::fpclassify(o[i]) == FP_SUBNORMAL) {
+        if (!sub) std::printf("    first subnormal at %zu of %zu: %g (prev %g)\n", i, o.size(), double(o[i]), double(o[i - 1]));
+        sub = true;
+      }
+    check(!sub && !g.v.active(), "no subnormal output, the tail ends", cfg, q);
+  }
+}
+
 double benchOne(int notes, bool worst) {
   std::vector<int16_t> s = sine(300.0f, kSlotMaxSamples);
   Rig g;
@@ -509,6 +546,7 @@ int main(int argc, char** argv) {
   testBounds();
   testFine();
   testSilentAndGen();
+  testSubnormal();
   bench();
   std::printf("\n%d passed, %d failed\n", g_pass, g_fail);
   return g_fail ? 1 : 0;

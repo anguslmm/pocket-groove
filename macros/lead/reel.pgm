@@ -1,0 +1,38 @@
+# REEL -- family: MATERIAL (sampler).
+# Idea: the sample on worn tape. The pitch wanders like a stretched cassette
+# (one slow drift shared by every note), the copy gets crushed and dull, and
+# the notes hold on a loop so the wobble has time to be heard.
+#   WOW     steady .. seasick: the depth and the speed of the pitch drift
+#   WORN    a clean copy .. a crushed, dull, saturated one
+#   HOLD    a short note .. a long held one with a tail
+#   ECHO    dry .. sent to the delay and the reverb
+# Feel if it works: a simple line sounds like it was played off an old tape;
+# WOW up on a held chord and the chord sways in tune with itself.
+# Try: a slow line, WOW on X, WORN on Y; chords with HOLD up.
+voice lead sampler
+name REEL
+about "The sample on a worn tape."
+tilt x WOW
+tilt y WORN
+base loop=pong start=8 length=70 attack=6 decay=70 sustain=90 filter=lp glide=56
+
+macro WOW 0.35 "STEADY" "SEASICK" "the pitch drift's depth and speed"
+  drift    0:0 0.35:60 1:127
+  drat     0:30 0.35:44 1:78
+
+macro WORN 0.3 "CLEAN" "WORN" "a clean copy .. crushed and dull"
+  bits     0:0 0.3:16 1:76
+  down     0:0 0.3:12 1:58
+  cutoff   0:124 0.3:96 1:56
+  drive    0:0 1:36
+  lvl      0:100 1:92
+
+macro HOLD 0.5 "SHORT" "HELD" "a short note .. a held one with a tail"
+  decay    0:24 0.5:70 1:110
+  sustain  0:0 0.5:90 1:110
+  release  0:24 0.5:56 1:96
+  trim     0:4 0.25:2 0.5:0 1:-1
+
+macro ECHO 0 "DRY" "ECHO" "dry .. delay and reverb"
+  dly      0:0 0.4:50 1:80
+  rev      0:6 0.4:34 1:56

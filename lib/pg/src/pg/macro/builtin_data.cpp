@@ -9,7 +9,7 @@ namespace pg {
 namespace macro {
 namespace detail {
 
-extern const int kBuiltinCount = 28;
+extern const int kBuiltinCount = 31;
 
 extern const MacroSet kBuiltin[] = {
     // kick/boom.pgm
@@ -607,7 +607,71 @@ extern const MacroSet kBuiltin[] = {
       0x057e414du, 0x03e801f4u, 0x061a829bu, 0x05dc0341u, 0x030d4000u, 0x013880a7u, 0x057e414du, 0x01d4c1f4u,
       0x06b6c29bu, 0x00dac341u, 0x0639c000u, 0x065900a7u, 0x05dc014du, 0x065901f4u, 0x05dc029bu, 0x06590341u,
       0x01770000u, 0x01e460a7u, 0x0232814du, 0x01c521f4u, 0x01a5e29bu, 0x00bb8341u, 0x030d4000u, 0x03e800a7u,
-      0x00000000u, 0x02af812cu, 0x04e203e8u, 0x00000000u, 0x06b6c3e8u, 0x0445c000u, 0x067843e8u}}
+      0x00000000u, 0x02af812cu, 0x04e203e8u, 0x00000000u, 0x06b6c3e8u, 0x0445c000u, 0x067843e8u}},
+    // lead/pluck.pgm
+    {7, 4, 13, 41, 0, 0, 0, 2,
+     {0x90, 0x91},   // tilt x, y
+     0x22c6, "PLUCK",
+     "family: GESTURE (sampler).",
+     "The sample struck like a key.", 1,   // voice kind
+     0x00006e40u, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 44, 40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"TONE", "DARK", "BRIGHT", "a dark thud .. a bright snap", 500, 0, 4},
+      {"LENGTH", "SHORT", "RING", "a short pluck .. a ringing key", 400, 4, 4},
+      {"START", "HEAD", "MIDDLE", "where in the sample a note starts", 0, 8, 1},
+      {"SNAP", "SOFT", "HARD", "a soft touch .. a hard, driven strike", 300, 9, 4}},
+     {},
+     {},
+     {{1, 255, 0, 21, 3}, {3, 255, 0, 38, 3}},
+     {{4, 112, 0, 3}, {12, 112, 3, 3}, {5, 112, 6, 2}, {13, 112, 8, 2}, {8, 112, 10, 3}, {9, 112, 13, 3}, {7, 112, 16, 2}, {1, 112, 18, 3},
+      {0, 112, 24, 2}, {6, 112, 26, 3}, {18, 112, 29, 3}, {12, 113, 32, 3}, {5, 113, 35, 3}},
+     {},
+     {0x030d4000u, 0x0445c1f4u, 0x061a83e8u, 0x01194000u, 0x027101f4u, 0x03c8c3e8u, 0x007d0000u, 0x021343e8u,
+      0x01d4c000u, 0x03a983e8u, 0x0157c000u, 0x03c8c1f4u, 0x065903e8u, 0x00000000u, 0x00000258u, 0x03e803e8u,
+      0x00fa0000u, 0x046503e8u, 0x02710000u, 0x061a81f4u, 0x07c063e8u, 0x002ee000u, 0x000001f4u, 0xffc183e8u,
+      0x00000000u, 0x03e803e8u, 0x01388000u, 0x001f412cu, 0x000003e8u, 0x00000000u, 0x005dc12cu, 0x05dc03e8u,
+      0xffa24000u, 0x0000012cu, 0x017703e8u, 0x00000000u, 0x0000012cu, 0x017703e8u, 0x001f4000u, 0x0000012cu,
+      0xff7363e8u}},
+    // lead/cloud.pgm
+    {7, 4, 8, 24, 0, 0, 0, 1,
+     {0xb0, 0x93},   // tilt x, y
+     0x1d5c, "CLOUD",
+     "family: MOVEMENT (sampler).",
+     "The sample held as a slow pad.", 1,   // voice kind
+     0x00004f20u, {0, 0, 0, 0, 0, 12, 0, 0, 90, 112, 1, 0, 0, 0, 64, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"SCAN", "HEAD", "TAIL", "where the loop sits in the sample", 150, 0, 1},
+      {"SPAN", "TIGHT", "WIDE", "a grainy buzz .. a slow sway", 500, 1, 1},
+      {"SWELL", "SOFT", "SLOW", "a quick swell .. a slow fade in", 400, 2, 2},
+      {"SHADE", "DARK", "OPEN", "dark and close .. open, in reverb", 600, 4, 4}},
+     {},
+     {},
+     {{2, 255, 0, 10, 4}},
+     {{0, 112, 0, 2}, {1, 112, 2, 3}, {6, 112, 5, 3}, {7, 112, 8, 2}, {4, 112, 14, 3}, {5, 112, 17, 2}, {27, 112, 19, 2}, {24, 112, 21, 3}},
+     {},
+     {0x005dc000u, 0x065903e8u, 0x007d0000u, 0x023281f4u, 0x052083e8u, 0x02710000u, 0x04e201f4u, 0x065903e8u,
+      0x032c8000u, 0x065903e8u, 0x00000000u, 0x000001f4u, 0x001f42eeu, 0x004e23e8u, 0x0251c000u, 0x059d8258u,
+      0x077243e8u, 0x01388000u, 0x007d03e8u, 0x009c4000u, 0x03a983e8u, 0x06978000u, 0x061a8258u, 0x05dc03e8u}},
+    // lead/reel.pgm
+    {7, 4, 12, 38, 0, 0, 0, 1,
+     {0x90, 0x91},   // tilt x, y
+     0xcdfb, "REEL",
+     "family: MATERIAL (sampler).",
+     "The sample on a worn tape.", 1,   // voice kind
+     0x00004f43u, {8, 70, 0, 0, 0, 0, 6, 0, 70, 90, 1, 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+     {{"WOW", "STEADY", "SEASICK", "the pitch drift's depth and speed", 350, 0, 2},
+      {"WORN", "CLEAN", "WORN", "a clean copy .. crushed and dull", 300, 2, 5},
+      {"HOLD", "SHORT", "HELD", "a short note .. a held one with a tail", 500, 7, 3},
+      {"ECHO", "DRY", "ECHO", "dry .. delay and reverb", 0, 10, 2}},
+     {},
+     {},
+     {{2, 255, 0, 28, 4}},
+     {{19, 112, 0, 3}, {20, 112, 3, 3}, {16, 112, 6, 3}, {17, 112, 9, 3}, {4, 112, 12, 3}, {18, 112, 15, 2}, {24, 112, 17, 2}, {8, 112, 19, 3},
+      {9, 112, 22, 3}, {7, 112, 25, 3}, {26, 112, 32, 3}, {27, 112, 35, 3}},
+     {},
+     {0x00000000u, 0x03a9815eu, 0x07c063e8u, 0x01d4c000u, 0x02af815eu, 0x04c2c3e8u, 0x00000000u, 0x00fa012cu,
+      0x04a383e8u, 0x00000000u, 0x00bb812cu, 0x038a43e8u, 0x07918000u, 0x05dc012cu, 0x036b03e8u, 0x00000000u,
+      0x023283e8u, 0x061a8000u, 0x059d83e8u, 0x01770000u, 0x0445c1f4u, 0x06b6c3e8u, 0x00000000u, 0x057e41f4u,
+      0x06b6c3e8u, 0x01770000u, 0x036b01f4u, 0x05dc03e8u, 0x003e8000u, 0x001f40fau, 0x000001f4u, 0xfff063e8u,
+      0x00000000u, 0x030d4190u, 0x04e203e8u, 0x005dc000u, 0x02134190u, 0x036b03e8u}}
 };
 
 }  // namespace detail

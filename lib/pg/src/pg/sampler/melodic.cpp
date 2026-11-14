@@ -351,6 +351,7 @@ void MelodicSampler::renderNote(Note& n, float* acc) {
       break;
     case sDecay:
       env1 = sus_ + (env1 - sus_) * decCoefQ_;
+      if (env1 < kSilentEnv && sus_ < kSilentEnv) { env1 = 0.0f; ends = true; }   // decayed away while held
       break;
     case sRelease:
       env1 *= relCoefQ_;
@@ -503,6 +504,10 @@ void MelodicSampler::render(float* outL, float* outR, int frames) {
   }
   r += residNext_;
   residNext_ = 0.0f;
+  // a filter ringing on a crushed (zero) input decays into the subnormal range, which
+  // the ESP32-S3's FPU is slow on: flush what is far below hearing
+  if (absf(s1_) < 1.0e-15f) s1_ = 0.0f;
+  if (absf(s2_) < 1.0e-15f) s2_ = 0.0f;
   resid_ = absf(r) < 1.0e-7f ? 0.0f : r;
   for (int i = 0; i < frames; ++i) outR[i] = outL[i];
   bool sounding = false;
