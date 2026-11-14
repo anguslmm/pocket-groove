@@ -46,14 +46,53 @@ use your own build directory (`build/<yourname>`), and don't "fix" files you don
 * Audio is rendered in quanta of `kQuantum` = 16 frames. Parameters, envelopes' segment
   changes, filter coefficients and note events update at most once per quantum; inner
   loops over the 16 frames should be tight and branch-light.
-* Sample rate is a runtime value passed to `init` (44100 default; 32000 must also work).
-  Derive every time constant and frequency from it.
+* Sample rate is a runtime value passed to `init` (44100 default; 32000 and 48000 must
+  also work: "Sample rates" below). Derive every time constant and frequency from it.
 * All state must be safe against NaN/inf: clamp filter cutoffs below Nyquist, clamp
   feedback/resonance to stable ranges at every parameter extreme. A test must sweep
   every param to min and max and assert the output stays finite and bounded.
 * Every user parameter is a `uint8_t` described by a `ParamInfo`. Put musically useful
   curves behind them (exponential for frequency and time), so that every position of
   every knob produces a usable sound and defaults sound good with zero tweaking.
+
+## Sample rates
+
+The core runs at whatever rate `Engine::init` / `Instrument::init` is given. Three are
+tested: **44.1 kHz** (the Cardputer, the reference: `itest_golden`), **32 kHz** (the
+Cardputer's USB fallback) and **48 kHz** (the Daisy Seed, which has no 44.1:
+`itest_rate48`, `itest_rate48_record`, `itest_golden48`, ctest `macro_audit_48k`).
+44.1 and 32 kHz are bit-identical to what they were before 48 kHz was added.
+
+What depends on the rate, and how:
+
+| Part | How it follows the rate |
+|---|---|
+| Voices (bass, lead, drums, both samplers) | Every frequency and time constant from `init(fs)`: phase increments, filter coefficients, envelope coefficients (per quantum: `fs / kQuantum`), fades, LFOs. Measured at 48 kHz: pitch within 0.8 cents of the note, 48 vs 44.1 within 0.01 cents (synths) / 6 cents (drum attacks); envelope times within 0.6 %. |
+| Lead wavetables | One table set per Nyquist: `tablesFor(fs)` gives the 44.1 kHz set at fs >= 44100 (also at 48 kHz: band-limited to 0.49 x 44.1 kHz = 21.6 kHz, so nothing aliases at 48; the 21.6 .. 23.5 kHz partials the 48 kHz Nyquist would allow are left out, inaudible). The 32 kHz set below. No 48 kHz set: 0 bytes of flash. |
+| Sequencer | Step length `fs * 15 / BPM` in Q24 samples, events on quantum edges: a bar line is within one quantum (0.33 ms at 48 kHz) of the exact grid and never drifts; swing in the same units. |
+| Control rate | Quanta of 16 frames: 0.33 ms at 48 kHz, 0.36 at 44.1. The macro control rate (`kFineQuanta`, `kFineEvalQuanta`) is in quanta, so it is 8 % faster at 48 kHz (1.33 / 10.7 ms instead of 1.45 / 11.6): the interpolation between evaluations is finer, nothing else changes. Times in ms (`kMacroRampMs`, `kMacroSettleMs`, SetMacroOffset's ramp, the ducker, the 4 ms mixer smoothing) are converted with the rate. The explicit ramp of `setMacroCommand(..., rampQuanta)` is in quanta (only tests and tools pass one). |
+| Delay | Runs at fs / 2. Its line is 0.75 s at every rate up to `PG_MAX_SAMPLE_RATE` (config.h; default 48000: 18,014 half-rate samples = 36 KB; the Cardputer builds with 44100: 16,552 = 33 KB, exactly the old line, and at 32 kHz the same buffer gives 1.03 s as before). Tempo-synced times are exact; what is halved to fit is halved at the same tempos at 44.1 and 48. |
+| Reverb | Runs at fs / 2; every line scales with fs / 44.1 kHz (each rounded to a prime) up to the pool's size for `PG_MAX_SAMPLE_RATE` (14,710 samples = 29.4 KB at 48 kHz, 13,452 = 26.9 KB at 44.1). The room is the same size in seconds at 32, 44.1 and 48 kHz (610.1 / 612.9 ms of lines at 44.1 / 48); RT60 comes from the line lengths in seconds. The modes sit on slightly different frequencies (prime rounding), measured decay to -30 dB 3.5 % shorter at 48. |
+| Master, ducker, scope | From the rate at init (the scope's `ScopeInfo::sampleRate`, its decimation chosen from it). |
+| Sample pool | A slot's header carries its rate (8 .. 96 kHz accepted); the samplers play a sample at header rate / engine rate, so a 22,050, 44,100 or 48,000 Hz sample (and the 22,050 Hz ROM sounds, `kRomRate`) plays at its natural pitch on an engine at any rate. Slice positions, the 10 ms minimum region and the sampler's DOWN (a hold rate in Hz) are in the sample's or the engine's own units. |
+| Recording | `RecRates {in, out}` (recorder.h), a property of the platform and its pool: the half-band decimator runs only when out = in / 2. The Cardputer: 44,100 in, 22,050 stored (unchanged). A platform with sample memory to spare stores at its input rate (the Daisy: 48,000 in and stored, 64 MB = ~11 min mono); `recRatesFor(in, poolRate)` picks: half when that is the pool's rate, else the input rate. Settle, window, pre-roll, tail and the meter are in ms. Resampling uses the same rates: at 48 -> 48 a bar of N frames is N samples, the engine's own mono output bit for bit. |
+
+What is audibly different at 48 kHz (measured on the host; nobody has listened):
+the hats' six-square metal bank is not band-limited, so its aliases fold to other
+frequencies (their strongest peaks move by up to 34 cents; centroid +1 %, level
+-0.3 dB in the demos); noise sources (snare, clap, hats, shaker) gain the 22 .. 24 kHz
+band (centroids +3 .. 6 %, inaudible content). The demos' mixes are within 0.1 dB and
+2 % of centroid of 44.1 kHz (`demo_compare --rates 44100 48000 --song`); every built-in
+instrument's mean loudness over its macro space is within 0.6 dB (`macro_audit --rate`).
+
+Buffers that grow with `PG_MAX_SAMPLE_RATE` (engine state, `.bss`): delay line 33.1 ->
+36.1 KB, reverb pool 26.9 -> 29.4 KB (79.5 KB of engine state on the host at 48000).
+Above `PG_MAX_SAMPLE_RATE` the engine still runs, with a shorter delay line and reverb.
+
+Program placement (`table_attr.h`): `PG_TABLE_ATTR` marks the hot DSP tables (lead
+wavetables, bass sine and BLEP), `PG_BULK_ATTR` the big cold data (the ROM sounds, the
+built-in instrument library). Both empty by default; a platform defines them as section
+attributes to place the data (docs/STATE.md lists the sizes, measured on Cortex-M7).
 
 ## CPU budget (per sample at 44.1 kHz, ESP32-S3 @ 240 MHz = ~5400 cycles)
 

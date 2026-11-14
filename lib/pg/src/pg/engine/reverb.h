@@ -68,7 +68,7 @@ class Reverb {
   static constexpr int kNumLines = 8;
   static constexpr float kScale = 16384.0f;
   // int16 samples: exactly what the prime-rounded lengths need at PG_MAX_SAMPLE_RATE
-  // (13,452 = 26.9 KB at 44.1 kHz, the Cardputer's; 14,640 = 29.3 KB at 48 kHz).
+  // (13,452 = 26.9 KB at 44.1 kHz, the Cardputer's; 14,710 = 29.4 KB at 48 kHz).
   static constexpr int kPoolLen = reverb_len::poolFor(reverb_len::kMaxScale);
 
   void init(float halfRate);

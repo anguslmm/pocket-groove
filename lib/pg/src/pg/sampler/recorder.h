@@ -34,8 +34,8 @@
 // The level is made right at playback (sample_format.h setPlaybackGain): nothing here
 // scales the signal, so nothing has to be rewritten once the peak is known.
 //
-// Portable C++17, no heap: the device allocates a Recorder (about 6.2 KB: the
-// pre-roll ring has room for 40 ms at 48 kHz) only while it records.
+// Portable C++17, no heap: the device allocates a Recorder (about 4.2 KB; 6.2 KB built for
+// 48 kHz, where the pre-roll ring holds 40 ms at 48 kHz) only while it records.
 #pragma once
 #include <atomic>
 #include <cstdint>
@@ -49,7 +49,11 @@ namespace sampler {
 // the slot stores (its header's rate). Valid: out == in (stored as it comes) or
 // out == in / 2 (the half-band), out within kMinRate..kMaxStoredRate.
 struct RecRates {
-  static constexpr uint32_t kMaxStoredRate = 48000;   // the pre-roll ring's size
+  // The highest stored rate the pre-roll ring has room for: PG_MAX_SAMPLE_RATE (config.h),
+  // or half of it on a platform built for 44.1 kHz (the Cardputer stores 22,050: its
+  // Recorder keeps the 1024-sample ring it always had).
+  static constexpr uint32_t kMaxStoredRate =
+      kMaxSampleRate > 44100 ? uint32_t(kMaxSampleRate) : uint32_t(kMaxSampleRate) / 2;
   uint32_t in = 44100;
   uint32_t out = kPoolRate;
   constexpr bool valid() const { return out >= kMinRate && out <= kMaxStoredRate && (in == out || in == 2 * out); }
@@ -64,6 +68,7 @@ constexpr RecRates recRatesFor(uint32_t inRate, uint32_t poolRate) {
 
 // A time in samples at `rate` (rounded down, as the recorder always counted).
 constexpr uint32_t recSamples(uint32_t rate, uint32_t ms) { return rate * ms / 1000; }
+constexpr uint32_t recPow2(uint32_t n) { return n <= 1 ? 1u : 2u * recPow2((n + 1) / 2); }
 
 // 2:1 decimation (44.1 kHz -> 22.05 kHz on the Cardputer): two samples in, one out.
 class HalfBand {
@@ -136,7 +141,9 @@ class Recorder {
   static constexpr uint16_t kThrMax = 3300;   // -19.9 dBFS: a loud one (the groove on the speaker)
   static constexpr float kThrOverFloor = 10.0f;   // +20 dB over the floor's RMS
   static constexpr int kStage = 256;          // samples per sink write (512 bytes)
-  static constexpr int kRing = 2048;          // the pre-roll ring (power of two >= the pre-roll at kMaxStoredRate)
+  // the pre-roll ring: a power of two >= the pre-roll at kMaxStoredRate (1024 on the
+  // Cardputer, 2048 at 48 kHz)
+  static constexpr int kRing = int(recPow2(recSamples(RecRates::kMaxStoredRate, kPreRollMs)));
   static constexpr int kLevelEvery = 1024;    // the meter's window (46 ms; scaled at other stored rates)
   // The most a recording may be asked to hold (a platform's slot; the Cardputer's
   // kSlotMaxSamples is the default).
