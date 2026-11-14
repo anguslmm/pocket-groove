@@ -1,4 +1,4 @@
-// System test: the pad input (pg/ui/pads.h; docs/UX.md 10.4 "Pads"), through the UI
+// System test: the pad input (pg/ui/pads.h; docs/UX.md 10.3 "Pads"), through the UI
 // rig (host/common/ui_harness.h). A test set laid over the library: PT on the bass,
 // `vel OPEN 0.5`, `press BITE`; tilt left at its default (X: OPEN, Y: BITE).
 //

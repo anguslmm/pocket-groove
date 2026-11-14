@@ -1,4 +1,4 @@
-// PADS (docs/UX.md 10.4 "Pads", docs/MACROLAB.md "Velocity and pressure"): the
+// PADS (docs/UX.md 10.3 "Pads", docs/MACROLAB.md "Velocity and pressure"): the
 // platform-neutral input for force-sensing pads. A platform with pads (the Daisy
 // prototype: 4 force sensors, later 16; the desktop: keys and the mouse) reads its
 // sensors and calls, on the UI thread, with its own pad numbering 0..kMaxPads-1:

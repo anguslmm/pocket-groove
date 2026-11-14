@@ -827,7 +827,7 @@ def part_pads():
     cwd = fresh(os.path.join(WORK, "pads"))
     body = "\n".join([
         "wait 300",
-        "tap j", "tap 9", "wait 300",                 # the demo's bass (ACID: press = tilt X = OPEN)
+        "tap j", "tap 9", "wait 300",                 # the demo's bass (ACID: press BITE)
         "app mouse 120 4", "wait 100",                # near the top: a hard hit
         "app print-pads",
         "sdl down F5", "wait 150", "app print-pads",   # drums job: pad 1 = KICK
@@ -854,12 +854,14 @@ def part_pads():
           "F5 in the drums job: pad 1 held, the kick fired, not the bass (%s -> %s)" % (trig[0], trig[1]))
     check(soft[0] == "notes" and soft[2] == "1" and trig[2][6] == trig[1][6] + 1 and float(soft[5]) < 0.05,
           "F4 then F6: the notes job, pad 2 plays the bass, softly (%s, trig %s)" % (" ".join(soft[:7]), trig[2]))
-    pm = int(soft[8])
-    check(pm == 0 and soft[9] == "0", "a soft held pad: pressure in the dead zone moves nothing (macro %s offset %s)"
+    pm = int(soft[8])   # ACID: press BITE (macro 2)
+    check(pm == 1 and soft[9] == "0", "a soft held pad: pressure in the dead zone moves nothing (macro %s offset %s)"
           % (soft[8], soft[9]))
-    check(int(hard[9]) > 100 and int(hard[10]) > int(hard[14]),
-          "pressing hard: OPEN heard above its position (offset %s, heard %s base %s)" % (hard[9], hard[10], hard[14]))
-    check(up[2] == "0" and up[9] == "0" and up[10] == up[14] and up[14] == hard[14],
+    hh, hb = int(hard[10 + pm]), int(hard[14 + pm])
+    check(int(hard[9]) > 100 and hh > hb, "pressing hard: BITE heard above its position (offset %s, heard %d base %d)"
+          % (hard[9], hh, hb))
+    check(hard[10] == hard[14], "pressing hard: OPEN does not move (%s %s)" % (hard[10], hard[14]))
+    check(up[2] == "0" and up[9] == "0" and up[10 + pm] == up[14 + pm] and up[14 + pm] == hard[14 + pm],
           "released: back at the position, which never moved (%s)" % " ".join(up))
     check(back[0] == "drums", "F4 again: the drums job")
 

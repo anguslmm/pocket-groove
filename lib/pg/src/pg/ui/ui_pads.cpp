@@ -1,4 +1,4 @@
-// Pads (docs/UX.md 10.4 "Pads"; the contract is pads.h): force-sensing pads as the UI
+// Pads (docs/UX.md 10.3 "Pads"; the contract is pads.h): force-sensing pads as the UI
 // sees them. The platform reads its sensors and calls padDown / padPressure / padUp.
 // Here: what a hit plays (the pad's job), the note through the note keys' own path
 // (Ui::noteOn: live record records it with its velocity), and the pressure offset,

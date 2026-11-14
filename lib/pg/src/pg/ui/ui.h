@@ -268,7 +268,7 @@ class Ui {
   static constexpr uint32_t kTiltKeepMs = 100;     // an unchanged input is re-sent this often (recording)
   static constexpr int kTiltScale = 160;           // position units (of 255) at an axis's full range
 
-  // ---- pads (UX.md 10.4 "Pads"; the contract is pads.h) ----------------------
+  // ---- pads (UX.md 10.3 "Pads"; the contract is pads.h) ----------------------
   void padDown(int pad, float velocity, uint32_t nowMs);
   void padPressure(int pad, float pressure, uint32_t nowMs);
   void padUp(int pad, uint32_t nowMs);
