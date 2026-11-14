@@ -43,7 +43,7 @@ constexpr int kSuspendFadeQuanta = 8;           // ~3 ms fade to silence on susp
 constexpr uint8_t kNoPattern = 0xFF;
 constexpr int kMacroSlots = 2 * kTrackMacros;   // a base and a tilt offset per macro
 constexpr int kOffSlot = kTrackMacros;          // slot of macro m's offset: kOffSlot + m
-constexpr int kMaxAltVoices = 1;                // tracks x kinds hosted besides the native voices (PERC's sampler)
+constexpr int kMaxAltVoices = 2;                // tracks x kinds hosted besides the native voices (PERC's and LEAD's samplers)
 
 inline bool isSynthTrack(int t) { return t >= kNumDrumTracks; }
 inline int sanitizeLength(int len) { return len == 0 ? 16 : (len > kMaxSteps ? kMaxSteps : len); }

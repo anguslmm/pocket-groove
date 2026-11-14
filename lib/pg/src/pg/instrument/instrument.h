@@ -18,6 +18,7 @@
 #include "../bass/bass.h"
 #include "../drums/drums.h"
 #include "../lead/lead.h"
+#include "../sampler/melodic.h"
 #include "../sampler/sampler.h"
 
 namespace pg {
@@ -48,6 +49,11 @@ class Instrument {
   // before audio starts or with the engine suspended; init() keeps it.
   sampler::SamplerVoice& sampler() { return sampler_; }
   const sampler::SamplerVoice& sampler() const { return sampler_; }
+  // The LEAD track's sampler (a `voice lead sampler` instrument: the sample played
+  // from the keyboard, paraphonic; pg/sampler/melodic.h). Same pool; it follows the
+  // PERC sampler's silent slot (setSilentSlot there silences a slot on both).
+  sampler::MelodicSampler& melodic() { return melodic_; }
+  const sampler::MelodicSampler& melodic() const { return melodic_; }
   void setSamplePool(const sampler::SamplePool* pool);
   float sampleRate() const { return sampleRate_; }
   bool monoOutput() const { return mono_; }
@@ -71,6 +77,7 @@ class Instrument {
   bass::BassVoice   bass_;
   lead::LeadVoice   lead_;
   sampler::SamplerVoice sampler_;
+  sampler::MelodicSampler melodic_;
   const sampler::SamplePool* pool_ = nullptr;
   Engine            engine_;
   Project           project_;

@@ -129,7 +129,7 @@ int MacroSet::findPatch(const char* nm) const {
 TrackParams kindParams(const ParamTable& params, int track, int kind, const ParamInfo** scratch) {
   const int t = track >= 0 && track < kNumTracks ? track : 0;
   if (kind == kVoiceNative || kind < 0 || kind >= kNumVoiceKinds) return params.info[t];
-  for (int p = 0; p < kParamsPerTrack; ++p) scratch[p] = p < kSoundParams ? voiceKindParam(kind, p) : params.info[t][p];
+  for (int p = 0; p < kParamsPerTrack; ++p) scratch[p] = p < kSoundParams ? voiceKindParam(kind, t, p) : params.info[t][p];
   return scratch;
 }
 
