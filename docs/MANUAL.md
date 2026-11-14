@@ -218,6 +218,7 @@ The macros are four sliders, the left hand's on the left (`z` `x` macro 1, `c` `
 | `.`, `9` again | Next instrument for this track: you hear it at once, a short list at the picture's right shows where you are (`2/5`). |
 | `;` | Previous instrument. |
 | `ctrl`+`z` | Right after changing instruments: back to what the track had (a run of `.` `.` `.` is one step back), again: forward. |
+| `ctrl`+`;` / `.` | A sampler instrument (chapter 20): tune the track a semitone up / down; `ctrl`+`shift`: 5 cents. |
 | `-` `=` | The focused macro. |
 | pads | Select another track and show its instrument (and hear it). |
 | steps | Tap toggles a step (the strip at the bottom shows them). Hold + a macro key (or `-`/`=`) = that note's own value of the macro (Motion, below; chapter 10); `del` removes it. |
@@ -362,6 +363,7 @@ Pads and notes play, and `opt`+step still queues a pattern.
 | `ctrl`+`shift`+`x` / `c` | Cut / copy the whole pattern (paste with `ctrl`+`v`). |
 | `ctrl`+`shift`+step | Length of the selected track only (polymeter). Undoable. |
 | `ctrl`+`;`/`.` (step held) | Note ±12. |
+| `ctrl`+`;`/`.` (a sampler instrument's page) | Tune the track a semitone up / down; with `shift` 5 cents (chapter 20). |
 | `ctrl`+`s` | Save (straight to the open file; a demo or unnamed project opens SAVE AS). |
 | `ctrl`+`n` | New project (asks first if there are unsaved changes). |
 | `opt` (hold) | Pattern pads appear: green = playing, amber frame = queued, grey = has steps, dark = empty. |
@@ -1195,6 +1197,9 @@ The PERC track can play a **sample** instead of its percussion sound: step its i
 
 - **A slice per note (CHOP)**: hold a step and press `z` / `x`: that note gets its own SLICE (chapter 10, "note values"). A row of notes with different slices re-orders the sample.
 - **Pitch**: on a sampler instrument the note keys play the sample at pitches: `z` is the sample as recorded, the others go up the project's scale. In STEP EDIT the note keys set the held note's pitch, `;` / `.` move it a semitone, `ctrl` an octave.
+- **Tune**: hold `ctrl` on the instrument page and press `;` / `.` to tune the whole track a semitone up / down (up to two octaves); add `shift` for 5 cents (up to half a semitone either way). The page shows it next to the sample's length (`+3`, `-2 +15C`) while it is not zero, and `ctrl`+`z` takes a run of changes back. It is the track's, saved with the project, and stays when you change the instrument or the slot (the LEAD has its own: see "Tuning" below).
+
+![CHOP tuned three semitones up](ux/sampler-tune.png)
 - **Length**: the note's gate (STEP EDIT, `s`: GATE) is how long the chop is held; then it fades with the instrument's release. STUTTER keeps repeating while the note fades, so a short note gives a short roll and a long one a long roll.
 - **Tape stop (TAPE)**: tilt or move SPEED down while a long note plays and the tape slows, drops in pitch and stops; further down it runs backwards.
 
@@ -1227,7 +1232,9 @@ The lead stays the lead. The note keys play the project's scale at the lead's oc
 | CLOUD: the sample held as a pad | SCAN (where the loop sits: head .. tail) | SPAN (a tight, grainy buzz .. a wide, slow sway) | SWELL (quick .. a slow fade in and a long release) | SHADE (dark .. open, with reverb) |
 | REEL: the sample on a worn tape | WOW (steady .. seasick pitch drift) | WORN (clean .. crushed and dull) | HOLD (a short note .. a held one with a tail) | ECHO (dry .. delay and reverb) |
 
-- **Tuning.** The sample is taken to be a **C**: at the lead's normal octave, `z` (C3) plays it exactly as recorded, `x` a step of the scale higher, and so on; `;` / `.` change the octave as on any lead. The Pocket Groove does not detect the sample's pitch. A sample in another key plays in that key's distance from C (a sample sung on D sounds a tone high against the other tracks). The instrument's PITCH (semitones) and FINE (up to a semitone either way) parameters tune it to any root: a sample on D needs PITCH -2. On the desktop they are set in the macro lab (a set's `base` line) or developer mode's parameter pages; the device has no tune control on the player page yet.
+- **Tuning.** The sample is taken to be a **C**: at the lead's normal octave, `z` (C3) plays it exactly as recorded, `x` a step of the scale higher, and so on; `;` / `.` change the octave as on any lead. The Pocket Groove does not detect the sample's pitch. A sample in another key plays in that key's distance from C (a sample sung on D sounds a tone high against the other tracks). **To tune it**, hold `ctrl` on the instrument page and press `.` (a semitone down) or `;` (up), up to two octaves; add `shift` for steps of 5 cents, up to half a semitone either way. A sample sung on D needs `ctrl`+`.` twice (`-2`); one a little sharp of D, `-2` and then `ctrl`+`shift`+`.` until it sits (`-2 -15C`). The page shows the tune next to the sample's length while it is not zero (nothing at all when it is). It is the lead track's own (PERC has its own), saved with the project, kept when you step to another sampler instrument or slot, and `ctrl`+`z` takes a run of changes back. The instrument's PITCH and FINE parameters (the macro lab, developer mode) add to it.
+
+![PLUCK tuned -2 +15C; ctrl held shows the tune keys](ux/lead-sampler-tune.png)
 - **Held notes.** PLUCK plays the sample once from its start point and stops at the end of the part it plays. CLOUD and REEL **loop**: a held note runs forward and backward over a short window of the sample for as long as the key (or the step's gate) is down, and fades with the release when it ends. The loop never clicks and never dips, because the playhead turns around instead of jumping.
 - **Moving through the sample.** On CLOUD, tilt (SCAN is on X) or move SCAN while a chord holds: the loop window walks through the sample and the notes travel there with it. The white lines in the picture are the notes' playheads, one per note.
 - **Up to four notes.** A chord of four notes plays all four, each at its own pitch, through one shared tone (filter, crush, drive): this is what keeps it light enough for the device. A fifth note takes over the quietest note that is already fading, or else the oldest one, without a click. A chord type with more than four notes would lose its highest notes; every chord type today has four or fewer.
