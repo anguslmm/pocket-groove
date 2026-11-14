@@ -44,6 +44,7 @@ constexpr Gesture kGestures[] = {
     {{kKCtrl, kKShift, kKNote0 + 1}, L2},     // CTRL+SHIFT+X  cut pattern
     {{kKCtrl, kKShift, kKNote0 + 2}, L2},     // CTRL+SHIFT+C  copy pattern
     {{kKCtrl, kKShift, tStep}, L2},           // CTRL+SHIFT+step  track length
+    {{kKCtrl, kKShift, tUpDn}, L2},           // CTRL+SHIFT+;/.  a sampler's fine tune (; ghosts ,)
     {{kKOpt, kKShift, tStep}, L2},            // OPT+SHIFT+step  copy pattern there
     {{kKShift, kKLBracket, kKRBracket}, L1 | L2},   // SHIFT+[+]  bass cutoff back
     {{tStep, kKShift, tVal}, L1 | L2},        // step held + SHIFT+-/=  x8 (SHIFT may come last)

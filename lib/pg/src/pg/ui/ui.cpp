@@ -710,6 +710,70 @@ bool Ui::stepSampleSlot(int dir) {
   return true;
 }
 
+// ---- the track's tune (UX.md 10.3 "Tune"; params.h kMixTune) ----------------------
+
+int Ui::tuneSemis(int t) const { return tuneValue(uint8_t(paramValue(t & 7, kMixTune))); }
+int Ui::tuneCents(int t) const { return tuneValue(uint8_t(paramValue(t & 7, kMixTuneCents))); }
+
+// "+3", "-2 +15C", "+15C"; "" when the track is not tuned.
+void Ui::tuneText(int t, char* out) const {
+  const int s = tuneSemis(t), c = tuneCents(t);
+  char* o = out;
+  *o = 0;
+  if (s) {
+    *o++ = s < 0 ? '-' : '+';
+    o = catInt(o, s < 0 ? -s : s);
+  }
+  if (c) {
+    if (s) *o++ = ' ';
+    *o++ = c < 0 ? '-' : '+';
+    o = cat(catInt(o, c < 0 ? -c : c), "C");
+  }
+}
+
+// CTRL+; / . on a sampler instrument's page: the track's tune a semitone up / down;
+// with SHIFT, kTuneCentStep cents. Clamped at the ends. A run of steps (each within
+// 2 s of the last) is one undo unit, as the slot's.
+bool Ui::stepTune(int dir, bool fine) {
+  if (view_ != View::Sound || !instrumentPage() || heldStep_ >= 0 || !samplerOn(sel_)) return false;
+  const int t = sel_;
+  if (!(undoValid_ && undoKind_ == 3 && undoTrack_ == t && !undoIsRedo_ && !after(now_, slotUndoMs_ + 2000))) {
+    undoKind_ = 3;
+    undoTrack_ = uint8_t(t);
+    undoPos_[0] = uint8_t(paramValue(t, kMixTune));
+    undoPos_[1] = uint8_t(paramValue(t, kMixTuneCents));
+    undoValid_ = true;
+    undoIsRedo_ = false;
+    undoGest_ = undoEvt_ = 0;
+    undoQueued_ = false;
+    undoLabel_[0] = 0;
+    cat(cat(undoLabel_, kTrackNames[t & 7]), " TUNE");
+  }
+  slotUndoMs_ = now_;
+  if (fine) setTune(t, tuneSemis(t), tuneCents(t) + dir * kTuneCentStep);
+  else setTune(t, tuneSemis(t) + dir, tuneCents(t));
+  toastTune(t, "");
+  listUntil_ = 0;
+  return true;
+}
+
+void Ui::setTune(int t, int semis, int cents) {
+  t &= 7;
+  semis = clampi(semis, -kTuneMaxSemis, kTuneMaxSemis);
+  cents = clampi(cents, -kTuneMaxCents, kTuneMaxCents);
+  if (semis != tuneSemis(t)) setValue(ValueRef{false, uint8_t(t), kMixTune}, tuneByte(semis));
+  if (cents != tuneCents(t)) setValue(ValueRef{false, uint8_t(t), kMixTuneCents}, tuneByte(cents));
+}
+
+// "TUNE +3", "TUNE -2 +15C", "TUNE 0", after `prefix` ("UNDO: ").
+void Ui::toastTune(int t, const char* prefix) {
+  char buf[40];
+  char* o = cat(cat(buf, prefix), "TUNE ");
+  tuneText(t, o);
+  if (!*o) cat(o, "0");
+  toast(buf, 1);
+}
+
 int Ui::noteFor(int t, int degree) const {
   return degreeNote(globalValue(kGScaleRoot) % 12, globalValue(kGScaleType), octave_[t & 7], degree);
 }
@@ -869,6 +933,7 @@ void Ui::keyDown(int k, bool shift) {
     if (shift && step >= 0 && view_ != View::Song && view_ != View::Project) stepDown(k, step, true, true);
     else if (heldStep_ >= 0 && view_ == View::Groove && (k == kKSemicolon || k == kKDot))
       semicolonDot(k == kKSemicolon ? 1 : -1, true);   // CTRL+;/. = note +-12 (was SHIFT: ghosting, 16.1)
+    else if ((k == kKSemicolon || k == kKDot) && stepTune(k == kKSemicolon ? 1 : -1, shift)) return;   // a sampler's tune
     else ctrlCombo(k, shift);
     return;
   }

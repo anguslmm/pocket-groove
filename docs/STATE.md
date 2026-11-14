@@ -19,6 +19,12 @@ three sampler instruments, PLUCK, CLOUD and REEL, that play a sample slot from t
 four notes, ping-pong loops, slides). Host-verified (94/94), firmware builds clean; not yet on the
 device, not listened to. Entry "MELODIC SAMPLER BUILT" below, DEVICE CHECK step 13.
 
+Sampler tune (2026-11-14): a per-track tune for the sampler instruments (PERC and LEAD), set on
+the instrument page with CTRL+; / . (a semitone) and CTRL+SHIFT+; / . (5 cents), shown in the
+waveform's header (`+3`, `-2 +15C`). Stored in two spare mixer bytes, no growth. Host-verified
+(96/96), firmware builds clean; not yet on the device. Entry "SAMPLER TUNE BUILT" below, DEVICE
+CHECK step 14.
+
 Stem bounce + USB project transfer (tools/pg, docs/MANUAL.md chapter 15): host-verified
 (itest_bounce, itest_golden, test_io_xfer, test_pg_client: the Python client against the
 device protocol code on a pty); the firmware side (src/app glue, real USB-Serial/JTAG timing,
@@ -684,10 +690,71 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
    the second pass moves the first macro) and build/melodic/resample_then_play.wav (ACIDJAM's lead
    soloed, a bar resampled into slot 2 as SHIFT+L does, then PLUCK and CLOUD playing that take with
    the same phrase; the take alone: resampled_bar_22k.wav).
-   NOT DONE: a tune control on the player's page (see above); pitch detection; a forward loop or a
+   NOT DONE: a tune control on the player's page (see above; since added: SAMPLER TUNE BUILT); pitch detection; a forward loop or a
    crossfaded loop mode; a per-note filter (deliberately shared: the CPU budget); velocity to the
    filter; the `/` key map showing L / SHIFT+L.
    HARDWARE CHECK: DEVICE CHECK below, step 13.
+   SAMPLER TUNE BUILT (2026-11-14, branch of the sampler-tune worktree, NOT YET ON THE DEVICE): THE
+   SAMPLER INSTRUMENTS CAN BE TUNED FROM THE KEYS. A sample recorded or resampled in the song's key
+   (A minor, say) played in its own key's distance from C; the only tune was a set's PITCH / FINE
+   (.pgm, lab, developer mode). Now the track has a tune of its own (UX.md 10.3 "Tune", MANUAL.md
+   chapter 20, MACROLAB.md "The melodic sampler"; docs/ux/sampler-tune.png, lead-sampler-tune.png,
+   host/ui_scripts/sampler_tune.txt). Choices made:
+   - STORAGE: TrackSettings.params[29] / [30] (params.h kMixTune, kMixTuneCents; were
+     kMixReserved0 / 1, no ParamInfo, so the sanitiser zeroed them in every file ever saved; 31
+     stays reserved). Signed bytes (int8_t in the uint8_t), 0 = untuned: semitones -24..+24, cents
+     -50..+50 (stored as cents: the gesture steps 5, the store takes any cent). Kept on the tracks
+     that can host a sampler (kSamplerTracks: PERC, LEAD) whatever their instrument now, so a tuned
+     track stays tuned after a visit to another instrument; clamped there, zeroed on the other six;
+     a version 1 / 2 file zeroes them in the upgrade. Still no ParamInfo: not a mixer row (the MIX
+     page, mixKey, combineMixer only know 24..28), not lockable (a CLASSIC lock naming them is
+     removed by sanitizeStep as before), not a macro target, not written by the derivation.
+     Step / Project unchanged, kProjectVersion unchanged.
+   - THE VOICES: Voice::setTune(semitones), a no-op by default; the engine calls it in
+     ensureParams (when the parameters are rebuilt: a command, a switch of voice, a macro) and
+     only for a hosted voice (voice[t] != nativeV[t]), with params.h trackTune(eff). SamplerVoice adds
+     it in updateRate (every quantum while a chop sounds), MelodicSampler to tune_ (PITCH + FINE),
+     read per note per quantum. Both step at the quantum edge, as PITCH under a moving macro does:
+     the read position never jumps, so no click (tested below the material's steepest step).
+   - THE GESTURE: CTRL+; / CTRL+. a semitone up / down, CTRL+SHIFT+; / . 5 cents, on a sampler
+     instrument's page with no step held (Ui::stepTune). `;` is up, as everywhere on the device
+     (`;` octave + in GROOVE, note +1 / CTRL +12 in STEP EDIT): the brief suggested `;` = down,
+     changed for consistency. CTRL+; / . did nothing on the SOUND page before (STEP EDIT's octave
+     needs a step held in GROOVE: unchanged); on a native instrument they still do nothing.
+     GHOSTING: CTRL+SHIFT+; closes the rectangle {ctrl, shift, ;, ,} (ctrl and shift share scan
+     row 0, ; and , scan row 5): `,` arrives with `;`. Added {CTRL, SHIFT, ;/.} to the filter's
+     gesture table, so `;` is kept and `,` dropped (both orders); CTRL+SHIFT+. and CTRL+;/. alone
+     close none. docs/ghosting-audit.md row 31. A toast per step (`TUNE +3`, `TUNE -2 +15C`,
+     `TUNE 0`), clamped at the ends. UNDO: a run of steps within 2 s is one unit (undo kind 3, the
+     snapshot in undoPos_[0..1], the slot gesture's timer), CTRL+Z swaps, again redoes.
+   - THE READOUT: the waveform box's header, left of the length, WHITE, only when not zero: `+3`,
+     `-2 +15C`, `+15C` (Ui::tuneText). No caption. CTRL held on a sampler page (no step held): the
+     footer shows `CTRL+ ;/. TUNE  +SFT FINE` (CTRL before SHIFT, as in keyDown). Explain mode:
+     CTRL+; on a sampler page is `CTRL+UP: TUNE +1`; plain ; / . there now end "SHIFT: PREV SLOT.
+     CTRL: TUNE +1." The `/` key map's CTRL layer is shared by every view and still labels ; / .
+     "12" (the octave); not changed.
+   FIGURES (clean builds, warning-free in our sources, placement checks OK; before = main 489dd2f):
+   USB: flash 1332135 -> 1334439 (+2304), static RAM 202276 -> 202284 (+8: the two voices'
+   trackTune_ floats), .iram0.text 131247 -> 131247 (unchanged), _heap_start 0x3FCD5B28 ->
+   0x3FCD5B30 (8 B); jack: flash 1269995 -> 1272311 (+2316), static RAM 201756 -> 201764 (+8),
+   .iram0.text 124311 -> 124307 (-4, alignment), _heap_start 0x3FCD3E20 -> 0x3FCD3E28 (8 B).
+   setTune runs from flash (once per parameter rebuild on a sampler track, not per quantum).
+   TESTS (host, 96/96; new: itest_tune (a new project untuned; save / load / sanitize byte for
+   byte; clamped out of range, zeroed off PERC / LEAD, version 1 / 2 files untuned; instruments,
+   macros and the derivation leave it alone, combineMixer does not write it; through the engine,
+   TAPE and PLUCK on a 441 Hz sine tuned +-12, +7, +-50 cents and -2 +35 cents within 0.2 % of the
+   untuned note's ratio, a change under a sounding note moves it without a jump; a synth lead, TAP
+   and the bass render bit for bit the same with the bytes set), itest_ui_tune (the gesture, the
+   toast, clamping, undo / redo, the readout's pixels, the CTRL footer, the explain text, the lead's
+   own tune, nothing on TAP or with a step held, STEP EDIT's octave unchanged; all three key-matrix
+   models)); test_sampler_voice and test_sampler_melodic gain a tune case (pitch +-12, +7, +-50
+   cents with PITCH / FINE within 0.2 %, a change under a note: no jump, the pitch follows);
+   test_io_xfer: the bytes go through PUT / GET; itest_sanitize_fuzz knows the signed range;
+   itest_ui_sampler's explain check follows the new text. itest_golden unchanged.
+   NOT DONE: a tune per slot (it is the track's: two samples in two slots in different keys need a
+   retune when the slot changes); the `/` key map's CTRL layer label for ; / . (shared table);
+   a tune on the native instruments (they have their own TUNE parameters).
+   HARDWARE CHECK: DEVICE CHECK below, step 14.
    RAM PASS + ONE-FLASH DIAGNOSTICS (2026-11-13, branch of the ram-diag worktree, not yet on the
    device). Measured on the owner's device just before (current main, USB build, a song with
    STUTTER, USB recording): heap 34 KB free, 13 KB minimum-ever, so about 21 KB went missing at
@@ -811,6 +878,13 @@ no longer counted (audio_out.cpp kWarmupBlocks). Still open from the check list:
       sampler page records the mic into the lead's slot. (f) the env:profile flash's MELODIC lines
       (render c/f, % of a core, notes sounding). Say: clicks at steals, at a PONG turn, at a slide;
       whether 4-note chords on CLOUD / REEL push the audio load near the 55 % ceiling.
+   14. The sampler tune (the flash of steps 1-9): PERC on CHOP with a sample, the demo playing:
+      ctrl+; three times: the chops a minor third higher, `+3` in the waveform's header; ctrl+shift+.
+      a few times: `+3 -15C` and slightly lower; ctrl+z: back to untuned, the header without it. The
+      LEAD on PLUCK: hold a note (z) and tap ctrl+. while it sounds: the pitch steps down with no
+      click. Hold ctrl: the footer reads CTRL+ ;/. TUNE +SFT FINE. Save, load: the tune comes back.
+      Say: any click on a change under a note; whether ctrl+shift+; ever does nothing (the ghost
+      filter keeps `;` over the phantom `,`).
    STANDING TASTE RULE (owner, 2026-11-13: "get the stupid tag lines for each synth out of there"):
    no descriptive captions for instruments on the screen. `about "..."` stays in the .pgm as an
    author's note, not displayed; the instrument page gives those rows to the picture (y 29..72).

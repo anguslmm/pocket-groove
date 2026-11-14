@@ -4,6 +4,8 @@
 //   pool      MemoryPool slots, an empty slot resolves to ROM (slot mod 3), generation
 //   rom       the built-in table is sane (lengths, peaks, overview, flash budget)
 //   pitch     a 441 Hz sine plays at 441 / 882 / 661 Hz (note 60, 72, PITCH +7) and SPEED x2
+//   tune      the track's tune (setTune) +-12, +7, +-50 cents, with PITCH / FINE, to 0.2 %;
+//             changed under a sounding note: the pitch follows, no jump
 //   slices    each of 16 slices of a staircase plays its own level; SLICES 4 / SLICE 6 wraps
 //   reverse   a rising ramp plays falling
 //   gate      the note-off releases and the voice goes idle; LOOP holds past the end
@@ -275,6 +277,50 @@ void testGateLoop() {
 
 // The steepest step a 300 Hz full-scale sine has at the voice's level: anything
 // above ~1.3x of it is a click.
+// The track's tune (Voice::setTune, params.h kMixTune): on top of PITCH / FINE, exact to
+// 0.2 %; a change while a note sounds moves its pitch at the next quantum, without a jump.
+void testTune() {
+  std::printf("tune\n");
+  Rig g;
+  std::vector<int16_t> s = sine(441.0f, kSlotMaxSamples);
+  g.pool.set(0, s.data(), kSlotMaxSamples, "sine");
+  g.set(kRelease, 127);
+  struct C { int pitch, fine; float tune; double hz; } cs[] = {
+      {64, 64, 12.0f, 882.0}, {64, 64, -12.0f, 220.5}, {64, 64, 7.0f, 441.0 * 1.4983071},
+      {64, 64, 0.5f, 441.0 * 1.0293022}, {64, 64, -0.5f, 441.0 / 1.0293022},
+      {66, 96, -2.0f, 441.0 * 1.0293022},   // PITCH +2, FINE +0.5, tune -2: +0.5 semitone
+      {64, 64, 0.0f, 441.0}};
+  for (const C& c : cs) {
+    g.set(kPitch, c.pitch);
+    g.set(kFine, c.fine);
+    g.v.setTune(c.tune);
+    g.on(60);
+    std::vector<float> o;
+    g.run(400, o);
+    const double f = freq(o, 2000, o.size());
+    check(std::fabs(f / c.hz - 1.0) < 0.002, "tune pitch", f, c.hz);
+    g.v.choke();
+    g.run(10, o);
+  }
+  // a change while the note sounds: the pitch follows, nothing jumps
+  const float sineStep = 0.9f * SamplerVoice::kLevel * 6.2831853f * 441.0f / kFs;
+  for (int k = 0; k < 8; ++k) {
+    Rig h;
+    h.pool.set(0, s.data(), kSlotMaxSamples, "sine");
+    h.set(kRelease, 127);
+    h.on(60);
+    std::vector<float> o;
+    h.run(100 + k, o);
+    const size_t at = o.size();
+    h.v.setTune(k & 1 ? 2.0f : -2.0f);
+    h.run(300, o);
+    const float w = maxStep(o, at - 64, at + 64);
+    check(w < 1.3f * 1.13f * sineStep, "tune change: no jump", w, sineStep);
+    const double f = freq(o, at + 1000, o.size()), want = 441.0 * (k & 1 ? 1.122462 : 1.0 / 1.122462);
+    check(std::fabs(f / want - 1.0) < 0.002, "tune change: the sounding note follows", f, want);
+  }
+}
+
 void testClicks() {
   std::printf("click\n");
   const float sineStep = 0.9f * SamplerVoice::kLevel * 6.2831853f * 300.0f / kFs;
@@ -566,6 +612,7 @@ int main() {
   testFormat();
   testPoolAndRom();
   testPitch();
+  testTune();
   testSlicesReverse();
   testGateLoop();
   testClicks();

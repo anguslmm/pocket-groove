@@ -155,7 +155,7 @@ void SamplerVoice::updateTone() {
 
 // The playback increment from the pitch, the note, the repeats and the tape speed.
 void SamplerVoice::updateRate() {
-  float semis = note_ + (pf_[kPitch] - 64.0f) + (pf_[kFine] - 64.0f) * (1.0f / 64.0f) +
+  float semis = note_ + (pf_[kPitch] - 64.0f) + (pf_[kFine] - 64.0f) * (1.0f / 64.0f) + trackTune_ +
                 float(repeats_) * (pf_[kRepPitch] - 64.0f) * (12.0f / 64.0f);
   semis = clampf(semis, -48.0f, 48.0f);
   const float speed = (pf_[kSpeed] - 64.0f) * (1.0f / 32.0f);   // -2 .. ~+2

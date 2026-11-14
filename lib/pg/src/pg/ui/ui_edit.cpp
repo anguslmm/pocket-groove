@@ -206,6 +206,18 @@ void Ui::snapshotInstrument(int t) {
 
 void Ui::undo() {
   if (!undoValid_) { toast("NOTHING TO UNDO", 0); return; }
+  if (undoKind_ == 3) {
+    // a run of tune steps (stepTune): swap the tune with the snapshot
+    const int t = undoTrack_;
+    const uint8_t s = uint8_t(paramValue(t, kMixTune)), c = uint8_t(paramValue(t, kMixTuneCents));
+    setTune(t, tuneValue(undoPos_[0]), tuneValue(undoPos_[1]));
+    undoPos_[0] = s;
+    undoPos_[1] = c;
+    undoIsRedo_ = !undoIsRedo_;
+    slotUndoMs_ = 0;
+    toastTune(t, undoIsRedo_ ? "UNDO: " : "REDO: ");
+    return;
+  }
   if (undoKind_ == 2) {
     // a run of sample slot steps (stepSampleSlot): swap the slot with the snapshot
     const int t = undoTrack_;

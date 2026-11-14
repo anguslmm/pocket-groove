@@ -330,6 +330,14 @@ static bool explainLayer(const Ui& ui, int table, int k, char* title, const char
           {kKSemicolon, "CTRL+UP: NOTE +12", "WITH A STEP HELD: ITS NOTE", "AN OCTAVE UP."},
           {kKDot, "CTRL+DOWN: NOTE -12", "WITH A STEP HELD: ITS NOTE", "AN OCTAVE DOWN."},
       };
+      // a sampler instrument's page, no step held: the track's tune (UX.md 10.3 "Tune")
+      if ((k == kKSemicolon || k == kKDot) && v == View::Sound && ui.instrumentPage() && ui.heldStep() < 0 &&
+          ui.samplerOn(ui.selTrack())) {
+        cat(title, k == kKSemicolon ? "CTRL+UP: TUNE +1" : "CTRL+DOWN: TUNE -1");
+        *l1 = k == kKSemicolon ? "THE SAMPLE A SEMITONE UP (TO +24)." : "THE SAMPLE A SEMITONE DOWN (TO -24).";
+        *l2 = "+SHIFT: 5 CENTS (TO +-50).";
+        return true;
+      }
       for (const C& c : kCtrl)
         if (c.k == k) {
           cat(title, c.t);
@@ -480,12 +488,12 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       case kKSemicolon:
         cat(title, "PREVIOUS INSTRUMENT");
         *l1 = "STEPS THROUGH THIS TRACK'S LIST,";
-        *l2 = ui.samplerOn(ui.selTrack()) ? "SHIFT: PREVIOUS SAMPLE SLOT." : "AUDIBLE AT ONCE. CTRL+Z: BACK.";
+        *l2 = ui.samplerOn(ui.selTrack()) ? "SHIFT: PREV SLOT. CTRL: TUNE +1." : "AUDIBLE AT ONCE. CTRL+Z: BACK.";
         return;
       case kKDot:
         cat(title, "NEXT INSTRUMENT");
         *l1 = "STEPS THROUGH THIS TRACK'S LIST,";
-        *l2 = ui.samplerOn(ui.selTrack()) ? "SHIFT: NEXT SAMPLE SLOT." : "AUDIBLE AT ONCE. CTRL+Z: BACK.";
+        *l2 = ui.samplerOn(ui.selTrack()) ? "SHIFT: NEXT SLOT. CTRL: TUNE -1." : "AUDIBLE AT ONCE. CTRL+Z: BACK.";
         return;
       case kK9:
         cat(title, "SOUND: NEXT INSTRUMENT");

@@ -1,0 +1,66 @@
+# The sampler instruments' tune (docs/ux/sampler-tune.png, lead-sampler-tune.png;
+# docs/UX.md 10.3 "Tune"). The user sample comes from the built-in sounds' WAVs, written by
+#   build/host/gen_rom_samples --check --wav build/rom
+# then: build/host/ui_shot host/ui_scripts/sampler_tune.txt build/ui/tune, and the
+# keepers (*_4x.png, 960 x 540 as the other screens) copied into docs/ux without the _4x.
+dev 0
+
+empty
+sample 2 build/rom/AHOO.wav
+wait 600
+
+# PERC selected silently, SOUND: `.` = TAP, TRAIL, SHAKE, CHOP; SHIFT+. = slot 2 (AHOO)
+down shift
+tap h
+up shift
+tap 9
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 1700
+down shift
+tap .
+up shift
+wait 1700
+
+# CTRL+; three times: +3, in the header next to the length
+down ctl
+tap ;
+tap ;
+tap ;
+up ctl
+wait 3000
+shot sampler-tune
+
+# the LEAD (SOUND stays open) on PLUCK: HANDS, KEYS, DRIFT, VOYAGE, SWAP, PLUCK;
+# tuned -2 semitones +15 cents; CTRL held: the tune footer
+down shift
+tap k
+up shift
+tap .
+wait 200
+tap .
+wait 200
+tap .
+wait 200
+tap .
+wait 200
+tap .
+wait 200
+tap .
+wait 1700
+down ctl
+tap .
+tap .
+down shift
+tap ;
+tap ;
+tap ;
+up shift
+wait 3000
+shot lead-sampler-tune
+up ctl

@@ -32,6 +32,12 @@ bool inRange(const Engine& eng, const Project& p, const char** why) {
     if (ts.mute > 1) { *why = "mute"; return false; }
     for (int i = 0; i < kParamsPerTrack; ++i) {
       const ParamInfo* info = eng.trackParamInfo(t, i);
+      if (i == kMixTune || i == kMixTuneCents) {   // the tune: signed, only where a sampler can play
+        const int v = tuneValue(ts.params[i]), m = i == kMixTune ? kTuneMaxSemis : kTuneMaxCents;
+        const bool host = t == kTrackPerc || t == kTrackLead;
+        if (host ? (v < -m || v > m) : v != 0) { *why = "tune"; return false; }
+        continue;
+      }
       if (info ? (ts.params[i] < info->min || ts.params[i] > info->max) : ts.params[i] != 0) { *why = "track param"; return false; }
     }
   }

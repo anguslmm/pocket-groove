@@ -17,7 +17,8 @@
 // PITCH (coarse, semitones) and FINE (+-1 semitone) reach any root. Playback is
 // linear interpolation from the int16 data (memory-mapped flash on the device),
 // position in 32.32 fixed point, at
-//   (sample rate / output rate) * 2^((note - 48 + PITCH + FINE + glide + drift) / 12)
+//   (sample rate / output rate) * 2^((note - 48 + PITCH + FINE + TUNE + glide + drift) / 12)
+// (TUNE: the track's tune, Voice::setTune; like PITCH it steps at the quantum edge)
 // clamped to 4 octaves either way. Never reads outside the sample: the window is
 // always inside it, the playhead never jumps, and every read index is checked.
 //
@@ -76,6 +77,7 @@ class MelodicSampler final : public Voice {
   const ParamInfo* paramInfo(int index) const override { return mel::paramInfo(index); }
   void setParams(const uint8_t* soundParams) override;
   void setParamsFine(const float* soundParams) override;
+  void setTune(float semitones) override;
   void setSampleSlot(uint8_t slot) override { slot_ = slot < kPoolSlots ? slot : 0; }
   void noteOn(const NoteEvent& e) override;
   void noteOff(uint8_t note) override;
@@ -161,7 +163,8 @@ class MelodicSampler final : public Voice {
   // derived (updateTone)
   float atkStepQ_ = 1.0f, decCoefQ_ = 0.9f, sus_ = 1.0f, relCoefQ_ = 0.9f;
   float glideCoef_ = 1.0f, fdecCoefQ_ = 0.9f, envOct_ = 0.0f;
-  float tune_ = 0.0f;                 // PITCH + FINE, semitones
+  float tune_ = 0.0f;                 // PITCH + FINE + the track's tune, semitones
+  float trackTune_ = 0.0f;            // the track's tune (Voice::setTune)
   float cutOct_ = 7.45f, k_ = 1.0f / 0.6f;
   float driftDepth_ = 0.0f, driftInc_ = 0.0f;
   uint8_t ftype_ = kLP;

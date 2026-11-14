@@ -71,6 +71,11 @@ class Voice {
 
   virtual void setTempo(float /*bpm*/) {}
 
+  // The track's tune (params.h kMixTune / kMixTuneCents), in semitones, added to
+  // the voice's own pitch. Sent with the parameters (at the quantum edge where it
+  // changes). Only the sampler voices play it; every other voice ignores it.
+  virtual void setTune(float /*semitones*/) {}
+
   // The track's sample pool slot (TrackSettings::sampleSlot), sent before every
   // note-on. Only the sampler reads it (latched at the note-on); others ignore it.
   virtual void setSampleSlot(uint8_t /*slot*/) {}
