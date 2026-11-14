@@ -60,6 +60,22 @@ SECTIONS
 		_sqspi_rom = .;
 		KEEP(*(.qspi_rom.marker))
 		*(.qspi_rom .qspi_rom.*)
+		/* Cold text, by object (docs/DAISY.md "Memory map"): the string literals of
+		   the UI (its help text above all), the file formats and the macro text parser,
+		   and the demos' strings and note tables. String literals cannot take a section
+		   attribute, so they are placed here rather than by a macro in the core. All of
+		   it is read only by the main loop after the ROM copy: never before main (no
+		   constructor reads it) and never by the audio interrupt. Only strings, plus
+		   the demos' tables, which hold no pointers: if the ROM part is missing (zeroed
+		   at boot) they read as empty strings and silent notes, never as bad pointers.
+		   The Daisy's own report text (daisy/app) stays in the image, so the report
+		   still says what is wrong when the ROM part is. (The patterns spell a
+		   directory's files as "/?*", since a slash then a star would open a comment.) */
+		*/pg/ui/?*.o(.rodata*.str1.*)
+		*/pg/io/?*.o(.rodata*.str1.*)
+		*/pg/macro/macro_parse.o(.rodata*.str1.*)
+		*/pg/demo/?*.o(.rodata*.str1.*)
+		*/pg/demo/demo_*.o(.rodata .rodata.*)
 		. = ALIGN(32);
 		_eqspi_rom = .;
 	} > SDRAM AT > QSPI_ROM
