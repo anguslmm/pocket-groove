@@ -60,6 +60,8 @@ class Instrument {
 
   // Audio thread: `frames` (a multiple of kQuantum) of interleaved stereo int16.
   void process(int16_t* out, int frames) { engine_.process(out, frames); }
+  // The same as interleaved stereo float, +-1.0 (engine.h OUTPUT FORMATS).
+  void processFloat(float* out, int frames) { engine_.processFloat(out, frames); }
 
   // Static RAM this object and the engine's internal state block occupy
   // (sizeof(Instrument) + the engine's statically allocated state). Voice

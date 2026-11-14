@@ -141,8 +141,44 @@ void MasterBus::rumble(float* x, int c, int frames) {
   hp2_[c] = s2;
 }
 
+namespace {
+
+// The chain's two ends (master.h OUTPUT FORMATS). put(): frame i, channel c, the
+// limited magnitude a (0..1) and the sign of y; putBoth(): the mono layout's L == R.
+struct Int16Out {
+  int16_t* p;
+  void put(int i, int c, float y, float a) const {
+    const int32_t v = int32_t(a * 32767.0f + 0.5f);
+    p[2 * i + c] = int16_t(y < 0.0f ? -v : v);
+  }
+  void putBoth(int i, float y, float a) const {
+    const int32_t v = int32_t(a * 32767.0f + 0.5f);
+    p[2 * i] = p[2 * i + 1] = int16_t(y < 0.0f ? -v : v);
+  }
+};
+// a <= 1.0 exactly: the knee's t is clamped to 2, where knee + range * (t - t*t/4)
+// is knee + (1 - knee) = 1 (1 - knee is exact in float; test_engine_float checks).
+struct FloatOut {
+  float* p;
+  void put(int i, int c, float y, float a) const { p[2 * i + c] = y < 0.0f ? -a : a; }
+  void putBoth(int i, float y, float a) const { p[2 * i] = p[2 * i + 1] = y < 0.0f ? -a : a; }
+};
+
+}  // namespace
+
 template <bool kMono>
 void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR) {
+  chain<kMono>(l, r, Int16Out{out}, frames, peakL, peakR);
+}
+
+template <bool kMono>
+void MasterBus::runF(float* l, float* r, float* out, int frames, float* peakL, float* peakR) {
+  chain<kMono>(l, r, FloatOut{out}, frames, peakL, peakR);
+}
+
+template <bool kMono, class Out>
+__attribute__((always_inline)) inline void MasterBus::chain(float* l, float* r, Out out, int frames, float* peakL,
+                                                            float* peakR) {
   // ---- rumble / DC high-pass (always on) ----
   rumble(l, 0, frames);
   if (!kMono) rumble(r, 1, frames);
@@ -210,8 +246,7 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
         float al = absf(yl);
         if (al > knee) { float t = (al - knee) * invRange; t = t > 2.0f ? 2.0f : t; al = knee + range * (t - 0.25f * t * t); }
         if (al > pkL) pkL = al;
-        const int32_t il = int32_t(al * 32767.0f + 0.5f);
-        out[2 * i] = out[2 * i + 1] = int16_t(yl < 0.0f ? -il : il);
+        out.putBoth(i, yl, al);
       }
       *peakL = pkL;
       return;
@@ -228,10 +263,8 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
       if (ar > knee) { float t = (ar - knee) * invRange; t = t > 2.0f ? 2.0f : t; ar = knee + range * (t - 0.25f * t * t); }
       if (al > pkL) pkL = al;
       if (ar > pkR) pkR = ar;
-      const int32_t il = int32_t(al * 32767.0f + 0.5f);
-      const int32_t ir = int32_t(ar * 32767.0f + 0.5f);
-      out[2 * i] = int16_t(yl < 0.0f ? -il : il);
-      out[2 * i + 1] = int16_t(yr < 0.0f ? -ir : ir);
+      out.put(i, 0, yl, al);
+      out.put(i, 1, yr, ar);
     }
     *peakL = pkL;
     *peakR = pkR;
@@ -251,8 +284,7 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
       tl = tl < 0.0f ? 0.0f : (tl > 2.0f ? 2.0f : tl);
       al = (al < knee ? al : knee) + range * (tl - 0.25f * tl * tl);
       if (al > pkL) pkL = al;
-      const int32_t il = int32_t(al * 32767.0f + 0.5f);
-      out[2 * i] = out[2 * i + 1] = int16_t(yl < 0.0f ? -il : il);
+      out.putBoth(i, yl, al);
     }
     *peakL = pkL;
     return;
@@ -279,8 +311,7 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
       tl = tl < 0.0f ? 0.0f : (tl > 2.0f ? 2.0f : tl);
       al = (al < knee ? al : knee) + range * (tl - 0.25f * tl * tl);
       if (al > pkL) pkL = al;
-      const int32_t il = int32_t(al * 32767.0f + 0.5f);
-      out[2 * i] = out[2 * i + 1] = int16_t(yl < 0.0f ? -il : il);
+      out.putBoth(i, yl, al);
     }
   } else {
     for (int i = 0; i < frames; ++i) {
@@ -301,10 +332,8 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
       ar = (ar < knee ? ar : knee) + range * (tr - 0.25f * tr * tr);
       if (al > pkL) pkL = al;
       if (ar > pkR) pkR = ar;
-      const int32_t il = int32_t(al * 32767.0f + 0.5f);
-      const int32_t ir = int32_t(ar * 32767.0f + 0.5f);
-      out[2 * i] = int16_t(yl < 0.0f ? -il : il);
-      out[2 * i + 1] = int16_t(yr < 0.0f ? -ir : ir);
+      out.put(i, 0, yl, al);
+      out.put(i, 1, yr, ar);
     }
   }
   pre_ = absf(preTarget_ - preEnd) < 1.0e-5f ? preTarget_ : preEnd;
@@ -316,6 +345,8 @@ void MasterBus::run(float* l, float* r, int16_t* out, int frames, float* peakL, 
 
 template void MasterBus::run<false>(float*, float*, int16_t*, int, float*, float*);
 template void MasterBus::run<true>(float*, float*, int16_t*, int, float*, float*);
+template void MasterBus::runF<false>(float*, float*, float*, int, float*, float*);
+template void MasterBus::runF<true>(float*, float*, float*, int, float*, float*);
 
 }  // namespace engine_detail
 }  // namespace pg

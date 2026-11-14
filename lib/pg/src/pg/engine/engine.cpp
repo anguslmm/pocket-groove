@@ -278,8 +278,28 @@ struct State {
   bool voiceRange(const Voice* v, int t, int idx, int& lo, int& hi) const;
   void switchVoice(int t, Voice* want);
 
+  // One quantum into int16 (the device's output) or float (the full-resolution
+  // output, Engine::processFloat): the same body (quantumT / renderT, inlined into
+  // each), so the int16 functions are what they were and a build that never renders
+  // float links none of the float ones.
   void quantum(int16_t* out);
+  void quantumF(float* out);
   void render(int16_t* out);
+  void renderF(float* out);
+  template <class Out> __attribute__((always_inline)) inline void quantumT(Out* out);
+  template <class Out> __attribute__((always_inline)) inline void renderT(Out* out);
+  void quantumTo(int16_t* out) { quantum(out); }
+  void quantumTo(float* out) { quantumF(out); }
+  void renderTo(int16_t* out) { render(out); }
+  void renderTo(float* out) { renderF(out); }
+  void masterOut(float* busL, float* busR, int16_t* out) {
+    if (monoOut) master.processMono(busL, out, kQuantum, &peakL, &peakR);
+    else master.process(busL, busR, out, kQuantum, &peakL, &peakR);
+  }
+  void masterOut(float* busL, float* busR, float* out) {
+    if (monoOut) master.processMonoF(busL, out, kQuantum, &peakL, &peakR);
+    else master.processF(busL, busR, out, kQuantum, &peakL, &peakR);
+  }
   void renderFading(Voice* v, float* L, float* R);
   void publishStatus();
   void drainCommands();
@@ -2440,7 +2460,11 @@ __attribute__((noinline)) void State::renderFading(Voice* v, float* L, float* R)
   if (fadeV && !fadeV->active()) fadeV = nullptr;
 }
 
-void State::render(int16_t* out) {
+void State::render(int16_t* out) { renderT(out); }
+void State::renderF(float* out) { renderT(out); }
+
+template <class Out>
+__attribute__((always_inline)) inline void State::renderT(Out* out) {
   float busL[kQuantum], busR[kQuantum], sD[kQuantum], sR[kQuantum];
   const bool mono = monoOut;
   for (int i = 0; i < kQuantum; ++i) { busL[i] = 0.0f; busR[i] = 0.0f; sD[i] = 0.0f; sR[i] = 0.0f; }
@@ -2825,8 +2849,7 @@ void State::render(int16_t* out) {
   }
 #endif
   master.setParams(mFilter, mReso, mDrive, mVolume);
-  if (mono) master.processMono(busL, out, kQuantum, &peakL, &peakR);
-  else master.process(busL, busR, out, kQuantum, &peakL, &peakR);
+  masterOut(busL, busR, out);
 }
 
 void State::publishStatus() {
@@ -2865,7 +2888,11 @@ void State::publishStatus() {
   peakL = peakR = 0.0f;
 }
 
-void State::quantum(int16_t* out) {
+void State::quantum(int16_t* out) { quantumT(out); }
+void State::quantumF(float* out) { quantumT(out); }
+
+template <class Out>
+__attribute__((always_inline)) inline void State::quantumT(Out* out) {
   if (seedReq.load(std::memory_order_relaxed) != 0) {
     const uint32_t s = seedReq.exchange(0, std::memory_order_relaxed);
     if (s) rng = s;
@@ -2888,7 +2915,7 @@ void State::quantum(int16_t* out) {
   if (playing) sequencerTick();
   else rollTick();
   for (int t = 0; t < kNumTracks; ++t) ensureParams(t);
-  render(out);
+  renderTo(out);
   publishStatus();
   ++qCount;
 }
@@ -3011,7 +3038,39 @@ bool Engine::hostsKind(int track, int kind) const {
   return track >= 0 && track < kNumTracks && kind >= 0 && kind < kNumVoiceKinds && impl_->kindVoice(track, kind);
 }
 
-void Engine::process(int16_t* out, int frames) {
+namespace {
+
+// Engine::process / processFloat's per-format pieces (engine.h OUTPUT FORMATS).
+inline void silence(int16_t* out, size_t n) { std::memset(out, 0, sizeof(int16_t) * n); }
+inline void silence(float* out, size_t n) { for (size_t i = 0; i < n; ++i) out[i] = 0.0f; }
+// The suspend fade's gain g (Q15, 0..32767) on one sample.
+inline void fadeSample(int16_t* x, int32_t g) { *x = int16_t((int32_t(*x) * g) >> 15); }
+inline void fadeSample(float* x, int32_t g) { *x *= float(g) * (1.0f / 32768.0f); }
+// The output tap observes int16 (the sample pool's format): the float quantum is
+// rounded exactly as the int16 path rounds it, so the tap sees the same samples.
+inline const int16_t* tapView(const int16_t* out, int16_t*) { return out; }
+inline const int16_t* tapView(const float* out, int16_t* tmp) {
+  floatToInt16(out, tmp, 2 * kQuantum);
+  return tmp;
+}
+
+}  // namespace
+
+void floatToInt16(const float* in, int16_t* out, int n) {
+  for (int i = 0; i < n; ++i) {
+    const float x = in[i];
+    float a = x < 0.0f ? -x : x;
+    a = a < 1.0f ? a : 1.0f;
+    const int32_t v = int32_t(a * 32767.0f + 0.5f);
+    out[i] = int16_t(x < 0.0f ? -v : v);
+  }
+}
+
+void Engine::process(int16_t* out, int frames) { processT(out, frames); }
+void Engine::processFloat(float* out, int frames) { processT(out, frames); }
+
+template <class Out>
+__attribute__((always_inline)) inline void Engine::processT(Out* out, int frames) {
   engine_detail::State& s = *impl_;
   // Dekker-style handshake with suspend(): we raise inProcess, THEN look at
   // suspendReq; suspend() raises suspendReq, THEN waits for inProcess to drop.
@@ -3023,7 +3082,7 @@ void Engine::process(int16_t* out, int frames) {
   const int quanta = frames / kQuantum;
   for (int q = 0; q < quanta; ++q, out += 2 * kQuantum) {
     if (!s.inited) {
-      std::memset(out, 0, sizeof(int16_t) * 2 * kQuantum);
+      silence(out, 2 * kQuantum);
       continue;
     }
     if (s.suspendReq.load()) {
@@ -3041,18 +3100,18 @@ void Engine::process(int16_t* out, int frames) {
         if (s.suspendReq.load()) s.discardCommands(tail);
       }
       if (s.suspendFade > 0) {
-        s.render(out);
+        s.renderTo(out);
         const int n = engine_detail::kSuspendFadeQuanta * kQuantum;
         int pos = (engine_detail::kSuspendFadeQuanta - s.suspendFade) * kQuantum;
         for (int i = 0; i < kQuantum; ++i, ++pos) {
           const int32_t g = ((n - 1 - pos) << 15) / n;
-          out[2 * i] = int16_t((int32_t(out[2 * i]) * g) >> 15);
-          out[2 * i + 1] = int16_t((int32_t(out[2 * i + 1]) * g) >> 15);
+          fadeSample(&out[2 * i], g);
+          fadeSample(&out[2 * i + 1], g);
         }
         --s.suspendFade;
         s.publishStatus();
       } else {
-        std::memset(out, 0, sizeof(int16_t) * 2 * kQuantum);
+        silence(out, 2 * kQuantum);
       }
       continue;
     }
@@ -3076,15 +3135,16 @@ void Engine::process(int16_t* out, int frames) {
     s.suspendFade = engine_detail::kSuspendFadeQuanta;
     if (tap) {
       const uint32_t bars = s.barCount;
-      s.quantum(out);
-      tap->quantum(out, kQuantum,
+      s.quantumTo(out);
+      int16_t tmp[2 * kQuantum];
+      tap->quantum(tapView(out, tmp), kQuantum,
                    uint8_t((s.playing ? OutputTap::kTapPlaying : 0) | (s.barCount != bars ? OutputTap::kTapBar : 0)));
     } else {
-      s.quantum(out);
+      s.quantumTo(out);
     }
   }
   const int rest = frames - quanta * kQuantum;
-  if (rest > 0) std::memset(out, 0, sizeof(int16_t) * 2 * size_t(rest));
+  if (rest > 0) silence(out, 2 * size_t(rest));
   s.inProcess.store(false);
 }
 
