@@ -160,7 +160,7 @@ static void testHelp() {
   char title[40];
   const char *l1 = "", *l2 = "";
   R->ui.explainText(title, &l1, &l2);
-  CHECK(std::strstr(l2, "SAMPLE SLOT") != nullptr);
+  CHECK(std::strstr(l2, "PREV SLOT") != nullptr && std::strstr(l2, "CTRL: TUNE") != nullptr);
   tap("/");
 }
 

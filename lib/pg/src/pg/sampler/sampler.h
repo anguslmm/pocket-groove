@@ -16,7 +16,7 @@
 //
 // Playback: linear interpolation from the int16 data (memory-mapped flash on the
 // device), position in 32.32 fixed point, at
-//   (sample rate / output rate) * 2^((note - 60 + PITCH + FINE + repeats * RPIT) / 12) * SPEED
+//   (sample rate / output rate) * 2^((note - 60 + PITCH + FINE + TUNE + repeats * RPIT) / 12) * SPEED
 // clamped to 4 octaves either way. Never reads outside [region start, region end)
 // within the sample: every read index is checked against the region, and the
 // region against the sample, before the read.
@@ -24,7 +24,8 @@
 // LATCHED at note-on (they would click if they moved under a sounding chop):
 // SLICES, SLICE, START, REVERSE, ATTACK, LOOP, the slot. CONTINUOUS (follow a
 // macro while the chop sounds, also through setParamsFine, no libm there):
-// LENGTH (the region's end moves), PITCH, FINE, SPEED, RELEASE, the filter,
+// LENGTH (the region's end moves), PITCH, FINE, the track's TUNE (Voice::setTune;
+// like PITCH it steps at the quantum edge), SPEED, RELEASE, the filter,
 // BITS, DOWN, DRIVE, RPIT, RFAD; RTRG takes its new rate at the next repeat.
 //
 // Processing per sample: read -> envelope x velocity -> sample-and-hold (DOWN)
@@ -54,6 +55,7 @@ class SamplerVoice final : public Voice {
   void setParams(const uint8_t* soundParams) override;
   void setParamsFine(const float* soundParams) override;
   void setTempo(float bpm) override;
+  void setTune(float semitones) override { trackTune_ = semitones; }
   void setSampleSlot(uint8_t slot) override { slot_ = slot < kPoolSlots ? slot : 0; }
   void noteOn(const NoteEvent& e) override;
   void noteOff(uint8_t note) override;
@@ -101,6 +103,7 @@ class SamplerVoice final : public Voice {
   float pf_[kNumParams];
   bool fine_ = false;
   uint8_t slot_ = 0;
+  float trackTune_ = 0.0f;         // the track's tune (Voice::setTune), semitones
 
   // the chop (latched)
   SampleRef ref_;

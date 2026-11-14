@@ -213,6 +213,13 @@ class Ui {
   int sampleSlotOf(int t) const;
   // Sets it the way SHIFT+; / . does (no undo snapshot, no toast): host tools.
   void setSampleSlot(int t, int slot);
+  // The track's tune (params.h kMixTune / kMixTuneCents), pending-aware: semitones,
+  // cents, and the readout ("+3", "-2 +15C"; "" untuned; out: 16 bytes).
+  int tuneSemis(int t) const;
+  int tuneCents(int t) const;
+  void tuneText(int t, char* out) const;
+  // Sets it the way CTRL(+SHIFT)+; / . does, clamped (no undo snapshot, no toast).
+  void setTune(int t, int semis, int cents);
   // A host's short message in the toast line (the desktop: a sample file dropped on the window).
   void notify(const char* text, bool error = false) { toast(text, error ? 2 : 0); }
   // MICROPHONE (stage F2, UX.md 10.3 "Recording"): hold L on a sampler instrument's
@@ -414,6 +421,8 @@ class Ui {
   bool pitched(int t) const { return isSynth(t) || samplerOn(t); }
   int samplerNote(int degree) const;   // 60 + the scale's degree (60 = the chop as recorded)
   bool stepSampleSlot(int dir);        // SHIFT+; / . on a sampler instrument's page
+  bool stepTune(int dir, bool fine);   // CTRL(+SHIFT)+; / . there
+  void toastTune(int t, const char* prefix);
   Step newStep(int t) const;
   int noteFor(int t, int degree) const;
   uint8_t chordForDegree(int degree) const;
@@ -643,7 +652,7 @@ class Ui {
   uint16_t clipInst_[kNumTracks] = {};   // each clipped track's instrument id when it was copied
   bool undoValid_ = false, undoIsRedo_ = false;
   // an instrument change is undone without a pattern snapshot (ui_edit.cpp)
-  uint8_t undoKind_ = 0, undoTrack_ = 0;   // 0 pattern, 1 instrument, 2 sample slot
+  uint8_t undoKind_ = 0, undoTrack_ = 0;   // 0 pattern, 1 instrument, 2 sample slot, 3 tune (in undoPos_[0..1])
   uint8_t undoSlot_ = 0;
   uint32_t slotUndoMs_ = 0;
   uint16_t undoInst_ = 0;

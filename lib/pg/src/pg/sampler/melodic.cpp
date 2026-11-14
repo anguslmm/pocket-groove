@@ -128,6 +128,13 @@ void MelodicSampler::setParamsFine(const float* v) {
   if (changed) updateTone();
 }
 
+// The track's tune: only the pitch moves (the notes take it at their next quantum).
+void MelodicSampler::setTune(float semitones) {
+  if (semitones == trackTune_) return;
+  trackTune_ = semitones;
+  tune_ = (pf_[mel::kPitch] - 64.0f) + (pf_[mel::kFine] - 64.0f) * (1.0f / 64.0f) + trackTune_;
+}
+
 // Everything derived from the parameters (control rate).
 void MelodicSampler::updateTone() {
   const float qs = kQ * invFs_;   // seconds per quantum
@@ -143,7 +150,7 @@ void MelodicSampler::updateTone() {
   const float fd = 0.03f * exp2Fast(7.059f * unit(pf_[mel::kFltDecay]));       // T60 30 ms .. 4 s
   fdecCoefQ_ = exp2Fast(-9.9658f * qs / fd);
   envOct_ = 5.0f * unit(pf_[mel::kEnvAmt]);                                     // 0 .. 60 semitones
-  tune_ = (pf_[mel::kPitch] - 64.0f) + (pf_[mel::kFine] - 64.0f) * (1.0f / 64.0f);
+  tune_ = (pf_[mel::kPitch] - 64.0f) + (pf_[mel::kFine] - 64.0f) * (1.0f / 64.0f) + trackTune_;
   const float dd = unit(pf_[mel::kDrift]);
   driftDepth_ = 0.6f * dd * dd;                                                  // 0 .. 0.6 semitones
   driftInc_ = 0.1f * exp2Fast(6.322f * unit(pf_[mel::kDriftRate])) * qs;        // 0.1 .. 8 Hz, turns per quantum

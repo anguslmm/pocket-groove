@@ -18,6 +18,7 @@
 #include <cstring>
 
 #include "../macro/macro.h"
+#include "../sampler/sampler_params.h"
 #include "delay.h"
 #include "dsp_util.h"
 #include "ducker.h"
@@ -596,7 +597,14 @@ bool State::sanitizeTrack(Project& p, int t) const {
     int lo, hi;
     const bool exists = voiceRange(v, t, i, lo, hi);
     if (exists && i < kSoundParams) has |= 1u << i;
-    const uint8_t val = exists ? uint8_t(clampi(ts.params[i], lo, hi)) : 0;
+    uint8_t val = exists ? uint8_t(clampi(ts.params[i], lo, hi)) : 0;
+    // The track's tune (params.h kMixTune): signed, kept on the tracks that can host
+    // a sampler whatever their instrument now (so a tuned sampler stays tuned after
+    // a visit to another instrument), zero elsewhere.
+    if ((i == kMixTune || i == kMixTuneCents) && ((kSamplerTracks >> t) & 1u)) {
+      const int m = i == kMixTune ? kTuneMaxSemis : kTuneMaxCents;
+      val = tuneByte(clampi(tuneValue(ts.params[i]), -m, m));
+    }
     if (val != ts.params[i]) { ts.params[i] = val; changed = true; }
   }
   if (ts.mute > 1) { ts.mute = 1; changed = true; }
@@ -639,6 +647,7 @@ bool State::sanitizeAll(Project& p) const {
         std::memset(ts.macro, 0, sizeof(ts.macro));
         ts.sampleSlot = 0;
       }
+      ts.params[kMixTune] = ts.params[kMixTuneCents] = 0;   // reserved bytes before version 3: no tune
       const bool inst = instrumentId(ts) != 0;
       for (int pt = 0; pt < kNumPatterns; ++pt) {
         Step* steps = p.patterns[pt].tracks[t].steps;
@@ -1425,6 +1434,8 @@ void State::ensureParams(int t) {
   buildEff(t);
   // While a macro moves the voice is fed fractional values by fineEval instead.
   if (voice[t] && !r.fine) voice[t]->setParams(r.eff);
+  // The track's tune (params.h kMixTune): only a hosted kind (the sampler) plays it.
+  if (voice[t] && voice[t] != nativeV[t]) voice[t]->setTune(trackTune(r.eff));
   r.paramsSent = 1;
 }
 

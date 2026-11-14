@@ -878,6 +878,14 @@ void Ui::drawWave(Framebuffer& fb) {
   cat(catInt(cat(catInt(buf, tenths / 10), "."), tenths % 10), "S");
   g.rect(x0 + w - 4 - tw(buf), y0 + 1, tw(buf) + 3, 10, PANEL);
   g.textR(x0 + w - 3, y0 + 3, buf, DIM);
+  // the track's tune, left of the length, only when it is not zero ("+3", "-2 +15C")
+  char tn[16];
+  tuneText(t, tn);
+  if (tn[0]) {
+    const int rx = x0 + w - 3 - tw(buf) - 6;
+    g.rect(rx - tw(tn) - 1, y0 + 1, tw(tn) + 3, 10, PANEL);
+    g.textR(rx, y0 + 3, tn, WHITE);
+  }
 }
 
 void Ui::drawInstrument(Framebuffer& fb) {
@@ -1007,6 +1015,14 @@ void Ui::drawInstrument(Framebuffer& fb) {
     x = g.text(x, 127, "+MOVE", DIM);
     x = g.text(x + 12, 127, "DEL", WHITE);
     g.text(x, 127, "+KEY", DIM);
+  } else if (!held && samplerOn(t) && isHeld(kKCtrl)) {   // a sampler, CTRL held: the tune
+    x = g.text(4, 127, "CTRL+ ", DIM);
+    x = g.text(x, 127, ";", WHITE);
+    x = g.text(x, 127, "/", DIM);
+    x = g.text(x, 127, ".", WHITE);
+    x = g.text(x, 127, " TUNE  +", DIM);
+    x = g.text(x, 127, "SFT", WHITE);
+    g.text(x, 127, " FINE", DIM);
   } else if (!held && samplerOn(t) && isHeld(kKShift)) {   // a sampler, SHIFT held: its layer
     x = g.text(4, 127, "SFT+ ", DIM);
     x = g.text(x, 127, ";", WHITE);
@@ -1547,7 +1563,9 @@ uint32_t Ui::bodySignature() const {
   if (view_ == View::Sound) {
     uint32_t mv = 0;
     for (int m = 0; m < kTrackMacros; ++m) mv |= uint32_t(macroMoving(m)) << m;
-    h = fnv(h, mv | uint32_t(held_ >> kKNote0 & 0xFF) << 8 | uint32_t(isHeld(kKShift)) << 16);   // moving macros, lit key letters, SHIFT's footer
+    h = fnv(h, mv | uint32_t(held_ >> kKNote0 & 0xFF) << 8 | uint32_t(isHeld(kKShift)) << 16 |
+                   uint32_t(isHeld(kKCtrl)) << 17);   // moving macros, lit key letters, SHIFT's and CTRL's footers
+    h = fnv(h, uint32_t(paramValue(sel_, kMixTune)) | uint32_t(paramValue(sel_, kMixTuneCents)) << 8);   // the tune readout
     // tilt: the handles move with the engine's heard positions, the marks light
     uint32_t tp = uint32_t(tilt_.engaged && tilt_.track == sel_);
     for (int m = 0; m < kTrackMacros; ++m)

@@ -33,8 +33,29 @@ enum MixParam : uint8_t {
   kMixDelaySend,    // 0..127
   kMixReverbSend,   // 0..127
   kMixDuck,         // 0..127: how much the sidechain ducker pulls this track down
-  kMixReserved0, kMixReserved1, kMixReserved2,
+  // THE TRACK'S TUNE (a sampler instrument only: UX.md 10.3 "Tune"). Signed bytes
+  // (int8_t in a uint8_t), 0 = no change, so every older file (these were
+  // reserved, sanitised to zero) and every new project plays untuned. No
+  // ParamInfo: not a mixer row, not lockable, not a macro target; the macros'
+  // derivation and combineMixer never write them. Kept on the tracks that can
+  // host a sampler (kSamplerTracks), zero elsewhere; the sampler voices add them
+  // to their own PITCH / FINE (Voice::setTune); every other voice ignores them.
+  kMixTune,         // semitones, -kTuneMaxSemis..+kTuneMaxSemis
+  kMixTuneCents,    // cents, -kTuneMaxCents..+kTuneMaxCents (the gesture steps kTuneCentStep)
+  kMixReserved2,
 };
+constexpr int kTuneMaxSemis = 24;
+constexpr int kTuneMaxCents = 50;
+constexpr int kTuneCentStep = 5;
+inline uint8_t tuneByte(int v) { return uint8_t(int8_t(v)); }
+inline int tuneValue(uint8_t b) { return int(int8_t(b)); }
+// The track's tune in semitones, from its two stored bytes (clamped to the ranges).
+inline float trackTune(const uint8_t* params) {
+  int s = tuneValue(params[kMixTune]), c = tuneValue(params[kMixTuneCents]);
+  s = s < -kTuneMaxSemis ? -kTuneMaxSemis : (s > kTuneMaxSemis ? kTuneMaxSemis : s);
+  c = c < -kTuneMaxCents ? -kTuneMaxCents : (c > kTuneMaxCents ? kTuneMaxCents : c);
+  return float(s) + float(c) * 0.01f;
+}
 
 // ---- Global params (Project::globals indices). Table lives in engine/globals.cpp.
 enum GlobalParam : uint8_t {
