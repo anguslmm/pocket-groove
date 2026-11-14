@@ -56,6 +56,19 @@ uint32_t* stackLow() { return reinterpret_cast<uint32_t*>(_edtcmram_bss); }
 // Before any constructor (and before main): __libc_init_array runs .preinit_array
 // first. The startup code has copied .data and zeroed .bss (both DTCM) by now.
 void preinit() {
+  // The FPU: full access to CP10 / CP11. libDaisy's SystemInit does this, but the
+  // startup code skips SystemInit in a BOOT_APP build, so it is the bootloader's
+  // doing (or a fault at the first float instruction): set it again, harmless.
+  SCB->CPACR |= (3u << 20) | (3u << 22);
+  __DSB();
+  __ISB();
+  // Denormals: flush-to-zero (FZ, bit 24) and default NaN (DN, bit 25) for the main
+  // loop (FPSCR) and for every interrupt handler (FPDSCR: the core loads an
+  // exception's FPSCR from it). libDaisy does not touch either. Decaying FX tails
+  // otherwise produce subnormal floats; the M7 handles them in hardware, but FZ makes
+  // the arithmetic the same in every context. The audio callback checks it took.
+  FPU->FPDSCR |= (1u << 24) | (1u << 25);
+  __set_FPSCR(__get_FPSCR() | (1u << 24) | (1u << 25));
   // The vector table is the image's (the bootloader should have set this already).
   SCB->VTOR = reinterpret_cast<uint32_t>(g_pfnVectors);
   // D2 SRAM1-3: their clocks (the bootloader's SystemInit enables them, libDaisy's

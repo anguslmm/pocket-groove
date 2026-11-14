@@ -164,6 +164,63 @@ class DaisyTest(unittest.TestCase):
             self.assertEqual(pg.get_sample(l, 4), (tone, "SAW"))
 
 
+    def test_line_in_recording_and_touch(self):
+        """Stage 1's recording path in daisy_sim (a 440 Hz tone on the line input's L,
+        R silent): the UI's gesture over serial (PERC's sampler page, hold L), the slot
+        at 48 kHz, kept over a restart; a touch from the computer reaches the mirror."""
+        flash = os.path.join(self.tmp, "qspi.bin")
+        s = self.sim("--flash", flash, "--line-in", "mono")
+        dev = pg_daisy.Device(s.port)
+        try:
+            text = "\n".join(self.report(dev))
+            self.assertIn("[linein] codec line in, 48000 Hz in and stored", text)
+            self.assertIn("no recording yet", text)
+            # PERC selected silently, its SOUND page, two steps to a sampler instrument
+            # (host/daisy/test_daisy_stage1.cpp counts them on the same demo project)
+            for k in ("down sft", "tap h", "up sft", "tap 9"):
+                dev.key(k)
+            dev.pump(0.3)
+            for _ in range(2):
+                dev.key("tap .")
+                dev.pump(0.5)
+            dev.key("down l")
+            self.assertTrue(dev.sync("hold"))
+            dev.pump(2.0)          # the room, then the tone's next onset (0.8 s on, 0.7 s off)
+            dev.key("up l")
+            self.assertTrue(dev.sync("rel"))
+            dev.pump(0.5)
+            rep = "\n".join(self.report(dev))
+            self.assertIn("[linein] last: slot 1 DONE (commit OK)", rep)
+            self.assertIn("at 48000 Hz", rep)
+            self.assertIn("mono L alone (R silent)", rep)
+            self.assertRegex(rep, r"\[samples\] slot  1 REC01")
+            # a touch from the computer, with the mirror on: down, then up after 60 ms
+            dev.send("m")
+            dev.pump(0.3)
+            dev.key("touch 12 34 60")
+            dev.pump(0.4)
+            self.assertEqual(dev.touch, (False, 12, 34))
+            self.assertEqual(dev.touches, 2)
+            dev.send("m")
+            # the pool's flash copy, then a restart: the recording is still there
+            ok = False
+            for _ in range(40):
+                if "0 sectors to write" in "\n".join(self.report(dev)):
+                    ok = True
+                    break
+                time.sleep(0.25)
+            self.assertTrue(ok)
+        finally:
+            dev.close()
+        time.sleep(2.5)
+        s.stop()
+        s2 = self.sim("--flash", flash, "--line-in", "mono")
+        with pg.Link(s2.port, timeout=0.4) as l:
+            data, name = pg.get_sample(l, 1)
+            self.assertEqual(name, "REC01")
+            self.assertGreater(len(data), 48000 // 2)
+
+
 def main():
     global SIM
     ap = argparse.ArgumentParser()
