@@ -181,6 +181,9 @@ endif()
 # The hardware spike's portable parts (src/hwspike, env:hw-spike, docs/hw-spike.md).
 add_subdirectory(hwspike)
 
+# The Daisy Seed target's portable code (daisy/core, daisy/app; docs/DAISY.md).
+add_subdirectory(daisy)
+
 # The desktop app (host/app, docs/DESKTOP.md): built only when SDL2 is found.
 option(PG_DESKTOP "Build the desktop app pocket-groove (needs SDL2)" ON)
 if(PG_DESKTOP)
