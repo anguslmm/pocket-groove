@@ -1134,7 +1134,7 @@ int main(int argc, char** argv) {
       c.step.gate = uint8_t(lat >> 16);
       g_inst.engine().post(c);
       std::printf("[tape] %d min of track time (%.0f MB), %u blocks of %u samples; LINE latency %.1f ms%s\n",
-                  opt.tapeMinutes, double(app.tape.mem.size()) / 1048576.0, app.tape.tape.blocks(), pg::tape::kBlock,
+                  opt.tapeMinutes, double(app.tape.mem.size()) / 1.0e6, app.tape.tape.blocks(), pg::tape::kBlock,
                   1000.0 * lat / opt.sr, opt.lineLatencyMs >= 0 ? " (--line-latency)" : " (estimated: --line-latency MS)");
     } else {
       std::printf("[tape] NO TAPE: %d min do not fit\n", opt.tapeMinutes);

@@ -57,7 +57,7 @@ tap j
 tap k
 up fn
 tap z
-wait 1200
+wait 3000
 shot tape-layers
 
 # a trick held

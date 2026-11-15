@@ -131,6 +131,8 @@ Cardputer keys by legend as in the manual (`` ` `` `1` ... `del` `tab` `q` ... `
 | `--listen-dump FILE.wav` | Listen also writes the device's audio exactly as SDL delivers it (before any conversion; the format, channels and rate SDL gave are in the WAV header). For troubleshooting, below; a re-plug starts `FILE-2.wav` |
 | `--listen-device NAME` | Listen to another input: its exact name or a part of it (the terminal lists the inputs when Listen starts) |
 | `--mic-device NAME` | record samples (hold `L` on a sampler page, below) from this input: its exact name or a part of it, any case (e.g. `--mic-device macbook`); default: chosen as in "Recording a sample" |
+| `--tape-minutes N` | the tape's memory in minutes of track time, all four tracks together (default 10: 53 MB at 44.1 kHz; 0 = no tape). Below, "Tape" |
+| `--line-latency MS` | the tape's LINE input: the round trip from what you hear to what comes back in (default: estimated from the audio buffers and printed at the start). Below, "Tape" |
 | `--list-inputs` | print the audio inputs' names, one per line, and exit (to copy one for `--mic-device` or `--listen-device`) |
 | `--listen-sim PPM` | for tests: Listen plays a simulated device (a 1 kHz tone) whose clock runs PPM fast; `--listen-sim-spec FMT:CH:RATE:FRAMES` makes it deliver another format than asked for (e.g. `f32:1:48000:1024`), `--listen-sim-burst N` N callbacks back to back, `--listen-sim-vary` varying callback sizes |
 
@@ -280,6 +282,19 @@ The device's gesture works here with the Mac's microphone (MANUAL.md chapter 20,
 - The terminal prints one line per take: `[resample] slot 3: DONE, 3.871 s (85355 samples), in time, 2 bar line(s), peak 21402`.
 - At `--sr 32000` it says `RESAMPLE: 44.1K ONLY`, as the device does.
 - The writer side runs on the UI thread, every frame, from a 3 s ring (the device: a writer task and 46 ms). If the UI stalls longer than that, the take fails (`RESAMPLE: OVERRUN`) instead of keeping one with a gap.
+
+## Tape
+
+The tape (MANUAL chapter 21, UX.md 10.11): `p` twice. The app gives it 10 minutes of track time (`--tape-minutes N`; about 5.3 MB a minute at 44.1 kHz, taken from the Mac's memory at the start) and prints it:
+
+```
+[tape] 10 min of track time (53 MB), 1615 blocks of 16384 samples; LINE latency 46.4 ms (estimated: --line-latency MS)
+```
+
+- **Files.** Saving a project writes its tape beside it: `projects/NAME/tape.txt` and `projects/NAME/track1.wav` .. `track4.wav` (44.1 kHz mono 16-bit, the tracks that have audio). Loading the project, or the next launch resuming it, loads them. The WAVs open in any editor; one replaced by an edited file of the same format is loaded as it is.
+- **LINE** records the Mac's audio input, the one the microphone uses (`--mic-device` chooses it). The input is open only while a LINE take is armed or recording (`[tape] line in open: NAME` / `closed`). What comes in is late by the round trip: the output buffer, the Mac's audio path, the input's chunks and the tape's own ring. The app estimates it from the buffers (2 x `--buffer` + 512 + 1024 frames, 46 ms at the defaults); the real figure depends on the Mac and the interface. To measure it, loop the output into the input (a cable, or a loopback device), record a click on a bar line onto a LINE track and see how far after the bar line it lands on the tape; then start with `--line-latency MS` and it lands on it. Only at 44.1 kHz (the input is opened at 44.1 kHz); at `--sr 32000` LINE says `NO LINE INPUT`.
+- **Lift** (`ctrl`+`c` on TAPE) writes `samples/NN-tapNN.wav`: the loop halved to the pool's 22,050 Hz as recordings are.
+- The Cardputer has no tape (it has no memory for one); the Daisy's comes in a later phase. A project with a tape folder loads on both: the folder is just not read.
 
 ## How it is built
 

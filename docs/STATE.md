@@ -70,6 +70,74 @@ itself. Host-verified: ctest -L daisy (core, /int with power cuts, sample pool, 
 BMI270) and tools/test_pg_daisy.py against the firmware's App in daisy_sim. docs/DAISY.md has the
 flashing steps and the first-power-on checklist. Entry "DAISY TARGET BUILT" below.
 
+TAPE PHASE 1 (2026-11-15, branch of the tape worktree; NOTHING LISTENED TO, desktop and host only).
+The OP-1-style tape: four mono audio tracks beside the patterns, mixed into the master bus
+with the instruments (level, pan, mute, delay and reverb sends each), rolling with the
+transport and locked to its bars. Core `lib/pg/src/pg/tape/` (contract: tape.h's header),
+the TAPE view (`p` in SONG; ui_tape.cpp; UX.md 10.11 and 6.3, MANUAL chapter 21), the desktop
+app (DESKTOP.md "Tape"), ARCHITECTURE.md "The tape". Compiled out with PG_TAPE=0 (config.h):
+the Cardputer's envs and the Daisy's Makefile set it.
+- WHAT TRACK RECORDS: the selected instrument track's dry signal as heard (after its level,
+  pan, mute and ducking; before its sends and the master bus), mono (L+R)/2. The send effects
+  are shared buses that cannot be split per track, and the tape track has its own sends:
+  recorded wet, the effects would be doubled. MIX = the master bus's input (all tracks, the
+  effects' return, the other tape tracks; not the armed track, whose sends are held at 0 while
+  it records MIX), so a bounce played back with its sources muted is the mix: measured within
+  3 LSB of the output (mono), 4 LSB of the stereo mix's mid (the tape is mono). LINE = the
+  platform's input (desktop: the microphone's SDL input) written a round trip back.
+- ALIGNMENT: the tape is addressed on the sequencer's exact Q32 grid: at each bar line the
+  address of the quantum's first frame is the bar's start on tape (steps x the tape tempo's
+  step) minus the sequencer's gridCd. At the tape's own tempo it never jumps (no crossfades,
+  no clicks), a bar line's impulse lands on its bar's address, and live and taped notes
+  coincide sample for sample where the phases match (bars of whole quanta) and within one
+  quantum (the sequencer's own rounding of a note to a quantum, <= 0.33 ms) otherwise
+  (itest_tape at 48 kHz exact, at 44.1 kHz within 16 frames). At another tempo the address
+  moves at bar lines (the new place at full level, the old one faded out over 256 frames).
+  An earlier design reset at every bar line on the quantized frame: it was bar-exact but put a
+  crossfade on every downbeat (smearing it by up to 16 frames); dropped.
+- STORAGE: blocks of 16,384 samples (32 KB, 0.34 s at 48 kHz; big enough for SD-card reads,
+  small enough that silence is cheap and a take's undo copies little), 98 bytes of bookkeeping
+  each, all in one region the platform hands over (Tape::init(ptr, bytes, rate)). 5.78 MB per
+  minute of track time at 48 kHz (5.31 at 44.1): 64 MB of SDRAM is about 11 minutes. Takes
+  write into fresh take blocks (base + take heard through a soft overdub guard; REPLACE writes
+  input - base); the main thread merges after the take and keeps the replaced blocks: one
+  level of undo and redo. Out of memory: the take ends cleanly (MEMORY FULL), what it had
+  stays. int16 at half scale (+6 dB headroom over the master's 1.0).
+- KEYS: `p` again in SONG (the view key's "next page" rule: no new combo). `z x c v` arm, `1-4`
+  mute, `; .` field, `- =` value, `L` records (tap: on until `L`; hold: while held; bar line
+  to bar line; from stop a one-bar count-in, then Play from the top), SHIFT+`L` replaces,
+  `b n m` held BRAKE / HALF / REVERSE, `del` erases the loop (SHIFT: all; asks), CTRL+Z the
+  tape's undo, CTRL+C lifts the loop into the selected sampler track's slot (else PERC's) in
+  whole bars that fit (TAP01). ghosting-audit.md row 32: every gesture is two keys.
+- FILES: <mount>/pg/NAME/tape.txt + track1..4.wav beside NAME.pgv, incremental both ways
+  (tape_io.h, a piece per UI frame), loaded with the project and with the session at boot; a
+  tape of another rate is refused (TAPE IS 48K: NOT LOADED).
+- MEASURED (host): ctest 119/119 (new itest_tape 301 checks, itest_ui_tape 267 on all three
+  key-matrix models, itest_golden_notape, desktop_check part 10). itest_golden /
+  itest_golden48 unchanged; an empty tape bit-identical in int16 and float. Cost, callgrind
+  x86 instructions per frame, busy pattern stereo 48 kHz (bench_tape): 2101 no tape, 2107
+  empty, 2236 four tracks playing, 2310 + a take, 2608 + HALF held; ESTIMATED on the Daisy
+  1.4..2.2 % / 2.1..3.3 % / 5..8 % of the core. Cardputer unchanged: USB flash 1,336,235 RAM
+  202,284; non-USB 1,274,199 / 201,764. Daisy stage 0 420,848 B, stage 1 452,344 (+4).
+- LISTEN FOR (build/tape/ from host/tools/tape_demo; nobody has heard them): layered.wav (the
+  bass, then the pushed lead going to tape and on: no seam, no drift, no click at the loop),
+  bounce.wav (4 bars live then their bounce: the same), brake.wav / half.wav / reverse.wav
+  (the drums live, bass and lead from tape; after each trick the tape is back on the beat).
+- PHASE 2 (the Daisy) needs from this code: (1) the SDRAM pool: Tape::init with an SDRAM region
+  (one call; mind the sample pool's share) and PG_TAPE=1 in the Makefile: about 24 KB more code
+  in the 480 KB image (measured for Cortex-M7 at -Os: tape.cpp 11.5 KB, tape_io 3.0, ui_tape 7.7;
+  the engine's and UI's hooks and the help text ESTIMATED 1-2 KB; stage 1 has 38.3 KB free); (2) LINE from the codec's
+  input: daisy/core/line_mic's samples to Tape::lineIn from the audio interrupt's block (the
+  latency is the codec's in + out block, a constant: post it with kOpLatency); (3) SD save:
+  the Daisy's FileSystem must create the folder on open-for-write (FatFS f_mkdir) and support
+  rename; TapeFiles' budget per frame sized for the card (the WAVs are written in 8 KB pieces);
+  (4) long tapes streamed from the card: blockPtr()/peaksOf() are the only places a block id
+  becomes memory; make them a cache lookup (nullptr = not resident: the audio thread plays
+  silence and counts a miss), keep the tables and the peaks in RAM, let the main thread fetch
+  the blocks ahead of the true address and of a trick head (BRAKE and REVERSE read behind),
+  write merged blocks back to the card, keep takes in RAM until merged; (5) the screen at
+  320x240 when the UI is redrawn for it.
+
 FLOAT OUTPUT AND ROOM IN THE DAISY'S IMAGE (2026-11-15; NOTHING HAS RUN ON A SEED, not
 listened to). (1) The engine has a full-resolution output: `Engine::processFloat` /
 `Instrument::processFloat` (float, +-1.0), the same mix and master chain as `process()` with

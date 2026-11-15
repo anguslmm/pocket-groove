@@ -575,7 +575,11 @@ void Tape::recomputeGains(int t, bool mono) {
   tRv_[t] = s[kPMute] ? 0.0f : r * r;
 }
 
-void Tape::mix(float* busL, float* busR, float* sendD, float* sendR, bool mono, bool* dSend, bool* rSend) {
+void Tape::mix(float* busL_, float* busR_, float* sendD_, float* sendR_, bool mono, bool* dSend, bool* rSend) {
+  float* __restrict busL = busL_;
+  float* __restrict busR = busR_;
+  float* __restrict sendD = sendD_;
+  float* __restrict sendR = sendR_;
   for (int t = 0; t < kTracks; ++t) recomputeGains(t, mono);
   if (!gainsInit_ || !wasActive_) {   // nothing was flowing: the gains are where they should be
     for (int t = 0; t < kTracks; ++t) {
@@ -616,11 +620,32 @@ void Tape::mix(float* busL, float* busR, float* sendD, float* sendR, bool mono, 
     if (std::fabs(tD_[t] - d1) < 1.0e-5f) d1 = tD_[t];
     if (std::fabs(tRv_[t] - v1) < 1.0e-5f) v1 = tRv_[t];
     gL_[t] = l1; gR_[t] = r1; sD_[t] = d1; sR_[t] = v1;
-    const float* x = out_[t];
+    const float* __restrict x = out_[t];
     const bool sends = d0 > 0.0f || d1 > 0.0f || v0 > 0.0f || v1 > 0.0f;
-    if (l0 == l1 && r0 == r1 && !sends) {
-      if (mono) for (int i = 0; i < kQuantum; ++i) busL[i] += x[i] * l1;
-      else for (int i = 0; i < kQuantum; ++i) { busL[i] += x[i] * l1; busR[i] += x[i] * r1; }
+    if (sends) {
+      if (d0 > 0.0f || d1 > 0.0f) *dSend = true;
+      if (v0 > 0.0f || v1 > 0.0f) *rSend = true;
+    }
+    if (l0 == l1 && r0 == r1 && d0 == d1 && v0 == v1) {   // steady gains: the plain sums
+      if (!sends) {
+        if (mono) for (int i = 0; i < kQuantum; ++i) busL[i] += x[i] * l1;
+        else for (int i = 0; i < kQuantum; ++i) { busL[i] += x[i] * l1; busR[i] += x[i] * r1; }
+      } else if (mono) {
+        const float gd = l1 * d1, gv = l1 * v1;
+        for (int i = 0; i < kQuantum; ++i) {
+          busL[i] += x[i] * l1;
+          sendD[i] += x[i] * gd;
+          sendR[i] += x[i] * gv;
+        }
+      } else {   // the send takes (a + b) / 2 of the panned pair, as the instrument tracks' do
+        const float gd = 0.5f * (l1 + r1) * d1, gv = 0.5f * (l1 + r1) * v1;
+        for (int i = 0; i < kQuantum; ++i) {
+          busL[i] += x[i] * l1;
+          busR[i] += x[i] * r1;
+          sendD[i] += x[i] * gd;
+          sendR[i] += x[i] * gv;
+        }
+      }
       continue;
     }
     float gl = l0, gr = r0, gd = d0, gv = v0;
@@ -641,8 +666,6 @@ void Tape::mix(float* busL, float* busR, float* sendD, float* sendR, bool mono, 
         sendR[i] += m * gv;
       }
     }
-    if (d0 > 0.0f || d1 > 0.0f) *dSend = true;
-    if (v0 > 0.0f || v1 > 0.0f) *rSend = true;
   }
 }
 
