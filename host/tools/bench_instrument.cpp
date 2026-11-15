@@ -2,9 +2,11 @@
 // playing a busy pattern (grooves::programBusy: all 8 tracks, ratchets,
 // p-locks, every send up, DJ filter + drive + ducker on).
 //
-//   bench_instrument [--runs N] [--seconds S] [--no-callgrind] [--demo N]
+//   bench_instrument [--runs N] [--seconds S] [--no-callgrind] [--demo N] [--float]
 //
 // --demo N plays factory demo N's song (pg/demo) instead of the busy pattern.
+// --float renders through Instrument::processFloat (the Daisy's output) instead of
+// process() (int16), to compare the two (engine.h OUTPUT FORMATS).
 //
 // For each scene (stereo / mono device x 44.1 / 32 / 48 kHz; 48 kHz is the Daisy's
 // rate: the Daisy's budget is not this file's, see docs/ARCHITECTURE.md "Sample rates"):
@@ -50,6 +52,8 @@ int g_demo = -1;   // --demo N: the song of factory demo N instead of the busy p
 constexpr int kNumScenes = int(sizeof(kScenes) / sizeof(kScenes[0]));
 constexpr int kBlock = 256;     // frames per process() call (the firmware's DMA block size class)
 int16_t g_buf[2 * kBlock];
+float g_fbuf[2 * kBlock];
+bool g_float = false;   // --float
 volatile int32_t g_sink;
 
 void setup(const Scene& sc) {
@@ -67,15 +71,23 @@ void setup(const Scene& sc) {
   g_inst.engine().post(c);
   // Warm up 2 s: FX lines fill, every voice has sounded, caches warm.
   const int warm = int(2.0f * sc.sr) / kBlock;
-  for (int i = 0; i < warm; ++i) g_inst.process(g_buf, kBlock);
+  for (int i = 0; i < warm; ++i) {
+    if (g_float) g_inst.processFloat(g_fbuf, kBlock);
+    else g_inst.process(g_buf, kBlock);
+  }
 }
 
 // The measured loop. Not inlined so callgrind can collect exactly this.
 __attribute__((noinline)) void measureLoop(int blocks) {
   int32_t acc = 0;
   for (int i = 0; i < blocks; ++i) {
-    g_inst.process(g_buf, kBlock);
-    acc += g_buf[0];
+    if (g_float) {
+      g_inst.processFloat(g_fbuf, kBlock);
+      acc += int32_t(g_fbuf[0] * 32767.0f);
+    } else {
+      g_inst.process(g_buf, kBlock);
+      acc += g_buf[0];
+    }
   }
   g_sink = acc;
 }
@@ -96,8 +108,8 @@ double callgrindIrPerFrame(const char* self, int scene, double seconds, const st
   char cmd[1024];
   std::snprintf(cmd, sizeof cmd,
                 "valgrind --tool=callgrind --toggle-collect='*measureLoop*' --callgrind-out-file=%s "
-                "%s --scene %d --seconds %.3f --demo %d > /dev/null 2>&1",
-                outFile.c_str(), self, scene, seconds, g_demo);
+                "%s --scene %d --seconds %.3f --demo %d%s > /dev/null 2>&1",
+                outFile.c_str(), self, scene, seconds, g_demo, g_float ? " --float" : "");
   if (std::system(cmd) != 0) return -1.0;
   FILE* f = std::fopen(outFile.c_str(), "r");
   if (!f) return -1.0;
@@ -135,7 +147,8 @@ int main(int argc, char** argv) {
     else if (!std::strcmp(argv[i], "--scene") && i + 1 < argc) scene = std::atoi(argv[++i]);
     else if (!std::strcmp(argv[i], "--no-callgrind")) cg = false;
     else if (!std::strcmp(argv[i], "--demo") && i + 1 < argc) g_demo = std::atoi(argv[++i]);
-    else { std::fprintf(stderr, "usage: bench_instrument [--runs N] [--seconds S] [--no-callgrind] [--demo N]\n"); return 2; }
+    else if (!std::strcmp(argv[i], "--float")) g_float = true;
+    else { std::fprintf(stderr, "usage: bench_instrument [--runs N] [--seconds S] [--no-callgrind] [--demo N] [--float]\n"); return 2; }
   }
   if (scene >= 0) {   // callgrind child
     if (scene >= kNumScenes) return 2;
@@ -153,6 +166,7 @@ int main(int argc, char** argv) {
   std::printf("  Instrument::staticRamBytes %6zu bytes (+ voice tables, see the integration report)\n",
               pg::Instrument::staticRamBytes());
 
+  if (g_float) std::printf("== output: processFloat (float) ==\n");
   if (g_demo >= 0) std::printf("== demo %d (%s), song, full instrument: wall clock (median of %d x %.1f s) ==\n", g_demo,
                                pg::demo::name(g_demo), runs, seconds);
   else std::printf("== busy pattern, full instrument: wall clock (median of %d x %.1f s) ==\n", runs, seconds);

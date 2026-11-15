@@ -59,7 +59,6 @@ struct TestHal final : Hal {
   int serialRead() override { return inPos < in.size() ? static_cast<unsigned char>(in[inPos++]) : -1; }
   void setLed(bool) override {}
   void restart(bool) override {}
-  void setOutputGain(float) override {}
   bool audioRunning() override { return true; }
   uint32_t sampleRate() override { return kRate; }
   uint32_t blockFrames() override { return kBlock; }
@@ -100,7 +99,7 @@ void boot() {
 
 // Runs `ms` of device time: per 2 ms block, the "interrupt" then a main-loop pass.
 void run(uint32_t ms) {
-  int16_t blk[kBlock * 2];
+  float blk[kBlock * 2];
   float in[kBlock * 2];
   for (uint32_t t = 0; t < ms; t += 2) {
     for (uint32_t i = 0; i < kBlock; ++i, ++g_frames) {

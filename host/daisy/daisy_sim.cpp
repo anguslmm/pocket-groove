@@ -64,7 +64,6 @@ struct Region final : pg::sampler::FlashDriver {
 struct SimHal final : Hal {
   int fdIn = -1, fdOut = -1;
   ByteRing tx;
-  float gain = 1.0f;
   uint64_t t0 = nowUs64();
   uint32_t millis() override { return uint32_t((nowUs64() - t0) / 1000u); }
   uint32_t micros() override { return uint32_t(nowUs64() - t0); }
@@ -96,7 +95,6 @@ struct SimHal final : Hal {
   }
   void setLed(bool) override {}
   void restart(bool) override { restartWanted = true; }
-  void setOutputGain(float g) override { gain = g; }
   bool audioRunning() override { return true; }
   uint32_t sampleRate() override { return kRate; }
   uint32_t blockFrames() override { return kBlock; }
@@ -233,7 +231,7 @@ int main(int argc, char** argv) {
   cfg.version = "sim";
   g_app.boot(hal, mem, cfg);
 
-  int16_t block[kBlock * 2];
+  float block[kBlock * 2];
   float in[kBlock * 2];
   LineSynth synth;
   synth.mode = lineIn;

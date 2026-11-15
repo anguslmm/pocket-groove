@@ -312,6 +312,18 @@ class Engine {
   // ---- audio thread -------------------------------------------------------
   // Render interleaved stereo int16. `frames` must be a multiple of kQuantum.
   void process(int16_t* out, int frames);
+  // OUTPUT FORMATS: the same, interleaved stereo float, full scale +-1.0. The mix,
+  // the FX and the master chain (DJ filter, drive, volume, soft limiter) are the
+  // same code; only the last step differs: process() rounds the limiter's output
+  // to int16 (x * 32767), processFloat() keeps it. So |float * 32767 - int16| <= 0.5
+  // for every sample of every quantum process() would have rendered, the float
+  // output never leaves [-1, 1], and floatToInt16() of it is process()'s output bit
+  // for bit (test_engine_float). The suspend fade differs by at most one int16 step.
+  // The output tap still observes int16 (the same samples process() would give it).
+  // For a platform whose converter has more than 16 bits (the Daisy's 24-bit codec):
+  // its output gain then goes after the engine in float, with no 16-bit step between.
+  // Call one or the other from the audio thread, not both.
+  void processFloat(float* out, int frames);
 
   // ---- UI thread ----------------------------------------------------------
   bool post(const Command& c);       // false if the queue is full
@@ -352,6 +364,11 @@ class Engine {
  private:
   struct Impl;
   Impl* impl_;       // statically allocated inside engine.cpp, no heap
+  template <class Out> __attribute__((always_inline)) inline void processT(Out* out, int frames);
 };
+
+// process()'s rounding applied to processFloat()'s output (clamped to [-1, 1]
+// first): n samples of float -> int16, the same int16 process() writes.
+void floatToInt16(const float* in, int16_t* out, int n);
 
 }  // namespace pg

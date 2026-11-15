@@ -2,8 +2,10 @@
 //
 // No operating system. Two contexts:
 //   the audio interrupt   libDaisy's SAI DMA callback, every 96 frames (2 ms at
-//                         48 kHz): App::render (the engine), int16 -> float with the
-//                         output level. Nothing else runs the engine.
+//                         48 kHz): App::render (the engine's float output with the
+//                         output level, straight into libDaisy's buffer; libDaisy
+//                         converts it to the codec's 24 bits). Nothing else runs the
+//                         engine.
 //   the main loop         App::loopOnce, forever: the scheduler's tasks (USB serial,
 //                         keys, the UI frame, the screen, the flash writes, the LED,
 //                         the pots). It changes the engine only through Engine::post.
@@ -59,9 +61,6 @@ DSY_SDRAM_BSS uint8_t g_rxRing[pgd::layout::kRxRing];
 // The line input's ring (line_mic.h): 65536 samples, 1.37 s at 48 kHz.
 constexpr uint32_t kLineRing = 65536;
 DSY_SDRAM_BSS int16_t g_lineRing[kLineRing];
-// The audio interrupt's int16 block (DTCM, as .bss).
-int16_t g_block[kBlock * 2];
-volatile float g_gain = 1.0f;
 volatile bool g_audioOn = false;
 // FPSCR as the audio interrupt finds it (the report's [fpu] line), and how many
 // callbacks found flush-to-zero / default-NaN off and set them.
@@ -119,10 +118,14 @@ void audioCallback(daisy::AudioHandle::InterleavingInputBuffer in, daisy::AudioH
     g_isrFpscrFixes = g_isrFpscrFixes + 1;
   }
   const int frames = static_cast<int>(size / 2);
-  if (frames > static_cast<int>(kBlock)) return;
-  g_app.render(g_block, frames, in);   // the pads' scan, the line input, the engine
-  const float k = g_gain * (1.0f / 32768.0f);
-  for (size_t i = 0; i < size; ++i) out[i] = static_cast<float>(g_block[i]) * k;
+  if (frames > static_cast<int>(kBlock) || frames % 16) {   // not a block the engine renders: silence
+    for (size_t i = 0; i < size; ++i) out[i] = 0.0f;
+    return;
+  }
+  // The pads' scan, the line input, the engine (float, full resolution) and the
+  // output level, into libDaisy's float buffer; its f2s24 (x 2^23, truncated) is the
+  // only conversion to the codec's format.
+  g_app.render(out, frames, in);
 }
 
 uint32_t uptimeMs() { return daisy::System::GetNow(); }
@@ -143,7 +146,6 @@ struct DaisyHal final : pgd::Hal {
     if (intoBootloader) daisy::System::ResetToBootloader(daisy::System::BootloaderMode::DAISY_INFINITE_TIMEOUT);
     NVIC_SystemReset();
   }
-  void setOutputGain(float linear) override { g_gain = linear; }
   bool audioRunning() override { return g_audioOn; }
   uint32_t sampleRate() override { return kRate; }
   uint32_t blockFrames() override { return kBlock; }

@@ -1,4 +1,5 @@
-// Master bus: DC/rumble high-pass -> DJ filter -> drive -> volume -> soft limiter -> int16.
+// Master bus: DC/rumble high-pass -> DJ filter -> drive -> volume -> soft limiter -> int16
+// (or float: the full-resolution output, OUTPUT FORMATS below).
 //
 //   * Rumble filter: always on, 2nd-order Butterworth high-pass at 20 Hz
 //     (TPT state-variable form). Removes DC (from asymmetric voices, or an
@@ -30,6 +31,13 @@
 //     (0..+18 dB), post = 1/sqrt(pre) (about half the added level is given
 //     back, so drive gets louder and denser but does not run away), c fades in
 //     over the first eighth of the knob so drive 0 is exactly linear.
+//
+// OUTPUT FORMATS. The chain is one body (MasterBus::chain) with two ends: run<>
+// rounds the limiter's output to int16 (|y| * 32767, rounded half up, the sign put
+// back), runF<> stores the same limited value as a float, +-1.0 at full scale. So
+// the two outputs differ only by that rounding: float * 32767 is within 0.5 of the
+// int16 (test_engine_float). run<> is what it always was (itest_golden); runF<> is
+// a separate function, so a build that never renders float links none of it.
 #pragma once
 #include "dsp_util.h"
 
@@ -53,6 +61,14 @@ class MasterBus {
     run<true>(m, m, out, frames, peakL, peakR);
     *peakR = *peakL;
   }
+  // The same chain, interleaved float out (OUTPUT FORMATS): never beyond +-1.0.
+  void processF(float* l, float* r, float* out, int frames, float* peakL, float* peakR) {
+    runF<false>(l, r, out, frames, peakL, peakR);
+  }
+  void processMonoF(float* m, float* out, int frames, float* peakL, float* peakR) {
+    runF<true>(m, m, out, frames, peakL, peakR);
+    *peakR = *peakL;
+  }
 
   bool filterActive() const { return mode_ != kBypass || mix_ > 0.0f; }
   static constexpr float kKnee = 0.70710678f;
@@ -63,6 +79,9 @@ class MasterBus {
   enum Mode : uint8_t { kBypass = 0, kLowPass, kHighPass };
   void updateFilterCoefs();
   template <bool kMono> void run(float* l, float* r, int16_t* out, int frames, float* peakL, float* peakR);
+  template <bool kMono> void runF(float* l, float* r, float* out, int frames, float* peakL, float* peakR);
+  template <bool kMono, class Out>
+  __attribute__((always_inline)) inline void chain(float* l, float* r, Out out, int frames, float* peakL, float* peakR);
   void rumble(float* x, int c, int frames);
 
   float sr_, invSr_, smoothK_, mixStep_, gainK_;
