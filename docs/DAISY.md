@@ -36,6 +36,7 @@ recording path is the codec's stereo line input** (section 10).
 12. What is verified, what only the hardware can show
 13. libDaisy facts relied on, and assumptions not verified
 14. Seams in the core, risks, licences
+15. More code space later (analysis, nothing built)
 
 ## 1. Layout and choices
 
@@ -66,8 +67,9 @@ Choices made (the lead left them open):
   objects keep their paths (no name clashes) and code that only the main loop runs is built
   `-Os`.
 - **48 kHz, stereo, 96-frame blocks.** `Instrument::init(48000, stereo)`, using
-  `PG_MAX_SAMPLE_RATE`'s default. The engine writes interleaved int16, and the audio callback
-  turns it into float with the output level. The block is 96 frames, which is 6 engine quanta
+  `PG_MAX_SAMPLE_RATE`'s default. The engine writes interleaved float at full resolution
+  (`Engine::processFloat`, docs/ARCHITECTURE.md "Output formats"), the App applies the output
+  level to it in float, and libDaisy converts that to the codec's 24 bits. The block is 96 frames, which is 6 engine quanta
   or 2.0 ms. libDaisy double-buffers the SAI DMA, so the block written in a callback plays
   during the next one: output latency is 2.0 to 4.0 ms. Key to sound is at most about 5 ms
   (the main loop polls continuously, and commands apply at the next quantum edge). Compare
@@ -390,7 +392,7 @@ From the real link (`make -C daisy size`, stage 0 at commit 515cf67 merged with 
 |---|---|---|---|---|
 | AXI SRAM 0x24000000 | 512 KB | the **image** the bootloader copies (vectors, code, constants, .data's initial values) | 430.2 KB of 480 | 49.8 KB |
 | | | after the image, before the end (incl. the 32 KB the bootloader used while it ran) | 0 | 81.8 KB |
-| DTCM 0x20000000 | 128 KB | `.data` 1.8 KB, `.bss` 104.6 KB: **the engine's state block (77.1 KB: delay, reverb, queue, sequencer)**, libDaisy's statics, the audio callback's block; then the **stack** | 103.8 KB | stack 24.2 KB |
+| DTCM 0x20000000 | 128 KB | `.data` 1.8 KB, `.bss` 104.6 KB: **the engine's state block (77.1 KB: delay, reverb, queue, sequencer)**, libDaisy's statics; then the **stack** (the audio callback's int16 block is gone since the float output) | 103.8 KB | stack 24.2 KB |
 | D2 SRAM 0x30000000 | 32 KB | libDaisy's audio DMA buffers (not cached) | 16.3 KB | 15.7 KB |
 | D2 SRAM 0x30008000 | 256 KB | **the App**: Instrument (voices + Project, 71 KB), UI (19 KB), framebuffer (33 KB), transfer, file table | 128.6 KB | 127.4 KB |
 | D3 SRAM | 64 KB | the fault record (kept over a reset) | 40 B | |
@@ -404,7 +406,7 @@ QSPI flash (`daisy/core/layout.h`):
 |---|---|---|
 | 0x90000000 | 256 KB | left alone (the bootloader's; "may be used in the future") |
 | 0x90040000 | 480 KB | the image (copied to AXI SRAM at every boot) |
-| 0x900B8000 | 288 KB | the ROM part: `PG_BULK_ATTR` data (ROM sounds 138 KB, instrument library 59 KB; stage 1 adds Bosch's 8 KB IMU file), 192 KB used; copied to SDRAM at boot |
+| 0x900B8000 | 288 KB | the ROM part: `PG_BULK_ATTR` data (ROM sounds 138 KB, instrument library 59 KB; stage 1 adds Bosch's 8 KB IMU file) and the cold text (16 KB, below), 208 KB used in stage 0, 216 KB in stage 1; copied to SDRAM at boot |
 | 0x90100000 | 2 x 1 MB | /int: two snapshot banks |
 | 0x90300000 | 3.2 MB | the sample pool's copy (12 slots, pg's partition layout) |
 | 0x90630000 | 1.8 MB | free |
@@ -451,15 +453,47 @@ daisy_size line). It first came out ~3 KB over the 480 KB; what was done about i
 Nothing was dropped. The next levers are the same as before (a second section macro in the core
 for the UI's help text and the demos, ~30 KB; ITCM).
 
+**The cold text into the ROM part (2026-11-14, measured).** Candidates, from the stage 1 link
+(bytes of each object's constants before string merging): `pg/ui/ui_help` 10,953 of strings
+and 1,220 of pointer tables; the rest of `pg/ui` ~4,000 of strings (`ui_project`, `ui_draw`,
+`ui`, `keys`, `format`, ...); `daisy/app` 7,462 of strings (the serial report and help);
+`pg/macro/macro_parse` 4,852; `pg/io` ~970; `pg/demo` ~930 of strings and ~760 of note tables.
+The demos' "data" is mostly code now: with `-Os` the builders' tables became immediates (8.5 KB
+of code, 1.7 KB of constants), so it cannot move as data. The big tables that stay are hot:
+the lead's wavetables (38.5 KB) and the bass's sine and BLEP (4.2 KB) are read per sample.
+
+What moved: the string literals of `pg/ui`, `pg/io`, `macro_parse` and `pg/demo`, and the demos'
+note tables. GCC has no section attribute for a string literal, so this is a rule in
+`daisy/pg_daisy.lds` (the `.qspi_rom` output section takes these objects' `.rodata*.str1.*`
+input sections, and all of `demo_*.o`'s `.rodata`), not a macro in the core: lib/pg, the
+Cardputer and the desktop build exactly as before. Checked for each: nothing reads them before
+the ROM copy (the only constructors are libDaisy's and main.cpp's statics; the App's constructor
+calls only memset and `Instrument::Instrument`), and nothing on the audio interrupt's path uses
+them (the UI, the file formats, the parser and the demo builders run in the main loop). Only
+strings and pointer-free tables moved: the pointer tables (the help's key tables and legends,
+the demo list) stay in the image, so if the ROM part is missing (the firmware zeroes its copy)
+the text reads as empty strings, never as a bad pointer. Kept in the image on purpose: the
+Daisy's own report text (`daisy/app`, 7.5 KB), so the report still explains a missing ROM
+part. Result (measured, `make`'s daisy_size line): **stage 0 436,748 -> 420,848 bytes (53.5 ->
+69.0 KB free), stage 1 468,232 -> 452,340 bytes (22.7 -> 38.3 KB free)**; the ROM part grows
+by 16.1 KB in both (stage 0 197,184 -> 213,248 bytes, stage 1 205,376 -> 221,440 of 288 KB).
+Less than the ~23 KB of candidates because strings that were shared with other files (merged
+once in the image) now exist twice. `tools/daisy_size.py` counts the merged block with the first
+file the linker lists (`pg/demo`'s 16 KB "rom" is the whole cold text); its clipping of
+overlapping merged entries was fixed so the ROM part's total is right. The float output
+(below, section 9) is +32 bytes in stage 1 and -16 in stage 0 (the int16 render is no longer
+linked; the float one is).
+
 How it fits, and what was decided: the program **is RAM-booted (BOOT_SRAM)**, so erasing and
 writing the QSPI never stalls running code. The 480 KB limit was the constraint. With the big
 cold data in QSPI (the core's `PG_BULK_ATTR`, defined by the Makefile as the `.qspi_rom`
 section), and the main-loop-only code built `-Os`, stage 0 has 58 KB to spare and stage 1 has
 28 KB, so BOOT_QSPI was not needed. The ROM part is not read in place: it is copied to SDRAM at
 boot (~0.2 MB, a few ms). Nothing reads the QSPI afterwards, so the flash can be in its indirect
-(write) mode while the audio plays. The next levers, if stage 1 grows: the UI's help text and
-demo builders into the ROM part (a second section macro in the core, ~30 KB), the engine's
-state into AXI SRAM to free DTCM, ITCM for code (64 KB).
+(write) mode while the audio plays. The next levers, if stage 1 grows: the Daisy's report text
+(7.5 KB, at the cost of a silent report when the ROM part is missing), ITCM for the hot path
+loaded from the ROM part, cold code run from SDRAM (section 15), the engine's state into AXI
+SRAM to free DTCM.
 
 The order things happen at boot: the bootloader copies the image, the startup code copies `.data`
 and zeroes `.bss` (DTCM), and our `.preinit_array` hook (`daisy/src/memory.cpp`) sets the vector
@@ -506,8 +540,9 @@ are being considered). The input layer stays general: everything becomes events 
 libDaisy is bare metal, so there are two contexts:
 - **The audio interrupt** (libDaisy's SAI DMA callback, every 2 ms): `App::render` scans the
   pads (four ADC values, a few microseconds), folds the codec's input block into the line-in
-  ring while a recording is armed, runs the engine, then the int16 → float conversion with the
-  output level. It is the only code that touches the engine. It also checks that
+  ring while a recording is armed, runs the engine in float (`Instrument::processFloat`) straight
+  into libDaisy's buffer and applies the output level there (clamped to +-1.0). It is the only
+  code that touches the engine. It also checks that
   flush-to-zero / default-NaN are set in its FPSCR (section 11).
 - **The main loop**: `App::loopOnce` runs a cooperative scheduler (`daisy/core/scheduler.h`). Its
   tasks: `serial` (every pass: bytes in, transfer replies), `keys` (the key script, physical keys,
@@ -532,6 +567,22 @@ a save leaves the previous snapshot intact; `test_daisy_fs` cuts at every one. T
 with NOR rules. Its dirty 4 KB sectors are copied to QSPI one per step, each slot's header last.
 At boot every slot's audio is checked against its header's CRC (pg's rescan checks the header
 only), so a cut mid-copy leaves a slot old, new or empty, never mismatched (`test_daisy_pool`).
+
+The output chain (2026-11-14): the engine's master bus ends in its soft limiter; with
+`processFloat` its output stays float (+-1.0) instead of being rounded to int16. `App::render`
+multiplies it by the output level (G0 + '-' / '=', -40 .. +6 dB) and clamps to +-1.0, in
+libDaisy's float buffer; libDaisy's `f2s24` makes the codec's 24 bits of it (section 13). So
+there is one quantisation, at 24 bits, after the level. Before, the engine rounded to int16, the
+callback divided by 32768 and multiplied by the level, and libDaisy quantised again: the 16-bit
+step came before the level, so turning the level down kept the 16-bit noise at the same
+distance below the music, and a tail below one 16-bit step was cut. Measured on the host
+(`itest_float_out`, a reverb tail after Stop): the int16 path's error is -101 dBFS RMS, flat
+(white) across the band, so the tail's signal-to-error ratio falls from 47 dB at -54 dBFS to
+8 dB at -94 dBFS and the int16 output is silent 4.5 s after Stop while the float tail runs to 6.1
+s; the float path's only error, the 24-bit conversion, is -143 dBFS RMS. What the codec itself
+adds (its own noise floor, likely well above -143 dBFS) is not known until a board measures it.
+Flush-to-zero / default-NaN were already set for the interrupt (section 11) and stay. The
+report's output peak is now after the level (what the codec gets), on the same 0..32767 scale.
 
 Interrupt priorities are libDaisy's: the SAI DMA, USB, SPI, I2C and SDMMC interrupts are all at
 priority 0, so none preempts another. A USB or SPI-DMA interrupt can delay the audio callback by
@@ -927,7 +978,12 @@ Read in libDaisy's source at 1289a00:
   TAC5242 gets the same treatment as the AK4556 (a reset-pin toggle, no I2C setup)**, per its
   comment. Rates (SaiHandle): 8, 16, 32, 48, 96, 192 kHz: no 44.1. Block size at most 256 frames.
 - The audio callback runs in the DMA interrupt. The interleaved callback's `size` counts samples
-  (frames x 2). libDaisy converts float ↔ 24-bit itself.
+  (frames x 2). libDaisy converts float ↔ 24-bit itself (`src/hid/audio.cpp`, the Seed's SAI1 is
+  24-bit): out = `f2s24(x * output_adjust_)`, where `f2s24` (`daisy_core.h`) clamps to
+  +-0.999985 and truncates `x * 2^23` toward zero, and `output_adjust_` = postgain x
+  output_compensation = 1 x 1 on the Seed. That is the only conversion after the App's float
+  output: one quantisation, to 24 bits. Its error with the engine's float output measures -143
+  dBFS RMS (`itest_float_out`).
 - USB: `UsbHandle` is a CDC device only (VID 0x0483, PID 0x5740, "Daisy Seed Built In").
   `CDC_Transmit_FS` returns BUSY while the previous packet is in flight, and **dereferences
   `pClassData` without a check**, so before enumeration it would read from and write to ITCM at
@@ -1001,11 +1057,9 @@ the core now):
   note; and the engine draining the second queue first in `process`.
 
 Seams in the core (none were needed for stage 0; these would help later):
-- **A float output from the engine** (`Engine::process(float*, ...)`). The engine's output is
-  int16, so the 24-bit codec gets 16-bit audio (with dither or truncation as the master does). A
-  float path would also save the conversion.
-- **A second section macro for the UI's and demos' constant text** (help text 12 KB, demo
-  builders' data 16 KB), to move them into the ROM part if stage 1 needs room.
+- Done (2026-11-14): **a float output from the engine** (`Engine::processFloat`, docs/ARCHITECTURE.md
+  "Output formats"); the Daisy uses it (section 9). And **the UI's and demos' constant text in the
+  ROM part**, by a linker rule instead of a macro (section 7).
 - **XferEnv: "flash writes do not stall"**. Samples and projects could then be put while the
   transport plays on a platform where that is true (the Daisy); today pg refuses with ERR PLAYING.
 - **Pointer events in the UI** for a touch panel (the Hal delivers them now: `Hal::Pointer`,
@@ -1061,3 +1115,72 @@ says MIT; Adafruit_FT6206 is MIT. Both are written by Limor Fried / Ladyada for 
 Industries. If the table is treated as copyrightable, the notice to carry is Adafruit's: "Written
 by Limor "ladyada" Fried for Adafruit Industries. BSD license, all text here must be included in
 any redistribution."
+
+## 15. More code space later (analysis, nothing built)
+
+The 480 KB the bootloader copies is the limit that will bind as engines and features grow (stage
+1 has 38 KB left after section 7's move). The options, with what libDaisy's source at 1289a00
+says and what each would cost.
+
+**Facts (libDaisy 1289a00 and our build):**
+- Boot modes (`core/Makefile`): `APP_TYPE=BOOT_SRAM` links with `STM32H750IB_sram.lds` (what our
+  own `pg_daisy.lds` derives from), `BOOT_QSPI` with `STM32H750IB_qspi.lds`, which puts `.text`,
+  `.rodata` and the vectors in `QSPIFLASH` (0x90040000, 7936 KB) and runs them in place. Both
+  define `BOOT_APP`. The bootloader picks the mode from the reset vector's region (section 12).
+- QSPI and execute-in-place (`src/per/qspi.cpp`): `Init`, `Erase`, `EraseSector`, `Write` and
+  `WritePage` all start with `CheckProgramMemory()`, which returns `E_INVALID_MODE` when
+  `System::GetProgramMemoryRegion()` is QSPI, and that is decided by `SCB->VTOR` alone. A write
+  switches the peripheral to indirect mode (`SetMode(INDIRECT_POLLING)`), in which the
+  memory-mapped window does not answer: code or constants fetched from 0x90000000 during an
+  erase or a program would fault. `DaisySeed::Init` skips `qspi.Init` when running from QSPI.
+  libDaisy has no suspend/resume of an erase.
+- MPU (`src/sys/system.cpp`): SDRAM (0xC0000000, 64 MB) is region 1, cacheable, write-back, and
+  **executable** (the instruction-access field is `MPU_INSTRUCTION_ACCESS_ENABLE`); the 32 KB of
+  D2 DMA SRAM is uncached.
+- ITCM: every libDaisy linker script declares `ITCMRAM` (64 KB at 0x00000000) and places nothing
+  in it; ours neither. No libDaisy code uses it.
+- Our build: code in the image is 368 KB (stage 1: `pg/ui` 66 KB, libDaisy 79 KB, the engine 48
+  KB, bass 28, drums 22, lead 21, sampler 19, `pg/io` 12, `daisy/app` 13, `daisy/core` 14,
+  `pg/demo` 8, the C runtime 18). The Cardputer's IRAM list (`tools/pio_audio_ram.py`) is a
+  measured hot set of about 45 KB (render loops, mixer, FX, master, sequencer tick).
+
+**Options (judgement, nothing tried):**
+1. **ITCM for the hot path, loaded from the ROM part.** A `.itcm_text` output section with its
+   VMA in ITCM and its LMA in the ROM part (not in the image: an LMA in the image would save
+   nothing), copied at boot next to the ROM copy, before the audio starts. Gains up to 64 KB of
+   image (the Cardputer's hot set is about 45 KB of Xtensa code; not measured for Thumb) and zero-wait fetches for the audio
+   path, which also removes the instruction-cache risk in section 11. Costs: a list of
+   functions to maintain (the Cardputer's script already has one), a link-time check that the
+   interrupt path is all there (like the Cardputer's placement check), the ROM part grows by
+   the same amount (216 of 288 KB used: it fits), and calls between ITCM and AXI SRAM go
+   through linker veneers (0x00000000 to 0x24000000 is beyond a Thumb BL's +-16 MB: the
+   toolchain inserts them; not tried here). Nothing in the QSPI changes.
+2. **Cold code run from SDRAM.** The same mechanism as the ROM part, for code: `pg/ui`,
+   `pg/io`, the demos, the macro parser, `daisy/app`'s report (~100 KB) linked to run in SDRAM,
+   loaded from QSPI, copied at boot. SDRAM is executable under libDaisy's MPU setting. QSPI
+   writes are unaffected (nothing runs from QSPI). Costs: SDRAM fetches through the 16 KB
+   instruction cache are slower (the UI frame takes longer; main loop only), veneers on every
+   call between the image and SDRAM, the code must not run before the copy (no constructors in
+   it), and a second QSPI region or a larger ROM part: 288 - 216 = 72 KB is left, so ~100 KB
+   needs the layout to change (the 1.8 MB free at 0x90630000; moving /int would lose saved
+   projects, so a new region there, as a second dfu-util segment or a padded `.bin`).
+3. **BOOT_QSPI, cold code executed in place, the audio path in RAM / ITCM.** Removes the
+   limit almost entirely (7.9 MB). But libDaisy refuses every QSPI write while VTOR points into
+   QSPI, and even with VTOR moved to RAM a write needs everything that can run during an erase
+   (typically tens of ms for a 4 KB sector, more for a block: general knowledge of this flash family, its datasheet was not read here) in RAM: the writer, the audio
+   interrupt and all it calls and reads, USB, SysTick, the display's DMA interrupt. The main
+   loop would stop for each erase. Saving /int (snapshots of up to 1 MB) and the sample pool's
+   copy (3.2 MB) are exactly those writes. Variants: (a) save to the SD card instead and keep
+   the QSPI read-only (stage 1 has SDMMC; stage 0 has no card, and the pool would load from
+   the card at boot); (b) keep the data in SDRAM and write the QSPI only at safe moments
+   (transport stopped, audio muted, a RAM-resident writer, a "saving" pause); (c) patch the
+   QSPI driver to use the flash's erase-suspend so reads can interleave (not in libDaisy).
+4. **More data out of the image** (cheap, small): the Daisy's report text (7.5 KB), `-Os` on
+   more main-loop code, libDaisy parts not used (FatFS's long-name tables, USB host).
+
+Recommendation: stay BOOT_SRAM. Next, option 1 (ITCM loaded from the ROM part): it gains the
+most for the least risk and also helps the audio load, and its function list exists. Then
+option 2 when the UI and the file formats grow, with a new QSPI region for code. Keep option 3
+for when code is several times larger than now; then (a) or (b) for saving, decided with the
+owner, since both change how saving feels (a card, or a pause).
+

@@ -70,6 +70,26 @@ itself. Host-verified: ctest -L daisy (core, /int with power cuts, sample pool, 
 BMI270) and tools/test_pg_daisy.py against the firmware's App in daisy_sim. docs/DAISY.md has the
 flashing steps and the first-power-on checklist. Entry "DAISY TARGET BUILT" below.
 
+FLOAT OUTPUT AND ROOM IN THE DAISY'S IMAGE (2026-11-15; NOTHING HAS RUN ON A SEED, not
+listened to). (1) The engine has a full-resolution output: `Engine::processFloat` /
+`Instrument::processFloat` (float, +-1.0), the same mix and master chain as `process()` with
+the int16 rounding left out (docs/ARCHITECTURE.md "Output formats"). The int16 path is
+unchanged (itest_golden, itest_golden48); the Cardputer links none of the float path (flash
+-12 bytes, RAM unchanged, IRAM placement check passes). The Daisy's `App::render` uses it: the
+output level in float, clamped to +-1.0, straight into libDaisy's buffer, whose f2s24 is the
+only conversion (docs/DAISY.md section 9). The desktop stays int16 (its WAVs, recording ring
+and Listen mix are int16). Measured: the int16 step is -101 dBFS RMS of white error; a reverb
+tail at -94 dBFS has 8 dB SNR in int16 and is cut 1.6 s early; the 24-bit conversion of the
+float output is -143 dBFS. Callgrind (busy, stereo 48 kHz): int16 2130 -> 2123, float 2108
+instructions per frame. New tests itest_float_out, test_daisy_audio (host 116/116).
+(2) The UI's, file formats' and demos' text (string literals, and the demos' note tables) is
+placed in the Daisy's ROM part by a linker rule (`daisy/pg_daisy.lds`; string literals cannot
+take a section attribute): stage 0 image 436,748 -> 420,848 bytes (69.0 KB free), stage 1
+468,232 -> 452,340 (38.3 KB free), ROM part +16.1 KB. lib/pg untouched by it. docs/DAISY.md
+section 7 has the candidates and the checks, section 15 the options for more code space
+later (recommendation: ITCM for the hot path loaded from the ROM part, then cold code run
+from SDRAM; stay BOOT_SRAM).
+
 DAISY PADS JOINED (2026-11-14, the two branches above joined up; NOTHING HAS RUN ON A SEED, no
 sensors wired, not listened to). (1) The Daisy's pads use the core's pad API: App::padEvent is
 Ui::padDown / padPressure / padUp; the job (drums: KICK SNARE CHH PERC, notes: the selected track

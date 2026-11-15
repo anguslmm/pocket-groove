@@ -94,6 +94,38 @@ wavetables, bass sine and BLEP), `PG_BULK_ATTR` the big cold data (the ROM sound
 built-in instrument library). Both empty by default; a platform defines them as section
 attributes to place the data (docs/STATE.md lists the sizes, measured on Cortex-M7).
 
+## Output formats
+
+The engine renders one of two formats; everything up to the last step of the master bus
+(mix, ducker, send FX, rumble high-pass, DJ filter, drive, volume, soft limiter) is the same
+code, inlined into each entry point (`engine/master.cpp` `MasterBus::chain`, `engine.cpp`
+`State::renderT`, `Engine::processT`):
+
+| Entry point | Format | Who uses it |
+|---|---|---|
+| `Engine::process(int16_t*, frames)` / `Instrument::process` | interleaved int16: the limiter's output x 32767, rounded half up | the Cardputer (its codec takes 16 bits), the desktop app (SDL s16; its recording ring, Listen mix and WAVs are int16, so it stays there), every golden test |
+| `Engine::processFloat(float*, frames)` / `Instrument::processFloat` | interleaved float, +-1.0 full scale, the limiter's output as it is | the Daisy (`daisy/app` `App::render`: the output level in float, then libDaisy's 24-bit conversion) |
+
+The two differ only by that rounding: for every sample, |float x 32767 - int16| <= 0.5,
+and `floatToInt16()` of the float output is the int16 output bit for bit. The float output
+never leaves [-1, 1] (the limiter's ceiling is exactly 1.0). The suspend fade (a few ms
+after `suspend()`) is computed per format and may differ by one int16 step. The output tap
+(resampling) always observes int16, the same samples in both modes; recording and the
+sample pool stay 16-bit. `itest_float_out` checks all of this over the three demo songs, a
+hot pattern in the limiter (stereo and mono, drive and volume moving) and a reverb tail.
+
+A build links only the entry points it calls: the Cardputer's firmware has no float render
+(flash -12 bytes, static RAM unchanged, `tools/pio_audio_ram.py`'s placement check passes
+unchanged), the Daisy's no int16 render. `itest_golden` and `itest_golden48` are unchanged.
+
+What the int16 step costs, measured (`itest_float_out`, a reverb tail at 48 kHz after Stop):
+its error is -101.1 dBFS RMS (one LSB / sqrt(12)), white across the band; the tail's
+signal-to-error ratio is 47 dB at -54 dBFS, 28 dB at -73, 8 dB at -94, and the int16
+output is all zeros 4.5 s after Stop while the float tail lasts to 6.1 s. A 24-bit converter
+fed the float output adds -143 dBFS RMS. Cost per frame, callgrind on the host (busy
+pattern, stereo 48 kHz, x86 instructions per frame): int16 2130 before the change, 2123
+after, float 2108 (no rounding step); the Daisy also drops its int16 -> float pass.
+
 ## CPU budget (per sample at 44.1 kHz, ESP32-S3 @ 240 MHz = ~5400 cycles)
 
 The whole engine must stay under ~55% of one core. Rough allowances, all voices sounding:
