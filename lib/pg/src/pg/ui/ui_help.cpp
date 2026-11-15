@@ -80,6 +80,11 @@ constexpr KeyTable kTables[] = {
     {"SHIFT INST",
      "  " "LN" "LN" "LN" "LN" "LN" "LN" "LN" "LN" "  " "  " "x8" "x8" "  " "  " "LN" "LN" "LN" "LN" "LN" "LN" "LN" "LN" "  " "  " "BC" "BC" "  " "  " "SH" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "SL" "  " "  " "AP" "  " "  " "  " "  " "1-" "1+" "2-" "2+" "3-" "3+" "4-" "4+" "  " "  " "RS",
      "ossssssssooaaoossssssssooccoompppppppprogoooaaaaaaaaaooG"},
+#if PG_TAPE
+    {"TAPE",
+     "ES" "M1" "M2" "M3" "M4" "  " "  " "  " "  " "SN" "MX" "- " "+ " "ER" "BP" "  " "  " "  " "  " "  " "  " "  " "  " "FX" "SG" "LP" "HP" "PJ" "MU" "SH" "KK" "SN" "CP" "CH" "OH" "PC" "BS" "LD" "TR" "\x84 " "  " "\x82 " "CT" "PT" "RL" "T1" "T2" "T3" "T4" "BK" "HF" "RV" "  " "\x85 " "? " "\x80 ",
+     "effffoooovvaarwoooooooovvccvmmppppppppRroRmmmffffaaaorwG"},
+#endif
 };
 constexpr bool tablesOk() {
   for (const KeyTable& t : kTables) {
@@ -104,7 +109,11 @@ static_assert(headerFits(), "help header: the table name runs into the modifier 
 
 // (the layers start at kTFn: explainText() relies on that order)
 enum TableId { kTGroove, kTStep, kTWrite, kTSound, kTMix, kTFx, kTSong, kTProject, kTText, kTInst,
-               kTFn, kTShift, kTCtrl, kTOpt, kTAlt, kTTab, kTShiftSong, kTShiftInst };
+               kTFn, kTShift, kTCtrl, kTOpt, kTAlt, kTTab, kTShiftSong, kTShiftInst,
+#if PG_TAPE
+               kTTape,
+#endif
+};
 
 // Legend colour switches inside strings
 #define UP_ICON_TXT "\x84\x85"
@@ -195,6 +204,13 @@ const char* const kLegends[][5] = {
      CW "LN" CD " PATTERN LENGTH  " CW "SL" CD " SILENT SELECT",
      CC "BC" CD " BASS SWEEP  " CT "AP" CD " ADD PAGE",
      CG "RS" CD " RESTART", ""},
+#if PG_TAPE
+    {CW "T1-T4" CD " ARM A TRACK  " CW "M1-M4" CD " MUTE IT",
+     CW "TR" CD " REC. TAP: ON/OFF  HOLD: WHILE HELD",
+     CD "ON BAR LINES. " CW "SFT+TR" CD " REPLACES",
+     CA "BK HF RV" CD " HELD: BRAKE HALF REVERSE",
+     CT UP_ICON_TXT CD " FIELD " CA "-+" CD " VALUE " CW "CTRL+Z" CD " UNDO " CW "C" CD " LIFT"},
+#endif
 };
 #undef CW
 #undef CD
@@ -266,6 +282,9 @@ int Ui::helpTable(bool layers) const {
     case View::Fx: return kTFx;
     case View::Song: return kTSong;
     case View::Project: return kTProject;
+#if PG_TAPE
+    case View::Tape: return kTTape;
+#endif
     default: return stepWriteActive() ? kTWrite : kTGroove;
   }
 }
@@ -330,6 +349,14 @@ static bool explainLayer(const Ui& ui, int table, int k, char* title, const char
           {kKSemicolon, "CTRL+UP: NOTE +12", "WITH A STEP HELD: ITS NOTE", "AN OCTAVE UP."},
           {kKDot, "CTRL+DOWN: NOTE -12", "WITH A STEP HELD: ITS NOTE", "AN OCTAVE DOWN."},
       };
+#if PG_TAPE
+      if (v == View::Tape && (k == kKNote0 || k == kKNote0 + 2)) {
+        cat(title, k == kKNote0 ? "CTRL+Z: TAPE UNDO" : "CTRL+C: LIFT");
+        *l1 = k == kKNote0 ? "UNDOES THE LAST TAKE OR ERASE." : "THE ARMED TRACK'S LOOP INTO THE";
+        *l2 = k == kKNote0 ? "AGAIN: REDO." : "SAMPLE SLOT (PERC'S OR LEAD'S).";
+        return true;
+      }
+#endif
       // a sampler instrument's page, no step held: the track's tune (UX.md 10.3 "Tune")
       if ((k == kKSemicolon || k == kKDot) && v == View::Sound && ui.instrumentPage() && ui.heldStep() < 0 &&
           ui.samplerOn(ui.selTrack())) {
@@ -434,6 +461,34 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       default: if (step >= 0 || k == kKMinus || k == kKEquals || k == kKQuote || k == kKL) { cat(title, "NOT USED HERE"); return; }
     }
   }
+#if PG_TAPE
+  if (table == kTTape) {
+    if (step >= 0 && step < 4) {
+      itoa10(step + 1, cat(title, "MUTE TAPE TRACK "));
+      *l1 = "ON / OFF AT ONCE.";
+      return;
+    }
+    if (note >= 0 && note < 4) {
+      itoa10(note + 1, cat(title, "ARM TAPE TRACK "));
+      *l1 = "L RECORDS ONTO IT. ;/. AND -/=";
+      *l2 = "EDIT ITS LEVEL, PAN AND SENDS.";
+      return;
+    }
+    switch (k) {
+      case kKNote0 + 4: cat(title, "HOLD: BRAKE"); *l1 = "THE TAPE SLOWS TO A STOP. LET GO:"; *l2 = "IT SPINS UP, BACK IN TIME."; return;
+      case kKNote0 + 5: cat(title, "HOLD: HALF SPEED"); *l1 = "AN OCTAVE DOWN. LET GO: BACK"; *l2 = "WHERE IT WOULD HAVE BEEN."; return;
+      case kKNote0 + 6: cat(title, "HOLD: REVERSE"); *l1 = "BACKWARDS FROM HERE. LET GO:"; *l2 = "BACK WHERE IT WOULD HAVE BEEN."; return;
+      case kKL: cat(title, "TAPE RECORD"); *l1 = "TAP: TO THE NEXT L. HOLD: WHILE"; *l2 = "HELD. ON BAR LINES. SFT: REPLACE."; return;
+      case kKSemicolon: case kKDot: cat(title, "FIELD UP / DOWN"); *l1 = "SRC LOOP LVL PAN DLY REV."; return;
+      case kKMinus: case kKEquals: cat(title, k == kKMinus ? "VALUE DOWN" : "VALUE UP"); *l1 = "THE FIELD IN THE CHIP."; *l2 = "BOTH: DEFAULT."; return;
+      case kKDel: cat(title, "ERASE THE LOOP"); *l1 = "OF THE ARMED TRACK (ASKS). SHIFT:"; *l2 = "ALL OF IT. CTRL+Z UNDOES."; return;
+      case kKP: cat(title, "SONG VIEW"); *l1 = "CHAIN PATTERNS INTO A SONG."; *l2 = "P AGAIN: THE TAPE."; return;
+      default:
+        if (step >= 0 || note >= 0 || k == kKQuote) { cat(title, "NOT USED HERE"); return; }
+        break;
+    }
+  }
+#endif
   if (table == kTSong) {
     if (step >= 0) {
       cat(cat(title, "PUT PATTERN "), step < 9 ? "0" : "");
@@ -577,7 +632,11 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       {kKDel, "ERASE", "HOLD WHILE PLAYING: WIPES THE", "TRACK AS THE PLAYHEAD PASSES."},
       {kKTab, "TEMPO", "HOLD: -/= BPM, ;/. SWING.", "TAP 3 TIMES: TAP TEMPO."},
       {kKO, "FX VIEW", "DUCKER, DELAY, REVERB, MASTER.", "AGAIN: NEXT TAB."},
+#if PG_TAPE
+      {kKP, "SONG VIEW", "CHAIN PATTERNS INTO A SONG.", "AGAIN: THE TAPE."},
+#else
       {kKP, "SONG VIEW", "CHAIN PATTERNS INTO A SONG.", ""},
+#endif
       {kKLBracket, "DJ FILTER DOWN", "HOLD: LOW-PASS SWEEP. BOTH: OFF.", "SHIFT: BASS MACRO 1 (CLASSIC: CUT)."},
       {kKRBracket, "DJ FILTER UP", "HOLD: HIGH-PASS SWEEP. BOTH: OFF.", "SHIFT: BASS MACRO 1 (CLASSIC: CUT)."},
       {kKBackslash, "PROJECT VIEW", "LOAD, SAVE AND DELETE PROJECTS.", "CTRL+S SAVES FROM ANY VIEW."},

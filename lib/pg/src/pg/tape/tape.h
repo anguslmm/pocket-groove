@@ -203,7 +203,18 @@ class Tape {
   uint8_t param(int t, int p) const { return set_[t & 3][p % kNumParams].load(std::memory_order_relaxed); }
   uint8_t loopBars() const { return loopBars_.load(std::memory_order_relaxed); }
   uint16_t bpm() const { return bpm_.load(std::memory_order_relaxed); }
-  void setBpm(uint16_t b) { bpm_.store(b, std::memory_order_relaxed); }   // loading (idle, stopped)
+  // loading (main thread, the transport stopped): the settings straight in
+  void setBpm(uint16_t b) { bpm_.store(b, std::memory_order_relaxed); }
+  void setParam(int t, int p, uint8_t v) {
+    if (t >= 0 && t < kTracks && p >= 0 && p < kNumParams) set_[t][p].store(v, std::memory_order_relaxed);
+  }
+  void setLoop(uint8_t bars) {
+    for (int i = 0; i < kNumLoops; ++i)
+      if (kLoopBars[i] == bars) loopBars_.store(bars, std::memory_order_relaxed);
+  }
+  // A fingerprint of everything a save writes (the audio's revision and the settings):
+  // the UI compares it to see unsaved changes.
+  uint32_t signature() const;
   // the nominal loop length at the tape's tempo (16-step bars), samples
   uint32_t nominalLoop(int bars, uint64_t projectStepFP) const;
 

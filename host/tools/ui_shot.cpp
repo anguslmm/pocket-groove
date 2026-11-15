@@ -36,7 +36,11 @@
 //   mic dirty <slot>        slot 1..12 is empty but not erased (L then shows ERASING first)
 //   resample on             SHIFT+L on a sampler page records the engine's output
 //                           (host/common/host_resample.h) into the same pool
+//   tape on [seconds]       the tape (pg/tape/tape.h) with that much memory (default 600 s;
+//                           after demo / empty), LINE offered, CTRL+C lifts into the same pool
+//   tape tone <track> <hz> <bars>  put a tone on a tape track (data setup only)
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -44,6 +48,7 @@
 #include <sys/stat.h>
 
 #include "common/host_resample.h"
+#include "common/host_tape.h"
 #include "common/sample_convert.h"
 #include "common/sim_mic.h"
 #include "common/ui_harness.h"
@@ -190,6 +195,39 @@ int main(int argc, char** argv) {
       rig.inst.setSamplePool(&pool);
       rig.eng.resume();
       rig.ui.setResample(&resample);
+    } else if (op == "tape") {
+      static hosttape::HostTape ht;
+      static hosttape::Lift lift;
+      const std::string sub = a;
+      if (sub == "on") {
+        const uint32_t secs = n > 2 ? uint32_t(std::atoi(b)) : 600u;
+        rig.eng.suspend();
+        rig.eng.setTape(nullptr);
+        if (!ht.init(secs, uint32_t(uih::Rig::kSr))) { std::fprintf(stderr, "%s:%d: tape init\n", argv[1], lineNo); ++errors; }
+        lift.commit = [](int slot, const int16_t* d, uint32_t n2, uint32_t rate, std::string* err) {
+          return hostrs::commitToPool(&pool, resampleBufs, slot, d, n2, rate, err, "TAP");
+        };
+        rig.inst.setSamplePool(&pool);
+        rig.eng.setTape(&ht.tape);
+        rig.eng.resume();
+        rig.ui.setTape(&ht.tape, &lift, true);
+      } else if (sub == "tone" && n > 4) {
+        const int t = std::atoi(b) - 1;
+        const double hz = std::atof(c);
+        const int bars = std::atoi(d);
+        const uint32_t len = uint32_t(double(uih::Rig::kSr) * 240.0 / double(rig.proj->globals[pg::kGTempo]) * bars);
+        std::vector<int16_t> x(len);
+        for (uint32_t i = 0; i < len; ++i) {
+          const double env = 0.6 + 0.4 * std::sin(2.0 * M_PI * double(i) / double(len) * bars);
+          x[i] = int16_t(std::lround(9000.0 * env * std::sin(2.0 * M_PI * hz * double(i) / double(uih::Rig::kSr))));
+        }
+        ht.tape.write(t, 0, x.data(), len);
+        if (!ht.tape.bpm()) ht.tape.setBpm(rig.proj->globals[pg::kGTempo]);
+        rig.run(40);
+      } else {
+        std::fprintf(stderr, "%s:%d: tape on [seconds] | tone <track> <hz> <bars>\n", argv[1], lineNo);
+        ++errors;
+      }
     } else if (op == "sample") {
       static std::vector<int16_t> bufs[pg::sampler::kPoolSlots];
       const int slot = std::atoi(a) - 1;

@@ -27,7 +27,11 @@ inline constexpr char kStepKeys[] = "12345678QWERTYUI";
 constexpr uint8_t kRowMore = 0xFE;   // FileRow::status of the "+N MORE" row
 
 // Confirm dialog actions
-enum : uint8_t { kConfirmLoad = 1, kConfirmOverwrite, kConfirmDelete, kConfirmNew, kConfirmOverwriteName, kConfirmReplaceSample };
+enum : uint8_t { kConfirmLoad = 1, kConfirmOverwrite, kConfirmDelete, kConfirmNew, kConfirmOverwriteName, kConfirmReplaceSample,
+#if PG_TAPE
+                 kConfirmTapeErase, kConfirmTapeEraseAll, kConfirmLift,
+#endif
+};
 
 inline int fxTabOfGlobal(int g) {
   for (int t = 0; t < kNumFxTabs; ++t)

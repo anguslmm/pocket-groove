@@ -19,6 +19,9 @@
 #include "ghost.h"
 #include "pads.h"
 #include "scope.h"
+#if PG_TAPE
+#include "../tape/tape_io.h"
+#endif
 
 namespace pg {
 namespace ui {
@@ -32,7 +35,16 @@ struct UiEnv {
   uint8_t  cpuPct;      // audio CPU load, informational
 };
 
-enum class View : uint8_t { Groove, Sound, Mix, Fx, Song, Project };
+enum class View : uint8_t {
+  Groove, Sound, Mix, Fx, Song, Project,
+#if PG_TAPE
+  Tape,   // UX.md 10.11: `p` again in SONG
+#endif
+};
+#if PG_TAPE
+// The TAPE view's fields (`;` / `.` pick one, `-` / `=` change it).
+enum TapeField : uint8_t { kTfSource = 0, kTfLoop, kTfLevel, kTfPan, kTfDelay, kTfReverb, kNumTapeFields };
+#endif
 enum class Overlay : uint8_t { None, Mute, Pattern, Roll, Tempo };
 enum class Dialog : uint8_t { None, Confirm, Name };
 enum ProjectMount : uint8_t { kPmNone = 0, kPmRom, kPmInt, kPmSd };
@@ -231,6 +243,22 @@ class Ui {
   // the groove plays (pg/sampler/resampler.h) into the slot, in whole bars while it
   // plays. The platform's engine-output recorder; nullptr = none. After init().
   void setResample(sampler::MicInput* r) { rs_ = r; ++serial_; }
+#if PG_TAPE
+  // THE TAPE (UX.md 10.11, pg/tape/tape.h): the platform's tape (its memory) and how a
+  // lift reaches the sample pool (nullptr: CTRL+C on TAPE says NO LIFT); line = the
+  // platform has an audio input for LINE. After init() (which forgets them). The Ui
+  // runs the tape's service() and its files (saved and loaded with the project).
+  void setTape(tape::Tape* t, tape::SlotWriter* lift = nullptr, bool line = false);
+  tape::Tape* tapePtr() const { return tape_; }
+  int tapeArmed() const { return tapeArm_; }
+  int tapeSource() const { return tapeSrc_; }
+  int tapeField() const { return tapeField_; }
+  bool tapeFilesBusy() const { return tapeIo_.busy() || tapeLoadWant_; }
+  int tapeValue(int t, int p) const;           // a tape track's setting, pending-aware
+  int tapeLoopBars() const;
+  uint32_t tapeSpan(uint32_t* start) const;    // what the lanes show: [*start, *start + span)
+  bool tapeRecording() const;                  // a take is counting in, waiting or recording
+#endif
   // A recording (or the erase before one) is under way: the host keeps other flash
   // writes (settings, transfers) off meanwhile; the UI's own autosave waits too.
   bool micBusy() const { return micState_ != kMicIdle; }
@@ -287,7 +315,7 @@ class Ui {
   // ---- per-key bookkeeping: every key-up goes to whatever owned its key-down
   enum Act : uint8_t {
     kActNone = 0, kActStep, kActPad, kActNote, kActRoll, kActValue, kActSweep, kActErase, kActTab, kActHelp,
-    kActMacro, kActMic,
+    kActMacro, kActMic, kActTapeRec, kActTrick,
   };
   struct KeyRec {
     uint8_t act, a, b, c;   // meaning depends on act (see ui.cpp)
@@ -345,6 +373,28 @@ class Ui {
   void micTick();              // update(): the erase once ERASING is on screen; poll while armed
   bool micPicture() const;     // the sampler page shows the recording instead of the sample
   void drawMic(Framebuffer& fb);
+#if PG_TAPE
+  // the tape (ui_tape.cpp)
+  bool tapeKey(int k, bool shift);
+  bool tapeCtrl(int k, bool shift);
+  void tapeRecDown(int k, bool shift);
+  void tapeRecUp(int k);
+  void tapeTrickUp(int k);
+  void tapeEdit(int dir, int mag, bool shift);
+  void tapeReset();
+  void tapeTick();
+  void tapeLift(bool confirmed);
+  void tapeConfirmed(uint8_t action);
+  void tapeSave(int mount, const char* name);
+  void tapeLoad(int mount, const char* name);
+  void tapeClear();
+  void tapeDelete(int mount, const char* name);
+  void drawTape(Framebuffer& fb);
+  void drawTapeChip(Framebuffer& fb);
+  void drawTapeConfirm(char* title, char* l1, const char** yes) const;
+  uint32_t tapeSignature() const;
+  int tapeLiftSlot() const;
+#endif
   // tilt (ui_tilt.cpp)
   void tiltEngage();
   void tiltSend(bool force);
@@ -417,7 +467,7 @@ class Ui {
   int helpTable(bool layers = true) const;   // layers: a held modifier shows its layer
 
   // value editing
-  enum class Target : uint8_t { None, Focus, Tempo, Field, Lock, Song, Inert };
+  enum class Target : uint8_t { None, Focus, Tempo, Field, Lock, Song, Inert, Tape };
   Target valueTarget() const;
   bool targetIsSmall(Target t) const;
   void valueEvent(int dir, int mag, bool shift);
@@ -652,6 +702,27 @@ class Ui {
   bool micRs_ = false;                       // the recording (or its erase / confirm) is a resample
   sampler::RecView micView_{};
 
+#if PG_TAPE
+  // the tape (ui_tape.cpp)
+  tape::Tape* tape_ = nullptr;
+  tape::SlotWriter* lift_ = nullptr;
+  bool tapeLine_ = false;
+  tape::TapeFiles tapeIo_;
+  uint8_t tapeArm_ = 0, tapeSrc_ = tape::kSrcMix, tapeField_ = kTfLevel;
+  uint8_t tapePend_[tape::kTracks][tape::kNumParams] = {};   // 0 none, else value + 1
+  uint8_t tapePendFrame_[tape::kTracks][tape::kNumParams] = {};
+  uint8_t tapeLoopPend_ = 0, tapeLoopFrame_ = 0;
+  uint32_t tapeDownMs_ = 0;
+  int8_t tapeTrickKey_ = -1;
+  uint8_t tapeLastRec_ = 0;
+  bool tapeArmSent_ = false;           // kOpArm posted, the audio thread may not have seen it
+  uint8_t tapeArmFrame_ = 0;
+  uint32_t tapeSavedSig_ = 0;
+  bool tapeLoadWant_ = false;
+  uint8_t tapeLoadMount_ = 0;
+  char tapeLoadName_[9] = {};
+  uint32_t tapeRev_ = 0;
+#endif
   // outbox: commands the engine queue had no room for, retried in order
   Command outbox_[kOutbox] = {};
   uint8_t outHead_ = 0, outCount_ = 0;

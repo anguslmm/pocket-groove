@@ -165,6 +165,9 @@ void Ui::loadInto(int mount, int romIndex, const char* name) {
     resetForProject(kTrackBass);
     curRom_ = uint8_t(romIndex);
     afterProjectChange(mount, mount == kPmRom ? demo::name(romIndex) : name, false);
+#if PG_TAPE
+    tapeLoad(mount, mount == kPmRom ? "" : name);   // its tape folder, or an empty tape
+#endif
     playing_ = false;
     char buf[40];
     cat(cat(buf, "LOADED "), curName_);
@@ -172,6 +175,9 @@ void Ui::loadInto(int mount, int romIndex, const char* name) {
   } else if (st == Status::DestClobbered) {
     resetForProject(0);
     afterProjectChange(kPmNone, "", false);
+#if PG_TAPE
+    tapeClear();
+#endif
     toast(statusText(uint8_t(st)), 2);
   } else {
     ioError("LOAD", uint8_t(st));     // the Project is untouched
@@ -211,6 +217,9 @@ void Ui::doSave(int mount, const char* name) {
     return;
   }
   afterProjectChange(mount, name, false);
+#if PG_TAPE
+  tapeSave(mount, name);
+#endif
   char buf[40];
   cat(cat(buf, "SAVED "), name);
   toast(buf, 0);
@@ -227,6 +236,9 @@ void Ui::doDelete(int r) {
     char buf[40];
     cat(cat(buf, "DELETED "), f.name);
     toast(buf, 0);
+#if PG_TAPE
+    tapeDelete(f.mount, f.name);
+#endif
     if (curMount_ == f.mount && std::strcmp(curName_, f.name) == 0) {
       // The open project lost its file: it is unsaved now.
       curMount_ = kPmNone;
@@ -259,6 +271,9 @@ void Ui::doNew() {
   eng_->resume();
   resetForProject(0);                   // selTrack 0 on a new project (2)
   afterProjectChange(kPmNone, "", false);
+#if PG_TAPE
+  tapeClear();
+#endif
   playing_ = false;
   sessCrc_ = 0;
   toast("NEW PROJECT", 0);
@@ -387,6 +402,9 @@ void Ui::confirmKey(int k) {
     case kConfirmNew: doNew(); break;
     case kConfirmOverwriteName: doSave(nameMount_, nameBuf_); break;
     case kConfirmReplaceSample: micConfirmed(); break;
+#if PG_TAPE
+    case kConfirmTapeErase: case kConfirmTapeEraseAll: case kConfirmLift: tapeConfirmed(confirmAction_); break;
+#endif
     default: break;
   }
 }
@@ -531,6 +549,9 @@ void Ui::boot(uint32_t nowMs) {
     if (!name[0] && io::isValidName(proj_->name)) copyName(name, proj_->name);
     afterProjectChange(mount, name, wasDirty);
     sessCrc_ = projectCrc();
+#if PG_TAPE
+    tapeLoad(mount, name);   // the named project's tape, as it was last saved
+#endif
   } else {
     curRom_ = 0;
     afterProjectChange(kPmRom, demo::name(0), false);
@@ -654,6 +675,11 @@ void Ui::drawDialog(Framebuffer& fb) {
       cat(l1, "THIS CAN'T BE UNDONE");
       yes = "ENTER  DELETE";
       break;
+#if PG_TAPE
+    case kConfirmTapeErase: case kConfirmTapeEraseAll: case kConfirmLift:
+      drawTapeConfirm(title, l1, &yes);
+      break;
+#endif
     case kConfirmReplaceSample: {
       char* o = cat(title, "REPLACE SLOT ");
       o += itoa10(confirmRow_ + 1, o);

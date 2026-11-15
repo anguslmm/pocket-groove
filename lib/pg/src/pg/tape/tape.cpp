@@ -878,6 +878,14 @@ uint32_t Tape::nominalLoop(int bars, uint64_t projectStepFP) const {
   return roundFP(uint64_t(bars) * 16u * step);
 }
 
+uint32_t Tape::signature() const {
+  uint32_t h = rev_.load(std::memory_order_relaxed) * 2654435761u;
+  for (int t = 0; t < kTracks; ++t)
+    for (int p = 0; p < kNumParams; ++p) h = (h ^ set_[t][p].load(std::memory_order_relaxed)) * 16777619u;
+  h = (h ^ loopBars_.load(std::memory_order_relaxed)) * 16777619u;
+  return (h ^ bpm_.load(std::memory_order_relaxed)) * 16777619u;
+}
+
 bool Tape::idle() const { return Rec(aRec_.load(std::memory_order_acquire)) == Rec::Idle && !merging_; }
 
 bool Tape::canRecord() const {

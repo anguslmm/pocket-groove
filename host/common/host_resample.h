@@ -182,7 +182,7 @@ class HostResample final : public pg::sampler::MicInput {
 // the desktop's converter), named RESnn, at `rate` (the recording's stored rate).
 // bufs: one kSlotMaxSamples buffer per slot.
 inline bool commitToPool(pg::sampler::MemoryPool* pool, std::vector<int16_t>* bufs, int slot, const int16_t* d,
-                         uint32_t n, uint32_t rate, std::string* err) {
+                         uint32_t n, uint32_t rate, std::string* err, const char* prefix = "RES") {
   std::vector<int16_t>& b = bufs[slot];
   b.assign(pg::sampler::kSlotMaxSamples, 0);
   int pk = 1;
@@ -195,7 +195,7 @@ inline bool commitToPool(pg::sampler::MemoryPool* pool, std::vector<int16_t>* bu
     b[i] = int16_t(v > 32767 ? 32767 : (v < -32768 ? -32768 : v));
   }
   char name[16];
-  std::snprintf(name, sizeof name, "RES%02d", (slot + 1) % 100);
+  std::snprintf(name, sizeof name, "%s%02d", prefix, (slot + 1) % 100);
   if (!pool->set(slot, b.data(), n, name, rate)) {
     *err = "pool refused it";
     return false;

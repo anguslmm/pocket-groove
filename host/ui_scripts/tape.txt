@@ -1,0 +1,155 @@
+# The TAPE view (docs/ux/tape-*.png, docs/UX.md 10.11): `p` twice from anywhere.
+#   build/host/ui_shot host/ui_scripts/tape.txt docs/ux
+# The mockups' groove at 124 BPM (a bar is 1.94 s, the 4-bar loop 7.74 s); the tape
+# records through the real keys: L, the fields, the tricks.
+dev 0
+demo
+tape on 600
+
+# SONG, then TAPE
+tap p
+tap p
+wait 200
+shot tape-empty
+
+# L from stop: a count-in bar, then the transport from the top with the take (MIX on T1)
+tap l
+wait 900
+shot tape-countin
+wait 2200
+shot tape-recording
+wait 5700
+tap l
+wait 1500
+
+# T2: the bass alone (SRC TRACK, BASS selected silently)
+down shift
+tap j
+up shift
+tap ;
+tap ;
+tap -
+tap x
+tap l
+wait 7000
+tap l
+wait 2500
+
+# T3: the lead alone
+down shift
+tap k
+up shift
+tap c
+tap l
+wait 7000
+tap l
+wait 2500
+
+# the instrument tracks muted: what plays is the tape
+down fn
+tap a
+tap s
+tap d
+tap f
+tap g
+tap h
+tap j
+tap k
+up fn
+tap z
+wait 1200
+shot tape-layers
+
+# a trick held
+down b
+wait 350
+shot tape-brake
+up b
+wait 600
+down m
+wait 300
+shot tape-reverse
+up m
+wait 600
+
+# a field: PAN of T1
+tap .
+tap .
+tap .
+tap - 600
+wait 100
+shot tape-field
+
+down shift
+wait 100
+shot tape-shift
+up shift
+down ctl
+wait 100
+shot tape-ctrl
+up ctl
+
+# erase asks first
+tap del
+wait 100
+shot tape-erase
+tap backtick
+tap p
+tap p
+
+# record on T4 with REPLACE (SHIFT+L) while playing: waiting for the bar line
+tap v
+down shift
+tap l
+up shift
+wait 60
+shot tape-waiting
+wait 3000
+shot tape-replace
+tap l
+wait 2500
+
+# lift T2 (the bass) into PERC's slot, then CHOP plays it
+tap x
+down ctl
+tap c
+up ctl
+wait 100
+shot tape-lift
+down shift
+tap h
+up shift
+tap 9
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 300
+tap .
+wait 1500
+shot sampler-lift
+tap p
+tap p
+
+# the help
+down /
+wait 600
+shot help-tape
+up /
+
+# another tempo than the tape's: shown in amber
+global 0 112
+wait 300
+shot tape-tempo
+global 0 124
+wait 300
+
+# song mode: the tape runs along the song
+tap p
+tap 1
+tap 1
+tap enter
+tap p
+wait 4000
+shot tape-song
