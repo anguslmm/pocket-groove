@@ -867,11 +867,11 @@ void State::quiesceForSuspend() {
 void State::apply(const Command& c) {
   switch (c.type) {
     case CmdType::Play: play(c.a == 1); break;
-#if PG_TAPE
     case CmdType::Tape:
+#if PG_TAPE
       if (tape) tape->apply(c);
-      break;
 #endif
+      break;
     case CmdType::Stop: stop(); break;
     case CmdType::SetStep: {
       if (c.a >= kNumPatterns || c.b >= kNumTracks || c.c >= kMaxSteps) break;

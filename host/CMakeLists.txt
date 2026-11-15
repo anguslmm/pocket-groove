@@ -202,3 +202,17 @@ option(PG_DESKTOP "Build the desktop app pocket-groove (needs SDL2)" ON)
 if(PG_DESKTOP)
   add_subdirectory(app)
 endif()
+
+# THE TAPE compiled out (PG_TAPE=0, what the Cardputer and the Daisy build for now): the
+# whole core again without it, and the golden render against it, so the compiled-out
+# build is built and its sound checked on every host build (itest_golden_notape).
+file(GLOB_RECURSE pg_all_srcs CONFIGURE_DEPENDS ${PG_SRC}/pg/*.cpp)
+add_library(pg_notape STATIC ${pg_all_srcs})
+target_include_directories(pg_notape PUBLIC ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(pg_notape PRIVATE ${PG_FLAGS})
+target_compile_definitions(pg_notape PUBLIC PG_TAPE=0)
+add_executable(itest_golden_notape ${CMAKE_CURRENT_SOURCE_DIR}/itests/itest_golden.cpp)
+target_link_libraries(itest_golden_notape PRIVATE pg_notape)
+target_include_directories(itest_golden_notape PRIVATE ${PG_SRC} ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_options(itest_golden_notape PRIVATE ${PG_FLAGS})
+add_test(NAME itest_golden_notape COMMAND itest_golden_notape WORKING_DIRECTORY ${PG_ROOT})
