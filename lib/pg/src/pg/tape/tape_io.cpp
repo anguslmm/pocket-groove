@@ -83,11 +83,13 @@ uint32_t TapeFiles::contentEnd(int t) const {
   return 0;
 }
 
-bool TapeFiles::startSave(FileSystem* fs, const char* folder, Tape* tape) {
+bool TapeFiles::startSave(FileSystem* fs, const char* folder, Tape* tape, uint8_t tracks) {
   if (busy()) cancel();
   fs_ = fs;
   tape_ = tape;
   why_ = "";
+  mask_ = tracks & 0xF;
+  doneMask_ = 0;
   if (!fs || !tape || !tape->ready()) return fail("NO TAPE");
   if (!tape->idle()) return fail("TAPE BUSY");
   std::strncpy(dir_, folder, sizeof(dir_) - 1);
@@ -102,7 +104,7 @@ bool TapeFiles::startSave(FileSystem* fs, const char* folder, Tape* tape) {
   total_ = 0;
   for (int t = 0; t < kTracks; ++t) {
     lens_[t] = contentEnd(t);
-    total_ += lens_[t];
+    if ((mask_ >> t) & 1) total_ += lens_[t];
     static const char* const kKey[kNumParams] = {"level", "pan", "delay", "reverb", "mute"};
     o = catU(cat(o, "track "), uint32_t(t + 1));
     for (int p = 0; p < kNumParams; ++p) o = catU(cat(cat(cat(o, " "), kKey[p]), " "), tape->param(t, p));
@@ -128,6 +130,8 @@ bool TapeFiles::startLoad(FileSystem* fs, const char* folder, Tape* tape) {
   if (!tape->idle()) return fail("TAPE BUSY");
   std::strncpy(dir_, folder, sizeof(dir_) - 1);
   dir_[sizeof(dir_) - 1] = 0;
+  mask_ = 0xF;
+  doneMask_ = 0;
   tape->clear();
   char path[64];
   cat(cat(path, dir_), "/tape.txt");
@@ -191,9 +195,11 @@ bool TapeFiles::openTrack() {
     pos_ = 0;
     len_ = lens_[track_];
     if (st_ == State::Saving) {
+      if (!((mask_ >> track_) & 1)) continue;   // not this save's: its file stays
       if (len_ == 0) {   // empty now: its old file goes
         trackPath(path, dir_, track_, ".wav");
         if (fs_->exists(path)) fs_->remove(path);
+        doneMask_ |= uint8_t(1u << track_);
         continue;
       }
       trackPath(path, dir_, track_, ".tmp");
@@ -310,6 +316,7 @@ void TapeFiles::move(uint32_t budget) {
         trackPath(path, dir_, track_, ".wav");
         if (!fs_->rename(tmp, path)) { fail("TAPE: WRITE FAILED"); return; }
       }
+      doneMask_ |= uint8_t(1u << track_);
     }
   }
 }

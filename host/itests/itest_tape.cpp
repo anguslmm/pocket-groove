@@ -19,6 +19,7 @@
 //   * song mode: the tape runs along the song; a bounce of the song plays back;
 //   * LINE: the platform's input with its round-trip latency lands where it was played;
 //   * the tempo the tape was recorded at stays when the project's changes.
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -677,6 +678,144 @@ void testFiles() {
   check(!fs.exists("/int/pg/SONG1/track1.wav") && fs.exists("/int/pg/SONG1/tape.txt"), "files: the empty tape's save");
 }
 
+// ---- the count-in click ---------------------------------------------------------------
+// The click is a monitor signal (tape.h, Engine::monitor): the output the engine writes,
+// which is what every recording path takes (the tape's sources, the output tap and so
+// resampling, the platform's recorder), never has it; the platform adds it after them.
+struct SpyTap final : OutputTap {
+  std::vector<int16_t> v;
+  void quantum(const int16_t* st, int frames, uint8_t) override { v.insert(v.end(), st, st + 2 * frames); }
+};
+struct ClickRun {
+  std::vector<int16_t> rec, heard, tap, tape;   // engine output, + monitor, the tap's, tape track 1
+};
+// A take on tape track 1 from stop (a count-in bar, then 2 bars of the groove; loop 2),
+// rendered 64 frames at a time: rec = what process() wrote, heard = rec + monitor().
+// LINE hears the speakers: its input is `heard` (the click included) a round trip late.
+// playAt > 0: Play is pressed that many frames into the count-in.
+ClickRun clickRun(int source, bool click, long playAt = 0) {
+  const float sr = 48000.0f;
+  fresh(sr, 120, false);
+  groove();
+  tc(tape::kOpLoop, 0, 2);
+  const int lat = 37 * 16, trip = lat + 64;
+  Command l = tape::tapeCommand(tape::kOpLatency, 0, 0, trip & 0xFF);
+  l.step.vel = uint8_t(trip >> 8);
+  post(l);
+  g_tape.setClick(click);
+  SpyTap spy;
+  eng().setOutputTap(&spy);
+  g_tape.prepareTake();
+  tc(tape::kOpArm, 0, source, kTrackBass);
+  ClickRun r;
+  std::vector<int16_t> delay(size_t(lat), 0);
+  const long bar = barFrames(sr, 120);
+  long started = -1;
+  int16_t buf[128];
+  for (long f = 0; f < bar * 5; f += 64) {
+    if (playAt > 0 && f <= playAt && f + 64 > playAt) post(cmd(CmdType::Play));
+    eng().process(buf, 64);
+    r.rec.insert(r.rec.end(), buf, buf + 128);
+    eng().monitor(buf, 64);
+    r.heard.insert(r.heard.end(), buf, buf + 128);
+    g_tape.service();
+    if (source == tape::kSrcLine) {
+      int16_t in[64];
+      for (int i = 0; i < 64; ++i) {
+        delay.push_back(buf[2 * i]);
+        in[i] = delay.front();
+        delay.erase(delay.begin());
+      }
+      g_tape.lineIn(in, 64);
+    }
+    if (started < 0 && g_tape.view().rec == tape::Rec::Rec) started = f;
+    if (started >= 0 && f == started + bar + bar / 2) tc(tape::kOpEnd);
+  }
+  check(started >= 0 && idleNow(), "click src %d %s: the take ran", source, click ? "on" : "off");
+  eng().setOutputTap(nullptr);
+  r.tap = spy.v;
+  r.tape.resize(size_t(bar * 2));
+  g_tape.read(0, 0, r.tape.data(), uint32_t(r.tape.size()));
+  return r;
+}
+int signChanges(const std::vector<int16_t>& d, long from, long n) {
+  int c = 0;
+  for (long i = from + 1; i < from + n; ++i)
+    if ((d[size_t(2 * i)] > 0) != (d[size_t(2 * i - 2)] > 0)) ++c;
+  return c;
+}
+void testClick() {
+  const long beat = barFrames(48000.0f, 120) / 4;
+  const long len = long(tape::kClickSec * 48000.0f);
+  for (int src : {int(tape::kSrcTrack), int(tape::kSrcMix), int(tape::kSrcLine)}) {
+    const ClickRun on = clickRun(src, true), off = clickRun(src, false);
+    // heard: the click on the count-in's four beats, nothing else added
+    std::vector<int16_t> d(on.heard.size());
+    for (size_t i = 0; i < d.size(); ++i) d[i] = int16_t(on.heard[i] - on.rec[i]);
+    long outside = 0;
+    for (long i = 0; i < long(d.size() / 2); ++i) {
+      const bool in = i < 4 * beat && i % beat < len;
+      if (!in && (d[size_t(2 * i)] || d[size_t(2 * i + 1)])) ++outside;
+    }
+    check(outside == 0, "click src %d: added only on the count-in's beats (%ld frames elsewhere)", src, outside);
+    for (int k = 0; k < 4; ++k) {
+      int pk = 0;
+      for (long i = k * beat; i < k * beat + len; ++i) pk = std::max(pk, std::abs(int(d[size_t(2 * i)])));
+      const int want = int((k == 0 ? tape::kClickAccentLevel : tape::kClickLevel) * 32767.0f);
+      if (std::getenv("TAPE_DEBUG")) std::printf("click src %d beat %d: peak %d\n", src, k + 1, pk);
+      check(pk > want * 8 / 10 && pk <= want + 1, "click src %d beat %d: heard at its level (%d of %d)", src, k + 1, pk, want);
+    }
+    if (src == tape::kSrcTrack) {
+      const int c1 = signChanges(d, 0, len), c2 = signChanges(d, beat, len);
+      if (std::getenv("TAPE_DEBUG")) std::printf("click: sign changes %d / %d in %ld frames\n", c1, c2, len);
+      check(c1 > c2 * 18 / 10 && c1 < c2 * 22 / 10, "click: beat 1 an octave above the others (%d / %d sign changes)", c1, c2);
+      check(std::abs(c2 - int(2 * tape::kClickHz * tape::kClickSec)) <= 3, "click: %g Hz (%d sign changes in %ld frames)",
+            double(tape::kClickHz), c2, len);
+    }
+    // ... and in nothing that records: the engine's output, the output tap, the tape
+    check(on.rec == off.rec && !on.rec.empty(), "click src %d: the engine's output is the same with the click on and off", src);
+    check(on.tap == on.rec, "click src %d: the output tap (resampling) never has it", src);
+    check(off.heard == off.rec, "click src %d off: nothing added", src);
+    int pk = 0;
+    for (int16_t x : on.tape) pk = std::max(pk, std::abs(int(x)));
+    check(pk > 500, "click src %d: the take is on tape (peak %d)", src, pk);
+    check(on.tape == off.tape, "click src %d: the tape is the same with the click on and off%s", src,
+          src == tape::kSrcLine ? " (LINE hears the speakers)" : "");
+  }
+  // Play during the count-in ends it: no click after that
+  {
+    const ClickRun r = clickRun(tape::kSrcMix, true, beat + beat / 2);
+    long late = 0, early = 0;
+    for (long i = 0; i < long(r.heard.size() / 2); ++i) {
+      const bool clicked = r.heard[size_t(2 * i)] != r.rec[size_t(2 * i)];
+      if (clicked && i >= 2 * beat) ++late;
+      if (clicked && i < 2 * beat) ++early;
+    }
+    check(early > 0 && late == 0, "click: Play in the count-in ends it (%ld frames before, %ld after)", early, late);
+  }
+  // armed while playing (no count-in): no click
+  {
+    fresh(48000.0f, 120, false);
+    groove();
+    post(cmd(CmdType::Play));
+    run(5000);
+    g_tape.prepareTake();
+    tc(tape::kOpArm, 0, tape::kSrcMix, 0);
+    long added = 0;
+    int16_t buf[128], cp[128];
+    for (long f = 0; f < barFrames(48000.0f, 120) * 2; f += 64) {
+      eng().process(buf, 64);
+      std::memcpy(cp, buf, sizeof(buf));
+      eng().monitor(buf, 64);
+      added += std::memcmp(cp, buf, sizeof(buf)) != 0;
+      g_tape.service();
+    }
+    check(added == 0, "click: none when the take waits for a bar line while playing (%ld blocks)", added);
+    tc(tape::kOpEnd);
+    idleNow();
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -694,6 +833,7 @@ int main() {
   testLine();
   testTempo();
   testFiles();
+  testClick();
   eng().setTape(nullptr);
   return it::finish("itest_tape");
 }

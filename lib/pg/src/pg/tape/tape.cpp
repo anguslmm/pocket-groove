@@ -127,6 +127,10 @@ bool Tape::init(void* mem, size_t bytes, uint32_t rate) {
   gainK_ = 1.0f - expf(-1.0f / (0.004f * qps));
   brakeFrames_ = int32_t(kBrakeSec * float(rate));
   spinFrames_ = int32_t(kSpinSec * float(rate));
+  clkLen_ = uint32_t(kClickSec * float(rate));
+  clkW_ = 2.0f * 3.14159265f * kClickHz / float(rate);
+  clkWA_ = 2.0f * 3.14159265f * kClickAccentHz / float(rate);
+  clkHave_ = clkFresh_ = false;
   lineTarget_ = 0;
   latencyQ_ = 0;
   rolling_ = posValid_ = false;
@@ -167,6 +171,7 @@ void Tape::apply(const Command& c) {
         rec_ = Rec::CountIn;
         countIn_ = int32_t((16 * projStepFP_) >> 32);
         countEnd_ = false;
+        clkFresh_ = true;
       }
       if (src_ == kSrcLine) {
         for (int i = 0; i < kHist; ++i) hist_[i].rec = 0;
@@ -273,10 +278,21 @@ void Tape::stop() {
   updateActive();
 }
 
-bool Tape::countInDone() {
+bool Tape::countInDone(uint64_t frame) {
   if (rec_ != Rec::CountIn) {
     aBeats_.store(0, std::memory_order_relaxed);
+    if (clkHave_) {
+      if (clkEnd_ == kOpen) clkEnd_ = frame;   // ended (or cancelled): no click starts after this
+      if (frame > clkEnd_ + clkLen_ + (1u << 20)) clkHave_ = false;   // long after (more than any output buffer)
+    }
     return false;
+  }
+  if (clkFresh_) {   // the count-in's first quantum: the clicks are on its beats from here
+    clkFresh_ = false;
+    clkHave_ = true;
+    clkStart_ = frame;
+    clkEnd_ = kOpen;
+    clkBeatFP_ = 4 * projStepFP_;
   }
   // the transport starts one bar (in whole quanta) after the quantum that armed it
   if (countIn_ <= 0) return true;
@@ -285,6 +301,42 @@ bool Tape::countInDone() {
   countIn_ -= kQuantum;
   return false;
 }
+
+// The click: beat k of the count-in starts at clkStart_ + k beats (k = 0..3; one that
+// would start at or after the count-in's end is not played), a burst of clkLen_ frames.
+template <class T>
+void Tape::clickT(T* out, int frames, uint64_t first) const {
+  if (!clkHave_ || frames <= 0 || !clickOn_.load(std::memory_order_relaxed)) return;
+  const uint64_t last = first + uint64_t(frames);
+  const uint32_t rise = rate_ / 1000u + 1u;
+  for (int k = 0; k < 4; ++k) {
+    const uint64_t s = clkStart_ + ((uint64_t(k) * clkBeatFP_ + (uint64_t(1) << 31)) >> 32);
+    if (s >= clkEnd_ || s >= last) break;
+    if (s + clkLen_ <= first) continue;
+    const float w = k == 0 ? clkWA_ : clkW_;
+    const float amp = k == 0 ? kClickAccentLevel : kClickLevel;
+    const uint32_t n0 = first > s ? uint32_t(first - s) : 0u;
+    const uint32_t n1 = s + clkLen_ < last ? clkLen_ : uint32_t(last - s);
+    const float invLen = 1.0f / float(clkLen_);
+    for (uint32_t n = n0; n < n1; ++n) {
+      const float x = 1.0f - float(n) * invLen;
+      float e = x * x * x;
+      if (n < rise) e *= float(n) / float(rise);
+      const float v = amp * e * sinf(w * float(n));
+      T* o = out + 2 * size_t(s + n - first);
+      if constexpr (sizeof(T) == 2) {
+        const int32_t d = int32_t(v * 32767.0f + (v < 0.0f ? -0.5f : 0.5f));
+        o[0] = sat16(int32_t(o[0]) + d);
+        o[1] = sat16(int32_t(o[1]) + d);
+      } else {
+        o[0] += v;
+        o[1] += v;
+      }
+    }
+  }
+}
+void Tape::clickInto(int16_t* stereo, int frames, uint64_t first) const { clickT(stereo, frames, first); }
+void Tape::clickInto(float* stereo, int frames, uint64_t first) const { clickT(stereo, frames, first); }
 
 // A bar line: where this quantum's first frame is on tape = where the bar starts on
 // tape minus how far the bar's exact time lies after this quantum's first frame. At
@@ -992,6 +1044,7 @@ void Tape::mergeSome(int budget) {
     const uint32_t key = touched_[mergeAt_];
     const int t = int(key >> 16);
     const uint32_t i = key & 0xFFFFu;
+    bumpTrack(t);
     std::atomic<uint32_t>& en = entry(t, i);
     const uint32_t e = en.load(std::memory_order_relaxed);
     const uint16_t b = baseOf(e), k = takeOf(e);
@@ -1068,6 +1121,7 @@ bool Tape::undo() {
   if (!idle() || !canUndo()) return false;
   for (uint32_t r = 0; r < undoN_; ++r) {
     const uint32_t key = undoKey_[r];
+    bumpTrack(int(key >> 16));
     std::atomic<uint32_t>& en = entry(int(key >> 16), key & 0xFFFFu);
     const uint16_t now = baseOf(en.load(std::memory_order_relaxed));
     en.store(mkEntry(undoBlk_[r], kNoBlock), std::memory_order_release);
@@ -1125,6 +1179,7 @@ bool Tape::erase(int t, uint32_t from, uint32_t to) {
     ++undoN_;
   }
   trackHas_[t].store(!trackEmpty(t), std::memory_order_relaxed);
+  bumpTrack(t);
   if (empty()) {
     bpm_.store(0, std::memory_order_relaxed);
     undoBpmSaved_ = bpmBefore;   // the undo brings the tempo back with the audio
@@ -1149,6 +1204,7 @@ void Tape::clear() {
       release(takeOf(e));
     }
     trackHas_[t].store(false, std::memory_order_relaxed);
+    bumpTrack(t);
     for (int q = 0; q < kNumParams; ++q) set_[t][q].store(kParamDefault[q], std::memory_order_relaxed);
   }
   loopBars_.store(kDefaultLoop, std::memory_order_relaxed);
@@ -1181,6 +1237,7 @@ uint32_t Tape::read(int t, uint32_t pos, int16_t* out, uint32_t n) const {
 
 bool Tape::write(int t, uint32_t pos, const int16_t* in, uint32_t n) {
   if (t < 0 || t >= kTracks) return false;
+  bumpTrack(t);
   uint32_t i = 0;
   while (i < n) {
     const uint32_t a = pos + i;

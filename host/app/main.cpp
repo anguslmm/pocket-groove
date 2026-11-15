@@ -1327,7 +1327,20 @@ int main(int argc, char** argv) {
   app.stems.shutdown();
   app.listen.shutdown();
   std::printf("[keys] %u key events reached the instrument\n", app.uiKeyEvents);
-  const bool saved = g_ui.saveSessionNow();
+  // The tape goes with the session (_last/ beside _last.pgv): a take still running ends
+  // and is kept, then the tracks that changed are written. The audio runs meanwhile.
+  bool tapeSaved = true;
+  if (app.tapeOn) {
+    const uint32_t t0 = app.nowMs();
+    tapeSaved = false;
+    while (!(tapeSaved = g_ui.tapeQuit()) && app.nowMs() - t0 < 20000) SDL_Delay(1);
+    tapeSaved = tapeSaved && !g_ui.tapeSessionFailed();
+    char dir[40];
+    pg::tape::folderOf(dir, pg::io::kMountInt, pg::tape::kSessionTape);
+    std::printf("[tape] session's tape %s %s (%u ms)\n", tapeSaved ? "saved to" : "NOT SAVED to", fs.real(dir).c_str(),
+                app.nowMs() - t0);
+  }
+  const bool saved = g_ui.saveSessionNow() && tapeSaved;
   std::printf("[session] %s %s\n", saved ? "saved to" : "NOT SAVED to", fs.real(pg::io::kSessionPath).c_str());
   g_audio.close();
   app.display.close();

@@ -479,7 +479,7 @@ static void explain(const Ui& ui, int table, int k, char* title, const char** l1
       case kKNote0 + 5: cat(title, "HOLD: HALF SPEED"); *l1 = "AN OCTAVE DOWN. LET GO: BACK"; *l2 = "WHERE IT WOULD HAVE BEEN."; return;
       case kKNote0 + 6: cat(title, "HOLD: REVERSE"); *l1 = "BACKWARDS FROM HERE. LET GO:"; *l2 = "BACK WHERE IT WOULD HAVE BEEN."; return;
       case kKL: cat(title, "TAPE RECORD"); *l1 = "TAP: TO THE NEXT L. HOLD: WHILE"; *l2 = "HELD. ON BAR LINES. SFT: REPLACE."; return;
-      case kKSemicolon: case kKDot: cat(title, "FIELD UP / DOWN"); *l1 = "SRC LOOP LVL PAN DLY REV."; return;
+      case kKSemicolon: case kKDot: cat(title, "FIELD UP / DOWN"); *l1 = "SRC LOOP LVL PAN DLY REV CLICK."; return;
       case kKMinus: case kKEquals: cat(title, k == kKMinus ? "VALUE DOWN" : "VALUE UP"); *l1 = "THE FIELD IN THE CHIP."; *l2 = "BOTH: DEFAULT."; return;
       case kKDel: cat(title, "ERASE THE LOOP"); *l1 = "OF THE ARMED TRACK (ASKS). SHIFT:"; *l2 = "ALL OF IT. CTRL+Z UNDOES."; return;
       case kKP: cat(title, "SONG VIEW"); *l1 = "CHAIN PATTERNS INTO A SONG."; *l2 = "P AGAIN: THE TAPE."; return;

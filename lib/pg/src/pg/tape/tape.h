@@ -52,6 +52,12 @@
 // on it), so a trick never leaves the tape out of sync. Every change of head is a
 // crossfade.
 //
+// THE COUNT-IN CLICK. The count-in bar from stop clicks on its four beats (beat 1 an
+// octave higher) so a part played by hand has a reference. It is a MONITOR signal: the
+// engine never mixes it into its output (so no tape source, no output tap, resample or
+// recording of the output can contain it); the platform adds it to what goes to the
+// speakers with Engine::monitor() after anything it records. setClick(false) silences it.
+//
 // THREADS. Audio thread: the Engine's calls below (from its quantum). Commands from
 // the UI go through the engine's queue (CmdType::Tape, tapeCommand()). Main thread:
 // service() every UI frame (merges, recycles and zeroes blocks), undo / erase / clear,
@@ -85,6 +91,10 @@ constexpr uint32_t kLineRing = 16384; // line-in ring, samples
 constexpr int kHist = 1024;           // quanta of address history (LINE's latency: 0.34 s at 48 kHz)
 constexpr int kXfadeShort = 64, kXfadeLong = 256;
 constexpr float kBrakeSec = 0.6f, kSpinSec = 0.25f;
+// the count-in click: a sine burst (1 ms rise, a cubic decay to zero), beat 1 an octave up
+constexpr float kClickHz = 880.0f, kClickAccentHz = 1760.0f;
+constexpr float kClickSec = 0.030f;
+constexpr float kClickLevel = 0.25f, kClickAccentLevel = 0.35f;   // peak, of the output's full scale
 
 enum Source : uint8_t { kSrcTrack = 0, kSrcMix, kSrcLine, kNumSources };
 enum Trick : uint8_t { kTrickNone = 0, kTrickBrake, kTrickHalf, kTrickReverse, kNumTricks };
@@ -160,8 +170,13 @@ class Tape {
   // gridFP: where the step's exact grid time is from this quantum's first frame (Q32
   // samples, the sequencer's gridCd: -half a quantum .. +half a quantum).
   void masterStep(bool bar, int stepsInBar, int32_t songSteps, int64_t gridFP);
-  // The count-in: true in the quantum it ends (the engine then plays from the top).
-  bool countInDone();
+  // The count-in, every quantum: true in the quantum it ends (the engine then plays from
+  // the top). frame: this quantum's first frame in the engine's output (Engine's count).
+  bool countInDone(uint64_t frame);
+  // The count-in click into the platform's output: `frames` interleaved stereo frames
+  // whose first is the engine's output frame `first` (Engine::monitor()).
+  void clickInto(int16_t* stereo, int frames, uint64_t first) const;
+  void clickInto(float* stereo, int frames, uint64_t first) const;
   bool active() const { return active_; }   // anything to do in this quantum
   // The instrument track whose dry signal is being recorded (TRACK), -1 = none.
   int captureTrack() const { return capTrack_; }
@@ -198,6 +213,12 @@ class Tape {
   bool write(int t, uint32_t pos, const int16_t* in, uint32_t n);
   // The overview: the largest peak (0..255) of track t over [pos, pos + n).
   uint8_t peak(int t, uint32_t pos, uint32_t n) const;
+  // the count-in click on or off (any thread; the UI keeps it in its settings)
+  void setClick(bool on) { clickOn_.store(on, std::memory_order_relaxed); }
+  bool click() const { return clickOn_.load(std::memory_order_relaxed); }
+  // A track's revision: changes whenever its audio does (main thread; the session's
+  // autosave writes only the tracks whose revision moved since it last wrote them).
+  uint32_t trackRev(int t) const { return trev_[t & 3]; }
   uint32_t revision() const { return rev_.load(std::memory_order_relaxed) + aRev_.load(std::memory_order_relaxed); }
   View view() const;
   uint8_t param(int t, int p) const { return set_[t & 3][p % kNumParams].load(std::memory_order_relaxed); }
@@ -260,6 +281,8 @@ class Tape {
   void release(uint16_t id);
   void mergeSome(int budget);
   void publishUndo();
+  void bumpTrack(int t) { ++trev_[t & 3]; }
+  template <class T> void clickT(T* stereo, int frames, uint64_t first) const;
 
   uint32_t rate_ = 0;
   uint32_t blocks_ = 0, idx_ = 0;
@@ -282,6 +305,7 @@ class Tape {
   std::atomic<uint32_t> takeSeq_{0}, mergedSeq_{0};   // audio: takes ended; main: takes merged
   uint32_t merges_ = 0;
   std::atomic<uint32_t> rev_{0};     // main thread's changes
+  uint32_t trev_[kTracks] = {};      // per track (main thread)
 
   // the ready ring (main -> audio)
   uint16_t ready_[kReady] = {};
@@ -315,6 +339,14 @@ class Tape {
   int stopFade_ = 0;                  // quanta of fade-out after Stop
   int32_t countIn_ = 0;               // frames left
   bool countEnd_ = false;
+  // the click (audio thread): the count-in's first frame, the frame it ended at
+  // (kOpen while it runs), the beat (Q32 frames)
+  static constexpr uint64_t kOpen = ~uint64_t(0);
+  bool clkFresh_ = false, clkHave_ = false;
+  uint64_t clkStart_ = 0, clkEnd_ = 0, clkBeatFP_ = 0;
+  uint32_t clkLen_ = 1;
+  float clkW_ = 0.0f, clkWA_ = 0.0f;   // radians per frame
+  std::atomic<bool> clickOn_{true};
   Rec rec_ = Rec::Idle;
   uint8_t armT_ = 0, src_ = kSrcMix, srcT_ = 0;
   bool replace_ = false;

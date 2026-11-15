@@ -43,7 +43,7 @@ enum class View : uint8_t {
 };
 #if PG_TAPE
 // The TAPE view's fields (`;` / `.` pick one, `-` / `=` change it).
-enum TapeField : uint8_t { kTfSource = 0, kTfLoop, kTfLevel, kTfPan, kTfDelay, kTfReverb, kNumTapeFields };
+enum TapeField : uint8_t { kTfSource = 0, kTfLoop, kTfLevel, kTfPan, kTfDelay, kTfReverb, kTfClick, kNumTapeFields };
 #endif
 enum class Overlay : uint8_t { None, Mute, Pattern, Roll, Tempo };
 enum class Dialog : uint8_t { None, Confirm, Name };
@@ -247,8 +247,17 @@ class Ui {
   // THE TAPE (UX.md 10.11, pg/tape/tape.h): the platform's tape (its memory) and how a
   // lift reaches the sample pool (nullptr: CTRL+C on TAPE says NO LIFT); line = the
   // platform has an audio input for LINE. After init() (which forgets them). The Ui
-  // runs the tape's service() and its files (saved and loaded with the project).
+  // runs the tape's service() and its files: saved and loaded with the project, and
+  // kept with the session (/int/pg/_last/, beside _last.pgv): the autosave writes the
+  // tracks that changed, a piece per frame; boot loads it.
   void setTape(tape::Tape* t, tape::SlotWriter* lift = nullptr, bool line = false);
+  // Quitting: ends a take (what it recorded stays), finishes a save under way and
+  // writes the session's tape. Call it repeatedly (the audio still running) until it
+  // returns true, before saveSessionNow().
+  bool tapeQuit();
+  bool tapeSessionBusy() const { return tapeSessIo_.busy(); }
+  bool tapeSessionFailed() const { return tapeSessErr_; }   // the session's tape could not be written
+  bool tapeClick() const { return tapeClick_; }
   tape::Tape* tapePtr() const { return tape_; }
   int tapeArmed() const { return tapeArm_; }
   int tapeSource() const { return tapeSrc_; }
@@ -389,6 +398,12 @@ class Ui {
   void tapeLoad(int mount, const char* name);
   void tapeClear();
   void tapeDelete(int mount, const char* name);
+  void tapeLoadSession();
+  uint8_t tapeSessMask() const;
+  bool tapeSessDirty() const;
+  bool tapeSessStart();
+  void tapeSessStop();
+  void tapeSessSync(bool inSync);
   void drawTape(Framebuffer& fb);
   void drawTapeChip(Framebuffer& fb);
   void drawTapeConfirm(char* title, char* l1, const char** yes) const;
@@ -722,6 +737,20 @@ class Ui {
   uint8_t tapeLoadMount_ = 0;
   char tapeLoadName_[9] = {};
   uint32_t tapeRev_ = 0;
+  bool tapeClick_ = true;              // the count-in click (saved with the UI settings)
+  // the session's tape (/int/pg/_last/): what is in its folder
+  enum : uint8_t { kTioNone = 0, kTioSave, kTioLoad, kTioLoadSess };
+  uint8_t tapeIoKind_ = kTioNone;      // what tapeIo_ is doing
+  bool tapeLoadSess_ = false;          // the pending load is the session's
+  tape::TapeFiles tapeSessIo_;
+  uint8_t tapeSessOk_ = 0;             // tracks whose file in the session folder is their audio as of tapeSessRev_
+  bool tapeSessSigOk_ = false;         // its tape.txt is as of tapeSessSig_
+  uint32_t tapeSessRev_[tape::kTracks] = {};
+  uint32_t tapeSessSig_ = 0;
+  uint32_t tapeSessJobRev_[tape::kTracks] = {};
+  uint32_t tapeSessJobSig_ = 0;
+  uint32_t tapeSessRetryMs_ = 0;
+  bool tapeSessErr_ = false, tapeQuitting_ = false;
 #endif
   // outbox: commands the engine queue had no room for, retried in order
   Command outbox_[kOutbox] = {};

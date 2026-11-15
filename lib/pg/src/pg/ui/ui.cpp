@@ -1551,7 +1551,7 @@ bool Ui::targetIsSmall(Target t) const {
     }
     case Target::Lock: return focus_.global ? false : isSmallRange(trackInfo(heldTrack_, focus_.index));
 #if PG_TAPE
-    case Target::Tape: return tapeField_ <= kTfLoop;
+    case Target::Tape: return tapeField_ <= kTfLoop || tapeField_ == kTfClick;
 #endif
     default: return false;
   }

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <initializer_list>
 #include <vector>
 
@@ -220,8 +221,9 @@ struct Rig {
     tiltX = tiltY = 0.0f;
     frame();
   }
-  // Power-on with the current file system contents: what the firmware does.
-  void boot() {
+  // Power-on with the current file system contents: what the firmware does. attach:
+  // what the platform installs between the UI's init() and its boot() (a tape).
+  void boot(const std::function<void()>& attach = {}) {
     inst.init(kSr, false);
     pg::ui::initPalette(fb);
     matrix.reset();
@@ -229,6 +231,7 @@ struct Rig {
     ui.setDevMode(devMode);
     ui.setSampler(&inst.sampler());
     ui.setMelodic(&inst.melodic());
+    if (attach) attach();
     resetClock();
     g0Held = false;
     g0Swallow = 0;

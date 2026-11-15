@@ -17,6 +17,9 @@
 //   files      CTRL+S saves the project and its tape folder; the dirty mark follows the
 //              tape; a new project empties the tape; loading the project brings it back
 //              sample for sample; a project without a tape folder loads an empty tape
+//   session    the session keeps the tape: the autosave writes the tracks that changed,
+//              quitting ends a take and writes it, power-on brings it back with its
+//              settings and the click setting; the project's folder is not touched
 //   help       the TAPE key map and the explain texts
 #include <cstdio>
 #include <cstring>
@@ -345,6 +348,99 @@ static void testFiles() {
   CHECK(T->tape.empty());
 }
 
+// The session keeps the tape (/int/pg/_last/ beside _last.pgv): the autosave writes it
+// (only the tracks that changed), quitting ends a take and writes it, the next power-on
+// brings it back sample for sample with its settings and the click setting, and the
+// project's own folder is not touched.
+static std::vector<int16_t> trackNow(int t) {
+  std::vector<int16_t> v(400000);
+  T->tape.read(t, 0, v.data(), uint32_t(v.size()));
+  return v;
+}
+static void quit() {   // what the desktop app does when it quits
+  for (int i = 0; i < 2000 && !R->ui.tapeQuit(); ++i) R->run(5);
+  CHECK(!R->ui.tapeSessionBusy() && !R->ui.tapeSessionFailed());
+  CHECK(R->ui.saveSessionNow());
+}
+static void testSession() {
+  fresh();
+  tap("`");
+  tap("1");   // a pattern edit: the session's patterns have something to save
+  toTape();
+  takeFromStop();
+  tap("space");
+  R->run(300);
+  tap("=");   // T1's level 101
+  for (int i = 0; i < 4; ++i) tap(".");
+  CHECK(R->ui.tapeField() == kTfClick);
+  tap("-");   // the click off
+  CHECK(!R->ui.tapeClick() && !T->tape.click());
+  // the autosave (10 s without a key while stopped) writes the session's tape
+  R->run(12000);
+  CHECK(R->fs.exists("/int/pg/_last.pgv"));
+  CHECK(R->fs.exists("/int/pg/_last/tape.txt") && R->fs.exists("/int/pg/_last/track1.wav"));
+  CHECK(!R->fs.exists("/int/pg/_last/track2.wav"));
+  CHECK(!R->fs.exists("/int/pg/GROOVE01/tape.txt"));   // the project's folder: only CTRL+S
+  // a take on T2: the next autosave writes T2 and leaves T1's file alone
+  std::vector<uint8_t> t1(*R->fs.get("/int/pg/_last/track1.wav"));
+  R->fs.remove("/int/pg/_last/track1.wav");
+  tap("x");
+  takeFromStop();
+  tap("space");
+  R->run(3500);   // 2 s after the stop
+  CHECK(R->fs.exists("/int/pg/_last/track2.wav"));
+  CHECK(!R->fs.exists("/int/pg/_last/track1.wav"));   // unchanged: not written again
+  R->fs.write("/int/pg/_last/track1.wav", t1.data(), t1.size());
+  // quit in the middle of a take on T3: it ends there and is kept
+  tap("c");
+  tap("l");
+  R->run(barMs() * 2 + barMs() / 2);
+  CHECK(V().rec == tape::Rec::Rec);
+  quit();
+  CHECK(V().rec == tape::Rec::Idle && !T->tape.trackEmpty(2));
+  CHECK(R->fs.exists("/int/pg/_last/track3.wav"));
+  const std::vector<int16_t> w0 = trackNow(0), w1 = trackNow(1), w2 = trackNow(2);
+  const uint16_t bpm = T->tape.bpm();
+  CHECK(R->ui.dirty());
+  // power-on: the session's patterns and its tape
+  R->boot([] {
+    R->eng.suspend();
+    R->eng.setTape(nullptr);
+    T->init(120, uint32_t(uih::Rig::kSr));
+    R->eng.setTape(&T->tape);
+    R->eng.resume();
+    R->ui.setTape(&T->tape, L, false);
+  });
+  R->run(600);
+  CHECK(trackNow(0) == w0 && trackNow(1) == w1 && trackNow(2) == w2);
+  CHECK(T->tape.trackEmpty(3));
+  CHECK(T->tape.param(0, tape::kPLevel) == 101 && T->tape.bpm() == bpm);
+  CHECK(!R->ui.tapeClick() && !T->tape.click());
+  CHECK(R->ui.dirty());   // still not saved with the project
+  CHECK(!R->fs.exists("/int/pg/GROOVE01/tape.txt"));
+  // in step with its folder: an autosave writes nothing again
+  std::vector<uint8_t> t2(*R->fs.get("/int/pg/_last/track2.wav"));
+  R->fs.remove("/int/pg/_last/track2.wav");
+  tap("1");   // a key, then 12 s idle: the patterns' autosave runs, the tape's has nothing to do
+  tap("1");
+  R->run(12000);
+  CHECK(!R->fs.exists("/int/pg/_last/track2.wav"));
+  R->fs.write("/int/pg/_last/track2.wav", t2.data(), t2.size());
+  // an erase is a change: written (an empty track's file goes)
+  toTape();
+  tap("c");
+  shift("del");
+  tap("enter");
+  R->run(200);
+  CHECK(T->tape.trackEmpty(2));
+  R->run(12000);
+  CHECK(!R->fs.exists("/int/pg/_last/track3.wav") && R->fs.exists("/int/pg/_last/track2.wav"));
+  // the click back on (its default): - = on CLICK
+  for (int i = 0; i < 7 && R->ui.tapeField() != kTfClick; ++i) tap(".");
+  tap("=");
+  CHECK(R->ui.tapeClick() && T->tape.click());
+}
+
 static void testHelp() {
   fresh();
   toTape();
@@ -391,6 +487,7 @@ int main() {
     testErase();
     testLift();
     testFiles();
+    testSession();
     testHelp();
   }
   rig.eng.setTape(nullptr);
