@@ -70,6 +70,62 @@ itself. Host-verified: ctest -L daisy (core, /int with power cuts, sample pool, 
 BMI270) and tools/test_pg_daisy.py against the firmware's App in daisy_sim. docs/DAISY.md has the
 flashing steps and the first-power-on checklist. Entry "DAISY TARGET BUILT" below.
 
+TAPE: THE SESSION KEEPS IT, THE COUNT-IN CLICKS (2026-11-15, branch of a tape worktree; NOTHING
+LISTENED TO, desktop and host only). Two of phase 1's shortcomings, fixed before the owner uses it.
+- SESSION: the session has its own tape folder, /int/pg/_last/ (desktop: projects/_last/, beside
+  _last.pgv; tape::kSessionTape, a name no project can have), the same files as a project's.
+  Written by the autosave (2 s after a stop / 10 s idle, never while playing; only tape.txt and
+  the tracks whose Tape::trackRev moved since they were last written there, through TapeFiles'
+  new track mask, 256 K samples a UI frame; a take, an erase, an undo, a project load or save
+  stops the job and the tracks it finished count) and at quit (Ui::tapeQuit(), which the app
+  loops on before saveSessionNow() with the audio still running: a running take is ended with
+  kOpCancel, which keeps what it recorded, then merged and written; `[tape] session's tape saved
+  to ... (N ms)`). Power-on loads _last/ when it exists (else, a session from before this, the
+  named project's folder as before). The project's own folder is written only by CTRL+S, and the
+  project's dirty mark is unchanged (restored from the settings). A crash or kill loses what was
+  recorded since the last autosave (normally: the takes since the last stop, if it was more than
+  2 s ago); the track being written at that moment keeps its previous file (.tmp + rename), and
+  tape.txt may then be newer than that WAV. A session tape refused at boot (another --sr) is
+  kept until the tape changes. A normal quit loses nothing (desktop_check 10b: a take and a level,
+  quit without CTRL+S, relaunch, saved as GROOVE01: the same PCM and level; a take, a stop,
+  SIGKILL after the autosave: back).
+- CLICK: the count-in bar from stop clicks on its four beats: a 30 ms sine burst (1 ms rise,
+  cubic decay to zero), 1760 Hz peak 0.35 FS (-10.2 dBFS measured on the desktop: 10,124) on
+  beat 1, 880 Hz peak 0.25 (-13.3 dBFS: 7,070) on beats 2-4; the demos peak about -2 dBFS with
+  RMS about -13 (measured, render_demo 0 1 2 3). A MONITOR signal: the engine never mixes it into
+  process()'s output, so no tape source (all inside the engine), no output tap (resampling) and
+  no recording of the output has it; the platform adds it with Engine::monitor(out, frames) right
+  after process() on the same buffer (desktop: after the F9 ring). The engine counts the frames
+  process() writes; countInDone(frame) (now every quantum, so Play during the count-in ends the
+  clicks) notes the count-in's first frame and its end; Tape::clickInto computes the bursts in the
+  buffer from those numbers (sinf per click sample, nothing per sample otherwise, no allocation).
+  The last burst ends >= 0.27 s before the take (200 BPM max), so LINE, written a round trip
+  back, does not pick it up from the speakers (itest_tape loops the heard output into LINE: the
+  tape is bit-identical with the click on and off, for TRACK, MIX and LINE). CLICK, a seventh
+  field on TAPE (ON / OFF, default ON), is a UI setting (settings byte 15, builds with the tape
+  only): kept across projects and quits. Compiled out with PG_TAPE=0. Resampling's count-in
+  (SHIFT+L on a sampler page) does NOT get it: it counts while the groove plays (resampling
+  records the output, so the groove is running and is the reference); the click is the tape's.
+  No metronome during a take (not built): the patterns play during every take, so the groove is
+  the reference; for a first layer with nothing else, a muted hat pattern serves; if the owner
+  asks, CLICK could get a third value (ON while recording) on the same monitor path, cheaply.
+- MEASURED: host ctest 119/119 (itest_tape 382 checks, +81: the click on its beats at its level
+  and pitch, nothing else added, the engine output, the output tap and the tape identical with
+  it on and off, Play in the count-in ends it, none while waiting with the groove playing;
+  itest_ui_tape 345, +78: the session's tape written by the autosave and only the changed
+  tracks, a take ended and kept by the quit, power-on brings back audio, level, tempo and the
+  click setting, an erase rewrites, CLICK on the view; desktop_check 10b and 10c: the click in
+  what SDL's disk driver plays, four bursts a beat apart, beat 1 louder, none of it in F9's
+  recording, which is otherwise identical to what was heard; with CLICK OFF identical
+  throughout). itest_golden, itest_golden48, itest_golden_notape unchanged; empty tape
+  bit-identical. Callgrind (bench_tape): no tape 2101, empty 2108 (+1 over phase 1: the counters
+  and countInDone every quantum), 4 play 2237, + rec 2311, + HALF 2609. Cardputer unchanged:
+  USB flash 1,336,235 RAM 202,284; non-USB 1,274,199 / 201,764. Daisy unchanged: stage 0 420,848
+  B, stage 1 452,344 B.
+- PHASE 2 adds: the Daisy calls Engine::monitorFloat() on its output buffer after
+  processFloat() (its resampling takes the output tap, which never has the click); the session's tape on /int
+  needs the Daisy's FileSystem to create the folder on open-for-write, like a project's.
+
 TAPE PHASE 1 (2026-11-15, branch of the tape worktree; NOTHING LISTENED TO, desktop and host only).
 The OP-1-style tape: four mono audio tracks beside the patterns, mixed into the master bus
 with the instruments (level, pan, mute, delay and reverb sends each), rolling with the
@@ -110,8 +166,8 @@ the Cardputer's envs and the Daisy's Makefile set it.
   tape's undo, CTRL+C lifts the loop into the selected sampler track's slot (else PERC's) in
   whole bars that fit (TAP01). ghosting-audit.md row 32: every gesture is two keys.
 - FILES: <mount>/pg/NAME/tape.txt + track1..4.wav beside NAME.pgv, incremental both ways
-  (tape_io.h, a piece per UI frame), loaded with the project and with the session at boot; a
-  tape of another rate is refused (TAPE IS 48K: NOT LOADED).
+  (tape_io.h, a piece per UI frame), loaded with the project; a tape of another rate is
+  refused (TAPE IS 48K: NOT LOADED). (Since: the session keeps its own tape, entry above.)
 - MEASURED (host): ctest 119/119 (new itest_tape 301 checks, itest_ui_tape 267 on all three
   key-matrix models, itest_golden_notape, desktop_check part 10). itest_golden /
   itest_golden48 unchanged; an empty tape bit-identical in int16 and float. Cost, callgrind

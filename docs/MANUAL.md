@@ -1321,13 +1321,13 @@ Beside its patterns the Pocket Groove has a **tape**: four tracks of audio that 
 
 **Getting there.** `p` is SONG; `p` again is **TAPE** (and `p` once more goes back to SONG). The two are the arrangement's pages: patterns on one, audio on the other.
 
-**The screen.** Four lanes, one per tape track, each with the waveform of what is on it. In pattern mode the lanes show the **loop** (4 bars unless you change it), with dotted bar lines; in song mode a page of 8 bars that follows the song. The white line is where the tape is. The header says `LOOP 4` (or `SONG`), the record state, and `FREE 9:36`: how much tape is left, in minutes of track time (all four tracks share it). If the project's tempo is not the tempo the tape was recorded at, that tempo is shown in amber (`124 BPM`). Under the lanes the **armed** track's settings: `SRC` (what is recorded), `LOOP`, `LVL`, `PAN`, `DLY`, `REV`.
+**The screen.** Four lanes, one per tape track, each with the waveform of what is on it. In pattern mode the lanes show the **loop** (4 bars unless you change it), with dotted bar lines; in song mode a page of 8 bars that follows the song. The white line is where the tape is. The header says `LOOP 4` (or `SONG`), the record state, and `FREE 9:36`: how much tape is left, in minutes of track time (all four tracks share it). If the project's tempo is not the tempo the tape was recorded at, that tempo is shown in amber (`124 BPM`). Under the lanes the **armed** track's settings: `SRC` (what is recorded), `LOOP`, `LVL`, `PAN`, `DLY`, `REV`, and `CLICK` (the count-in click, below).
 
 | Key | On TAPE |
 |---|---|
 | `z` `x` `c` `v` | arm tape track 1 .. 4 (the one that records, and whose settings are shown) |
 | `1` .. `4` | mute / unmute tape track 1 .. 4 |
-| `;` `.` | the field: SRC LOOP LVL PAN DLY REV |
+| `;` `.` | the field: SRC LOOP LVL PAN DLY REV CLICK |
 | `-` `=` | change it (both: its default) |
 | `l` | record: **tap** to start, `l` again to stop; or **hold** and let go to stop |
 | `shift`+`l` | record, replacing what is there instead of adding to it |
@@ -1347,12 +1347,14 @@ Everything else does what it does everywhere: the pads play and select tracks, `
    - **MIX**: everything you hear, instruments, delay and reverb and the other tape tracks, but not the track being recorded. This is a **bounce**: with its sources muted afterwards it sounds the same, so four tracks of instruments become one tape track and the instruments are free again.
    - **TRACK**: the selected instrument track alone, as you hear it (its level, pan, mute and ducking), without its delay and reverb: give the tape track its own `DLY` and `REV` instead (recorded with them, they would be doubled). The field shows the track's name; select another with its pad (`shift`+pad: silently).
    - **LINE**: the audio input (on the desktop app: the Mac's input, the one the microphone uses).
-3. **Press `l`.** While the groove plays, the header counts the beats to the next bar line (`4 3 2 1`) and recording starts exactly on it. Stopped, the count is one bar of silence (a large `4 3 2 1` in the lane), then the transport starts from the top with the recording.
+3. **Press `l`.** While the groove plays, the header counts the beats to the next bar line (`4 3 2 1`) and recording starts exactly on it. Stopped, the count is one bar of clicks (a large `4 3 2 1` in the lane, the first click higher), then the transport starts from the top with the recording.
 4. **Stop it**: tap `l` again, or, if you held `l`, let go. It ends on the **next bar line** after that, so a take is whole bars. Stopping the transport ends it at once.
 
 ![Recording: the take grows in red](ux/tape-recording.png)
 
 **Layering.** In pattern mode the tape loops: a take that runs on past the end of the loop goes round and records on top of itself, and what you recorded in the earlier passes plays back while you add the next one, like a looper. A take onto a track that has audio **adds** to it (overdub). `shift`+`l` **replaces** instead: the track is silent while you record over it, and what you record is all that is left there. When added layers would get loud, the tape rounds off the peaks softly rather than clipping.
+
+**The click.** The count-in from stop clicks on its four beats so you can come in on time when you play a part by hand: a short beep, the first one an octave higher, quieter than the music. You hear it; it is never recorded, not onto the tape from any source (a bounce included; LINE does not pick it up from the speakers either, it ends well before the take starts), not into a resample and not into a recording of the output (F9 on the desktop). `CLICK` (the last field) turns it `OFF`; the setting is kept when you switch projects and quit. There is no click while the take waits for a bar line with the groove playing: the groove is the reference.
 
 **Undo.** `ctrl`+`z` on TAPE takes the last take (or erase) back; again brings it back. Only one level, and starting a new take forgets it.
 
@@ -1388,6 +1390,8 @@ Only the tape is affected; the instruments keep playing. Underneath, the tape ke
 
 ### Files
 
-The tape is saved **beside** the project, not inside it, so a project stays small. Saving `GROOVE01` also writes the folder `GROOVE01/` next to it: `tape.txt` (the loop, the levels, pans, sends and mutes, the tape's tempo and rate) and one WAV per track that has audio (`track1.wav` ..). Loading the project loads its tape; a project without such a folder has an empty tape; a new project starts with an empty tape. Unsaved changes on the tape mark the project as changed (`*`), like any edit. The WAVs are ordinary mono files you can open anywhere. The tape is saved only with the project: the autosaved session keeps your patterns when you quit, but the tape comes back as it was last saved with `ctrl`+`s`.
+The tape is saved **beside** the project, not inside it, so a project stays small. Saving `GROOVE01` also writes the folder `GROOVE01/` next to it: `tape.txt` (the loop, the levels, pans, sends and mutes, the tape's tempo and rate) and one WAV per track that has audio (`track1.wav` ..). Loading the project loads its tape; a project without such a folder has an empty tape; a new project starts with an empty tape. Unsaved changes on the tape mark the project as changed (`*`), like any edit. The WAVs are ordinary mono files you can open anywhere.
+
+**Quitting keeps the tape.** The autosaved session keeps the tape with your patterns, in its own folder (`_last/` beside the session file; the project's folder is only written by `ctrl`+`s`). The next start has the tape exactly as you left it, its takes, levels, pans, sends, mutes and loop (not the undo). Quitting while a take records ends the take there and keeps it. The session's tape is also written when the session is autosaved (2 seconds after you stop, or after 10 seconds without a key while stopped), only the tracks that changed. If the app crashes, or the computer loses power, what you recorded since the last of those is lost: a take you recorded and stopped more than a couple of seconds before is safe.
 
 A tape recorded at another sample rate than the one the app runs at is not loaded (`TAPE IS 48K: NOT LOADED`).
