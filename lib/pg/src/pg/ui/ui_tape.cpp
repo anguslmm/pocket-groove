@@ -1,7 +1,7 @@
 // The TAPE view (UX.md 10.11; the tape itself: pg/tape/tape.h). `p` in SONG.
 //
 // Keys on this view: z x c v arm tape track 1-4 (the one that records and that the
-// fields edit), 1-4 mute it, ; . pick a field (SRC LOOP LVL PAN DLY REV), - = change
+// fields edit), 1-4 mute it, ; . pick a field (SRC LOOP LVL PAN DLY REV CLICK), - = change
 // it, L records (tap: on until L again, hold: until it is let go; it starts and ends on
 // bar lines; SHIFT+L replaces instead of overdubbing), b n m held: BRAKE HALF REVERSE,
 // del erases the armed track's loop (SHIFT: all of it), CTRL+Z undoes the last take
@@ -57,8 +57,9 @@ char* catMinSec(char* o, uint64_t samples, uint32_t rate) {
 Command tcmd(tape::Op op, int b = 0, int c = 0, int note = 0) { return tape::tapeCommand(op, b, c, note); }
 constexpr uint8_t kLaneCol[tape::kTracks] = {CYAN, GREEN, AMBER, tc(kTrackLead)};
 constexpr uint8_t kLaneDim[tape::kTracks] = {CYAN_D, GREEN_D, AMBER_D, tc(kTrackLead, kDim)};
-constexpr const char* kFieldName[kNumTapeFields] = {"SRC", "LOOP", "LVL", "PAN", "DLY", "REV"};
-constexpr const char* kFieldLong[kNumTapeFields] = {"SOURCE", "LOOP", "LEVEL", "PAN", "DELAY", "REVERB"};
+constexpr const char* kFieldName[kNumTapeFields] = {"SRC", "LOOP", "LVL", "PAN", "DLY", "REV", "CLICK"};
+constexpr uint32_t kSessBudget = 1u << 18, kSessQuitBudget = 1u << 22;   // samples per frame / per call at quit
+constexpr uint32_t kSessRetryMs = 10000;
 uint64_t stepFPAt(uint32_t rate, int bpm) {
   const uint64_t srQ8 = uint64_t(rate) * 256u;
   return ((srQ8 * 15u) << 24) / uint64_t(bpm > 0 ? bpm : 120);
@@ -79,6 +80,7 @@ void Ui::setTape(tape::Tape* t, tape::SlotWriter* lift, bool line) {
   lift_ = lift;
   tapeLine_ = line;
   tapeSavedSig_ = tape_ ? tape_->signature() : 0;
+  if (tape_) tape_->setClick(tapeClick_);
   ++serial_;
 }
 
@@ -198,6 +200,7 @@ void Ui::tapeRecDown(int k, bool shift) {
   if (!tape_->idle() || tapeIo_.busy() || tapeLoadWant_) { toast("TAPE BUSY", 0); return; }
   if (tapeSrc_ == tape::kSrcLine && !tapeLine_) { toast("NO LINE INPUT", 2); return; }
   if (!tape_->canRecord()) { toast("TAPE: MEMORY FULL", 2); return; }
+  tapeSessStop();   // the session's autosave of the tape gives way (it is written again later)
   tape_->prepareTake();
   send(tcmd(tape::kOpArm, tapeArm_, tapeSrc_ | (shift ? tape::kArmReplace : 0), sel_));
   tapeArmSent_ = true;
@@ -232,6 +235,12 @@ void Ui::tapeEdit(int dir, int mag, bool shift) {
       if (s >= 0 && s < tape::kNumSources) tapeSrc_ = uint8_t(s);
       break;
     }
+    case kTfClick:
+      if ((dir > 0) == tapeClick_) break;
+      tapeClick_ = dir > 0;
+      tape_->setClick(tapeClick_);
+      settingsDirty_ = true;
+      break;
     case kTfLoop: {
       int i = 0;
       for (int j = 0; j < tape::kNumLoops; ++j)
@@ -262,6 +271,10 @@ void Ui::tapeReset() {
   if (!tape_) return;
   if (tapeField_ == kTfSource) {
     tapeSrc_ = tape::kSrcMix;
+  } else if (tapeField_ == kTfClick) {
+    if (!tapeClick_) settingsDirty_ = true;
+    tapeClick_ = true;
+    tape_->setClick(true);
   } else if (tapeField_ == kTfLoop) {
     send(tcmd(tape::kOpLoop, 0, tape::kDefaultLoop));
     tapeLoopPend_ = tape::kDefaultLoop;
@@ -352,7 +365,9 @@ void Ui::tapeSave(int mount, const char* name) {
     return;
   }
   if (!tape_->idle()) { toast("TAPE BUSY: NOT SAVED", 2); return; }
+  tapeSessStop();
   if (!tapeIo_.startSave(fs_, dir, tape_)) { toast(tapeIo_.why(), 2); return; }
+  tapeIoKind_ = kTioSave;
   tapeSavedSig_ = tape_->signature();   // the job runs in tapeTick(), a piece per frame
 }
 
@@ -361,6 +376,7 @@ void Ui::tapeLoad(int mount, const char* name) {
   tapeLoadWant_ = true;
   tapeLoadMount_ = uint8_t(mount);
   copyName(tapeLoadName_, name ? name : "");
+  tapeLoadSess_ = false;
   for (auto& row : tapePend_) std::memset(row, 0, sizeof(row));
   tapeLoopPend_ = 0;
   tapeArmSent_ = false;
@@ -368,6 +384,89 @@ void Ui::tapeLoad(int mount, const char* name) {
 }
 
 void Ui::tapeClear() { tapeLoad(kPmNone, ""); }
+
+// Boot: the session's own tape (the folder beside _last.pgv).
+void Ui::tapeLoadSession() {
+  tapeLoad(kPmInt, tape::kSessionTape);
+  tapeLoadSess_ = true;
+}
+
+// ---- the session's tape ----------------------------------------------------------------
+// The session folder mirrors the tape: tapeSessOk_ / tapeSessRev_ say which tracks' files
+// hold their audio as of which revision, tapeSessSig_ what its tape.txt was written from.
+// The autosave (and the quit) writes tape.txt and the tracks that changed since, one job
+// a piece per frame; a take, a load or a save of the project stops it (the tracks it
+// finished count, the rest are written by the next one).
+
+uint8_t Ui::tapeSessMask() const {
+  uint8_t m = 0;
+  for (int t = 0; t < tape::kTracks; ++t)
+    if (!((tapeSessOk_ >> t) & 1) || tape_->trackRev(t) != tapeSessRev_[t]) m |= uint8_t(1u << t);
+  return m;
+}
+
+bool Ui::tapeSessDirty() const {
+  return tape_ && fs_ && (tapeSessMask() != 0 || !tapeSessSigOk_ || tape_->signature() != tapeSessSig_);
+}
+
+// inSync: the folder now holds the tape as it is (it was just loaded from it); else
+// nothing in it is (another tape was loaded): every track is written next time.
+void Ui::tapeSessSync(bool inSync) {
+  tapeSessOk_ = inSync ? 0xF : 0;
+  tapeSessSigOk_ = inSync;
+  for (int t = 0; t < tape::kTracks; ++t) tapeSessRev_[t] = tape_ ? tape_->trackRev(t) : 0;
+  tapeSessSig_ = tape_ ? tape_->signature() : 0;
+}
+
+bool Ui::tapeSessStart() {
+  if (!tape_ || !fs_ || tapeSessIo_.busy() || tapeIo_.busy() || tapeLoadWant_) return false;
+  if (!tape_->idle() || tapeRecording() || !tapeSessDirty()) return false;
+  char dir[40], path[64];
+  tape::folderOf(dir, io::kMountInt, tape::kSessionTape);
+  cat(cat(path, dir), "/tape.txt");
+  if (tape_->empty() && !fs_->exists(path)) {   // nothing there, nothing to write
+    tapeSessSync(true);
+    return false;
+  }
+  for (int t = 0; t < tape::kTracks; ++t) tapeSessJobRev_[t] = tape_->trackRev(t);
+  tapeSessJobSig_ = tape_->signature();
+  if (!tapeSessIo_.startSave(fs_, dir, tape_, tapeSessMask())) {
+    toast(tapeSessIo_.why(), 2);
+    tapeSessIo_.step();   // the failure, reported once
+    tapeSessErr_ = true;
+    tapeSessRetryMs_ = now_ + kSessRetryMs;
+    return false;
+  }
+  return true;
+}
+
+// The job stops; the tracks it completed are in the folder.
+void Ui::tapeSessStop() {
+  if (!tapeSessIo_.busy()) return;
+  const uint8_t done = tapeSessIo_.tracksDone();
+  for (int t = 0; t < tape::kTracks; ++t)
+    if ((done >> t) & 1) {
+      tapeSessOk_ |= uint8_t(1u << t);
+      tapeSessRev_[t] = tapeSessJobRev_[t];
+    }
+  tapeSessSigOk_ = false;   // tape.txt was written for the whole job
+  tapeSessIo_.cancel();
+}
+
+bool Ui::tapeQuit() {
+  if (!tape_ || !fs_) return true;
+  if (!tapeQuitting_) {   // a take ends now: what it recorded is merged and kept
+    tapeQuitting_ = true;
+    tapeSessErr_ = false;
+    const tape::Rec r = tape_->view().rec;
+    if (tapeArmSent_ || (r != tape::Rec::Idle && r != tape::Rec::Done)) send(tcmd(tape::kOpCancel));
+    tapeArmSent_ = false;
+  }
+  tapeTick();
+  if (!tape_->idle() || tapeIo_.busy() || tapeLoadWant_ || tapeSessIo_.busy()) return false;
+  if (tapeSessErr_) return true;   // could not write it: given up
+  return !tapeSessStart();
+}
 
 void Ui::tapeDelete(int mount, const char* name) {
   if (!fs_) return;
@@ -391,25 +490,58 @@ void Ui::tapeTick() {
   // a load (or a clear) waits for the tape to be idle: a take is merged first
   if (tapeLoadWant_ && tape_->idle()) {
     tapeLoadWant_ = false;
+    tapeSessStop();
+    tapeIoKind_ = tapeLoadSess_ ? kTioLoadSess : kTioLoad;
     if (tapeLoadMount_ == kPmInt || tapeLoadMount_ == kPmSd) {
       char dir[40];
       tape::folderOf(dir, mountOf(tapeLoadMount_), tapeLoadName_);
       if (!fs_ || !tapeIo_.startLoad(fs_, dir, tape_)) {
         if (fs_) toast(tapeIo_.why(), 2);
         tapeIo_.step();
+        // the session's tape refused (another rate): its folder is kept until the tape changes
+        tapeSessSync(tapeIoKind_ == kTioLoadSess);
+        tapeIoKind_ = kTioNone;
       }
     } else {
       tape_->clear();
+      tapeSessSync(false);
+      tapeIoKind_ = kTioNone;
     }
     tapeSavedSig_ = tape_->signature();
     ++serial_;
   }
   if (tapeIo_.busy() || tapeIo_.state() != tape::TapeFiles::State::Idle) {
-    const tape::TapeFiles::State s = tapeIo_.step(1u << 18);
+    const tape::TapeFiles::State s = tapeIo_.step(tapeQuitting_ ? kSessQuitBudget : 1u << 18);
     if (s == tape::TapeFiles::State::Done || s == tape::TapeFiles::State::Failed) {
       if (s == tape::TapeFiles::State::Failed) toast(tapeIo_.why(), 2);
       tapeSavedSig_ = tape_->signature();
+      // a load: the session folder holds this tape if it came from there, else none of it
+      if (tapeIoKind_ == kTioLoadSess || tapeIoKind_ == kTioLoad) tapeSessSync(tapeIoKind_ == kTioLoadSess);
+      tapeIoKind_ = kTioNone;
       ++serial_;
+    }
+  }
+  // the session's tape: the job runs while nothing changes the tape under it, and (as the
+  // autosave) not while playing, except at quit
+  if (tapeSessIo_.busy()) {
+    if (!tape_->idle() || tapeRecording() || tape_->signature() != tapeSessJobSig_ || (playing_ && !tapeQuitting_)) {
+      tapeSessStop();
+    } else {
+      const tape::TapeFiles::State s = tapeSessIo_.step(tapeQuitting_ ? kSessQuitBudget : kSessBudget);
+      if (s == tape::TapeFiles::State::Done) {
+        tapeSessOk_ = 0xF;
+        for (int t = 0; t < tape::kTracks; ++t) tapeSessRev_[t] = tapeSessJobRev_[t];
+        tapeSessSigOk_ = true;
+        tapeSessSig_ = tapeSessJobSig_;
+      } else if (s == tape::TapeFiles::State::Failed) {
+        toast(tapeSessIo_.why(), 2);
+        const uint8_t done = tapeSessIo_.tracksDone();
+        for (int t = 0; t < tape::kTracks; ++t)
+          if ((done >> t) & 1) { tapeSessOk_ |= uint8_t(1u << t); tapeSessRev_[t] = tapeSessJobRev_[t]; }
+        tapeSessSigOk_ = false;
+        tapeSessErr_ = true;
+        tapeSessRetryMs_ = now_ + kSessRetryMs;
+      }
     }
   }
   // the take: its end in a toast
@@ -466,7 +598,7 @@ uint32_t Ui::tapeSignature() const {
     uint32_t(isHeld(kKShift)) << 16 | uint32_t(isHeld(kKCtrl)) << 17 | uint32_t(tapeIo_.busy()) << 18);
   for (int t = 0; t < tape::kTracks; ++t)
     for (int p = 0; p < tape::kNumParams; ++p) f(uint32_t(tapeValue(t, p)));
-  f(uint32_t(tapeLoopBars()));
+  f(uint32_t(tapeLoopBars()) | uint32_t(tapeClick_) << 8);
   return h;
 }
 
@@ -515,6 +647,7 @@ void Ui::drawTapeChip(Framebuffer& fb) {
       else catInt(cat(v, p < 0 ? "L" : "R"), p < 0 ? -p : p);
       break;
     }
+    case kTfClick: cat(v, tapeClick_ ? "ON" : "OFF"); break;
     default: catInt(v, tapeValue(tapeArm_, tapeField_ - kTfLevel)); break;
   }
   g.textR(165, 2, v, WHITE);
@@ -620,9 +753,9 @@ void Ui::drawTape(Framebuffer& fb) {
     catInt(buf, v.countBeats);
     g.textC(bx + bw / 2, 25 + 20 * tapeArm_ + 2, buf, WHITE, 2);
   }
-  // the fields of the armed track (SRC and LOOP are the tape's)
+  // the fields of the armed track (SRC, LOOP and CLICK are the tape's)
   for (int f = 0; f < kNumTapeFields; ++f) {
-    const int fx2 = 4 + 39 * f, fy = 105;
+    const int fx2 = 4 + 33 * f, fy = 105;
     char val[12];
     switch (f) {
       case kTfSource: cat(val, tapeSrc_ == tape::kSrcTrack ? kTrackNames[sel_] : tapeSrc_ == tape::kSrcMix ? "MIX" : "LINE"); break;
@@ -633,12 +766,13 @@ void Ui::drawTape(Framebuffer& fb) {
         else catInt(cat(val, p < 0 ? "L" : "R"), p < 0 ? -p : p);
         break;
       }
+      case kTfClick: cat(val, tapeClick_ ? "ON" : "OFF"); break;
       default: catInt(val, tapeValue(tapeArm_, f - kTfLevel)); break;
     }
     const bool on = f == tapeField_;   // the label over the value; the field -/= change is white
-    if (on) g.rrect(fx2, fy, 37, 19, WHITE);
-    g.textC(fx2 + 18, fy + 1, kFieldName[f], on ? uint8_t(BG) : uint8_t(DIM));
-    g.textC(fx2 + 18, fy + 10, val, on ? uint8_t(BG) : uint8_t(TEXT));
+    if (on) g.rrect(fx2, fy, 32, 19, WHITE);
+    g.textC(fx2 + 16, fy + 1, kFieldName[f], on ? uint8_t(BG) : uint8_t(DIM));
+    g.textC(fx2 + 16, fy + 10, val, on ? uint8_t(BG) : uint8_t(TEXT));
   }
   // the footer: what the keys do now
   x = 4;

@@ -476,12 +476,22 @@ void Ui::loadSettings() {
   name[8] = 0;
   copyName(curName_, name);
   if (curName_[0] && !io::isValidName(curName_)) curName_[0] = 0;
+#if PG_TAPE
+  if (len >= 16) tapeClick_ = b[15] != 0;   // older settings: the click on
+  if (tape_) tape_->setClick(tapeClick_);
+#endif
 }
 
 void Ui::saveSettings() {
   if (!fs_) return;
+#if PG_TAPE
+  uint8_t b[16] = {octave_[kTrackBass], octave_[kTrackLead], chordMode_, rollRate_, curMount_,
+                   uint8_t(dirty_ ? 1 : 0), curRom_};
+  b[15] = tapeClick_ ? 1 : 0;
+#else
   uint8_t b[15] = {octave_[kTrackBass], octave_[kTrackLead], chordMode_, rollRate_, curMount_,
                    uint8_t(dirty_ ? 1 : 0), curRom_};
+#endif
   std::memcpy(b + 7, curName_, 8);
   if (io::saveUiSettings(*fs_, kSettingsVersion, b, sizeof(b)) == Status::Ok) settingsDirty_ = false;
 }
@@ -516,6 +526,10 @@ void Ui::autosave() {
   const bool idle = int32_t(now_ - (lastKeyMs_ + kAutosaveIdleMs)) >= 0;
   if (!afterStop && !idle) return;
   if (afterStop) stopMs_ = 0;
+#if PG_TAPE
+  // the session's tape: the tracks that changed, written a piece per frame (tapeTick)
+  if (int32_t(now_ - tapeSessRetryMs_) >= 0) tapeSessStart();
+#endif
   if (st_.revision == sessRev_ && !settingsDirty_) return;   // nothing new since the last check
   sessRev_ = st_.revision;
   if (!saveSessionNow()) {
@@ -550,7 +564,13 @@ void Ui::boot(uint32_t nowMs) {
     afterProjectChange(mount, name, wasDirty);
     sessCrc_ = projectCrc();
 #if PG_TAPE
-    tapeLoad(mount, name);   // the named project's tape, as it was last saved
+    // the session's tape, as it was at the last quit or autosave; a session from before
+    // the session kept one: the named project's, as it was last saved
+    char path[64];
+    tape::folderOf(path, io::kMountInt, tape::kSessionTape);
+    std::strcat(path, "/tape.txt");
+    if (fs_ && fs_->exists(path)) tapeLoadSession();
+    else tapeLoad(mount, name);
 #endif
   } else {
     curRom_ = 0;

@@ -199,9 +199,29 @@ lands on it; HALF and REVERSE run at -0.5 and -2 samples per frame relative to t
 releases cross-fade (256 frames) back onto the true address. Transitions wait for a running
 cross-fade to finish (at most 5.8 ms). Only playback moves; recording and the bars do not.
 
+**The count-in click.** A take from stop counts in one bar; the tape clicks on its four beats
+(a 30 ms sine burst, 1760 Hz on beat 1, 880 Hz on the others). It is a MONITOR signal: the
+engine never mixes it into what `process()` writes, so nothing that takes the output has it
+(the tape's sources, which are all inside the engine; the output tap and so resampling; the
+platform's recording of the output). The platform adds it after them: `Engine::monitor(out,
+frames)` right after `process()` on the same buffer, on the audio thread (the desktop: after
+the F9 ring, before SDL plays it). The engine counts the frames its `process()` calls write;
+`countInDone(frame)` (every quantum) notes the count-in's first frame and where it ended (Play,
+Stop, a cancel), and `Tape::clickInto` adds the bursts that fall in the buffer, from those
+numbers alone: no state per sample, nothing allocated, a compare outside a count-in. The last
+burst ends at least 0.27 s before the bar line (a beat at 200 BPM is 0.3 s), so LINE, which writes the
+input a round trip back from the take's start, does not record the speakers' click either
+(`itest_tape` loops the heard output into LINE). Compiled out with the tape.
+
 **Files** (`tape_io.h`): `<mount>/pg/NAME/tape.txt` and `track1.wav` .. `track4.wav` beside
 `NAME.pgv`, written and read incrementally through `FileSystem`'s streaming calls (the UI runs
-256 K samples a frame on the desktop), each WAV written to a `.tmp` and renamed.
+256 K samples a frame on the desktop), each WAV written to a `.tmp` and renamed. A save can
+be limited to some tracks. The session keeps a tape too, in `/int/pg/_last/` beside
+`_last.pgv` (`tape::kSessionTape`; no project can have that name): the UI writes it from the
+autosave (only `tape.txt` and the tracks whose `Tape::trackRev` moved since they were last
+written there, a piece per frame; a take, an erase, an undo or a project's load or save stops
+the job, the tracks it finished count), and `Ui::tapeQuit()` at quit (ends a take, which is
+kept, then writes what changed); power-on loads it instead of the named project's folder.
 
 **Cost** (callgrind, x86 instructions per frame, the busy pattern stereo at 48 kHz:
 `host/tools/bench_tape`): no tape 2101, an empty tape 2107, four tracks playing 2236 (+135),

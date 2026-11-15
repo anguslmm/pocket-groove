@@ -56,7 +56,14 @@ screen or sound card) and checks it against the rest of the host build:
      transport); CTRL+S saves the project and beside it GROOVE01/tape.txt and
      track1.wav (44.1 kHz, the take's audio, not silent); the next launch resumes the
      session and loads the tape (its lane drawn); LINE from SDL's disk driver opens the
-     input, records it and closes it; --tape-minutes 0 runs without a tape.
+     input, records it and closes it; --tape-minutes 0 runs without a tape. The session
+     keeps the tape: a take (and a level) recorded and quit WITHOUT CTRL+S is in
+     projects/_last/ and no project folder is made; the next launch has it identical
+     (saved then as GROOVE01: the same PCM and level); a take followed by a stop and the
+     autosave survives the app being killed (SIGKILL). The count-in click (SDL's disk
+     driver writes what is heard to a file): four bursts a beat apart in the count-in,
+     the first louder; F9's recording of the same frames is the output without them
+     (identical elsewhere); CLICK OFF: what is heard is the recording.
   9. the microphone's input (hold L on a sampler page): --list-inputs prints
      SDL's capture names; the start line names the inputs and the one used;
      --mic-device by part of a name, any case, and one that matches nothing;
@@ -71,6 +78,7 @@ import math
 import os
 import re
 import shutil
+import signal
 import struct
 import subprocess
 import sys
@@ -1016,6 +1024,161 @@ def wav_info(path):
     return None
 
 
+def wav_pcm(path):
+    d = read(path)
+    pos = 12
+    while pos < len(d):
+        cid, sz = d[pos:pos + 4], struct.unpack("<I", d[pos + 4:pos + 8])[0]
+        if cid == b"data":
+            return d[pos + 8:pos + 8 + sz]
+        pos += 8 + sz + (sz & 1)
+    return None
+
+
+SESSION_TAKE = """wait 400
+tap p
+tap p
+wait 200
+tap l
+wait 4500
+tap l
+wait 2600
+app print-toast
+tap =
+wait 200
+quit
+"""
+
+SAVE_AFTER_BOOT = """wait 1500
+tap p
+tap p
+wait 300
+shot tape3
+down ctl
+tap s
+up ctl
+wait 300
+tap enter
+wait 1500
+quit
+"""
+
+
+def part_tape_session():
+    print("10b. the tape is kept with the session: quit without CTRL+S, relaunch; killed after the autosave")
+    cwd = fresh(os.path.join(WORK, "tape-session"))
+    rc, log = run_app([], cwd, SESSION_TAKE, "take", timeout=90)
+    check(rc == 0, "app exited 0")
+    check(re.search(r'\[toast\] "T1 [\d.]+S  CTRL\+Z UNDO"', log) is not None, "the take was recorded")
+    check(re.search(r"\[tape\] session's tape saved to \S+_last", log) is not None, "quit: the session's tape saved")
+    sd = os.path.join(cwd, "projects", "_last")
+    w1 = os.path.join(sd, "track1.wav")
+    check(os.path.exists(os.path.join(sd, "tape.txt")) and os.path.exists(w1), "projects/_last/tape.txt and track1.wav")
+    txt = read(os.path.join(sd, "tape.txt")).decode() if os.path.exists(os.path.join(sd, "tape.txt")) else ""
+    check("track 1 level 101" in txt, "the session's tape.txt has T1's level 101 (%r)" % txt[:120])
+    check(not os.path.exists(os.path.join(cwd, "projects", "GROOVE01")), "no project folder without CTRL+S")
+    pcm1 = wav_pcm(w1) if os.path.exists(w1) else None
+    info = wav_info(w1) if os.path.exists(w1) else None
+    check(info is not None and info["samples"] > 44100 and info["peak"] > 1000, "the take, not silence (%r)" % info)
+    # the next launch: the take is back; saved as GROOVE01 it is the same audio
+    rc, log = run_app([], cwd, SAVE_AFTER_BOOT, "relaunch", timeout=90)
+    check(rc == 0 and "resumed the session" in log, "relaunch resumed the session")
+    shot = os.path.join(cwd, "shots-relaunch", "tape3.png")
+    check(os.path.exists(shot) and lane_pixels(shot, 0) > 300, "the take is drawn after the relaunch")
+    gw = os.path.join(cwd, "projects", "GROOVE01", "track1.wav")
+    pcm2 = wav_pcm(gw) if os.path.exists(gw) else None
+    check(pcm1 is not None and pcm1 == pcm2, "the take after the relaunch is identical (%s / %s bytes)" %
+          (len(pcm1) if pcm1 else None, len(pcm2) if pcm2 else None))
+    gt = os.path.join(cwd, "projects", "GROOVE01", "tape.txt")
+    check(os.path.exists(gt) and "track 1 level 101" in read(gt).decode(), "and its level")
+    # killed: a take, a stop, the autosave 2 s after it, then SIGKILL
+    cwd = fresh(os.path.join(WORK, "tape-kill"))
+    script = os.path.join(cwd, "kill.txt")
+    with open(script, "w") as f:
+        f.write("wait 400\ntap p\ntap p\nwait 200\ntap l\nwait 4500\ntap l\nwait 2600\ntap space\nwait 60000\nquit\n")
+    p = subprocess.Popen([APP, "--script", script, "--out", os.path.join(cwd, "shots-kill")], cwd=cwd,
+                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    w = os.path.join(cwd, "projects", "_last", "track1.wav")
+    t0 = time.time()
+    while time.time() - t0 < 40 and not (os.path.exists(w) and os.path.exists(os.path.join(cwd, "projects", "_last.pgv"))):
+        time.sleep(0.2)
+    time.sleep(1.0)   # the job's last pieces (a track is renamed into place when complete)
+    p.send_signal(signal.SIGKILL)
+    p.communicate()
+    check(os.path.exists(w), "the autosave after the stop wrote the session's tape (%.1f s)" % (time.time() - t0))
+    rc, log = run_app([], cwd, "wait 1500\ntap p\ntap p\nwait 300\nshot tape4\nquit\n", "afterkill", timeout=60)
+    shot = os.path.join(cwd, "shots-afterkill", "tape4.png")
+    check(rc == 0 and os.path.exists(shot) and lane_pixels(shot, 0) > 300, "after the kill the take is back")
+
+
+CLICK_SCRIPT = """wait 500
+sdl tap F9
+wait 300
+tap p
+tap p
+wait 200
+%s
+tap l
+wait 3000
+tap spc
+wait 300
+sdl tap F9
+quit
+"""
+
+
+def part_tape_click():
+    print("10c. the count-in click: heard, never recorded (SDL's disk driver: the output to a file)")
+    beat = 44100 * 60 / 124.0
+    for label, keys in (("on", ""), ("off", "tap .\ntap .\ntap .\ntap .\ntap -")):
+        cwd = fresh(os.path.join(WORK, "tape-click-" + label))
+        out = os.path.join(cwd, "out.raw")
+        env = dict(os.environ, PG_TOOL="false", SDL_AUDIODRIVER="disk", SDL_DISKAUDIOFILE=out,
+                   SDL_DISKAUDIOFILEIN=os.path.join(cwd, "none.raw"))
+        rc, log = run_app([], cwd, CLICK_SCRIPT % keys, "click", env=env, timeout=90)
+        if "NOT RUNNING" in log:
+            print("  skipped: this SDL has no disk audio driver")
+            return
+        m = re.search(r"\[rec\] started: (\S+) at audio frame (\d+)", log)
+        check(rc == 0 and m is not None, "click %s: app exited 0, F9 recorded" % label)
+        if not m or not os.path.exists(out):
+            continue
+        heard = [v for (v,) in struct.iter_unpack("<h", read(out)[:(len(read(out)) // 4) * 4])][0::2]
+        rec = [v for (v,) in struct.iter_unpack("<h", wav_pcm(os.path.join(cwd, m.group(1))))][0::2]
+        # the file starts with the buffers the device played before the app's callback ran
+        # (silence): find where F9's first frame is in it, by the music
+        at = int(m.group(2))
+        first = next((i for i in range(len(rec)) if rec[i] != 0), None)
+        seg = rec[first:first + 4096] if first is not None else []
+        found = next((o for o in range(at, at + 44100) if heard[first + o:first + o + 4096] == seg), None) if seg else None
+        check(found is not None, "click %s: F9's recording found in what was heard (frame %s, F9 says %d)" % (label, found, at))
+        if found is None:
+            continue
+        at = found
+        n = min(len(rec), len(heard) - at)
+        diff = [i for i in range(n) if heard[at + i] != rec[i]]
+        if label == "off":
+            check(n > 44100 * 3 and not diff, "click off: what is heard is what F9 recorded (%d frames differ of %d)" % (len(diff), n))
+            continue
+        bursts = []
+        for i in diff:
+            if not bursts or i - bursts[-1][1] > 2000:
+                bursts.append([i, i])
+            else:
+                bursts[-1][1] = i
+        check(len(bursts) == 4, "click on: four bursts heard (%r)" % bursts)
+        if len(bursts) != 4:
+            continue
+        gaps = [bursts[k + 1][0] - bursts[k][0] for k in range(3)]
+        check(all(abs(g - beat) < 40 for g in gaps), "click on: a beat apart (%r, beat %.0f frames)" % (gaps, beat))
+        check(all(b[1] - b[0] < 44100 * 0.035 for b in bursts), "click on: each shorter than 35 ms")
+        peaks = [max(abs(heard[at + i]) for i in range(b[0], b[1] + 1)) for b in bursts]
+        check(peaks[0] > peaks[1] * 1.25 and 6000 < peaks[1] < 9000, "click on: beat 1 louder (peaks %r)" % peaks)
+        check(all(rec[i] == 0 for i in range(bursts[0][0], bursts[3][1] + 1)), "click on: none of it in F9's recording")
+        check(abs(first - (bursts[0][0] + 4 * beat)) < 40, "click on: the music starts a bar after the first click (%d)" %
+              (first - bursts[0][0]))
+
+
 def part_tape():
     print("10. the tape: a take, saved beside the project, loaded with the session, LINE")
     cwd = fresh(os.path.join(WORK, "tape"))
@@ -1082,7 +1245,8 @@ def main():
     parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
              ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
              ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab), ("tilt", part_tilt),
-             ("pads", part_pads), ("mic", part_mic), ("tape", part_tape)]
+             ("pads", part_pads), ("mic", part_mic), ("tape", part_tape), ("tape", part_tape_session),
+             ("tape", part_tape_click)]
     for name, fn in parts:
         if not only or name in only:
             fn()

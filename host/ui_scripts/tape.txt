@@ -80,6 +80,18 @@ tap - 600
 wait 100
 shot tape-field
 
+# the count-in click (CLICK, the last field): off, then back on
+tap .
+tap .
+tap .
+tap -
+wait 100
+shot tape-click
+tap =
+tap ;
+tap ;
+tap ;
+
 down shift
 wait 100
 shot tape-shift

@@ -360,6 +360,13 @@ class Engine {
   // one that records nothing, the output is bit for bit what it is without the tape.
   void setTape(tape::Tape* t);
   tape::Tape* tape() const;
+  // MONITOR: what only the player hears, never the engine's output (so nothing that
+  // records the output, the output tap included, has it): the tape's count-in click
+  // (tape.h). The platform calls it on the audio thread right after process() /
+  // processFloat(), with the buffer that call wrote, after anything it records from that
+  // buffer and before it plays it. Adds nothing (and costs a compare) outside a count-in.
+  void monitor(int16_t* out, int frames);
+  void monitorFloat(float* out, int frames);
 #endif
 
   // Stop touching the Project (output silence) so the UI thread can load a

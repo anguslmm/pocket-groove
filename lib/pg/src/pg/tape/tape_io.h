@@ -20,7 +20,9 @@
 // time); a track is written to trackN.tmp and renamed over trackN.wav when complete.
 // Loading a tape recorded at another rate than the engine's is refused (phase 1) with
 // a message; the tape is then empty. A project without a tape folder has an empty tape.
-// Saving removes the WAV of a track that is empty now. Main thread only.
+// Saving removes the WAV of a track that is empty now. A save can be limited to some
+// tracks (the session's autosave writes only those that changed): the others' files
+// are left as they are. Main thread only.
 #pragma once
 #include <cstdint>
 
@@ -44,6 +46,10 @@ class SlotWriter {
   ~SlotWriter() = default;
 };
 
+// The session's tape (the desktop: kept with the autosaved session, _last.pgv): its
+// folder is /int/pg/_last (a name no project can have: projects are upper case).
+constexpr const char* kSessionTape = "_last";
+
 // "/int/pg/NAME" (no slash at the end) into out (at least 32 bytes).
 void folderOf(char* out, const char* mount, const char* name);
 
@@ -54,7 +60,9 @@ class TapeFiles {
 
   // folder: "/int/pg/NAME". The tape must be idle (no take). Load: the tape is
   // cleared first; its settings come from tape.txt. false: nothing started (why()).
-  bool startSave(FileSystem* fs, const char* folder, Tape* tape);
+  // tracks: a mask of the tape tracks whose files are written (bit t = track t + 1);
+  // tape.txt is always written.
+  bool startSave(FileSystem* fs, const char* folder, Tape* tape, uint8_t tracks = 0xF);
   bool startLoad(FileSystem* fs, const char* folder, Tape* tape);
   // Every frame while busy(): moves up to `budget` samples. Returns the state; Done or
   // Failed once (then Idle again on the next call).
@@ -64,6 +72,7 @@ class TapeFiles {
   const char* why() const { return why_; }   // a short upper-case message (Failed / Done)
   int percent() const;                       // of the samples to move
   bool loaded() const { return loaded_; }    // the last load found a tape folder
+  uint8_t tracksDone() const { return doneMask_; }   // the job's tracks complete so far (bit t)
   void cancel();
 
  private:
@@ -83,6 +92,7 @@ class TapeFiles {
   uint32_t total_ = 0, done_ = 0;
   bool loaded_ = false;
   uint32_t lens_[kTracks] = {};
+  uint8_t mask_ = 0xF, doneMask_ = 0;
   int16_t buf_[kPiece];
 };
 

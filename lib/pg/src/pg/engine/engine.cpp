@@ -201,6 +201,9 @@ struct State {
   std::atomic<OutputTap*> outTap;     // engine.h OUTPUT TAP; nullptr = none
 #if PG_TAPE
   tape::Tape* tape;                   // THE TAPE (Engine::setTape); nullptr = none
+  uint64_t outFrame;                  // frames process() has written (every quantum, also silent ones)
+  uint64_t callFirst;                 // the last process() call's first frame (Engine::monitor)
+  uint64_t qFrame;                    // this quantum's first frame
   bool lastQueued;                    // the last boundary took a queued pattern (a detour: no song position)
   uint32_t songStepsAt(int slot, int rep) const;   // the song position in steps at the start of (slot, rep)
 #endif
@@ -2982,7 +2985,8 @@ __attribute__((always_inline)) inline void State::quantumT(Out* out) {
   if (fineTracks) fineTick();     // nothing moving: this compare is all macro motion costs
   refreshGlobals();
 #if PG_TAPE
-  if (tape && !playing && tape->countInDone()) play(false);   // a take from stop: after its count-in bar
+  // a take from stop: after its count-in bar (every quantum: a count-in ended by Play ends its click)
+  if (tape && tape->countInDone(qFrame) && !playing) play(false);
 #endif
   if (playing) sequencerTick();
   else rollTick();
@@ -3155,7 +3159,15 @@ __attribute__((always_inline)) inline void Engine::processT(Out* out, int frames
   // makes this load see nullptr or waits for this call to end.
   OutputTap* const tap = s.outTap.load();
   const int quanta = frames / kQuantum;
+#if PG_TAPE
+  const uint64_t first = s.outFrame;
+  s.callFirst = first;
+  s.outFrame = first + uint64_t(frames);
+#endif
   for (int q = 0; q < quanta; ++q, out += 2 * kQuantum) {
+#if PG_TAPE
+    s.qFrame = first + uint64_t(q) * kQuantum;
+#endif
     if (!s.inited) {
       silence(out, 2 * kQuantum);
       continue;
@@ -3261,6 +3273,14 @@ void Engine::setTape(tape::Tape* t) {
   if (t && s.gValid) t->setTempo(s.bpm, s.stepLenFP);
 }
 tape::Tape* Engine::tape() const { return impl_->tape; }
+void Engine::monitor(int16_t* out, int frames) {
+  const engine_detail::State& s = *impl_;
+  if (s.tape) s.tape->clickInto(out, frames, s.callFirst);
+}
+void Engine::monitorFloat(float* out, int frames) {
+  const engine_detail::State& s = *impl_;
+  if (s.tape) s.tape->clickInto(out, frames, s.callFirst);
+}
 #endif
 
 void Engine::setScope(int track, int decimation) {
