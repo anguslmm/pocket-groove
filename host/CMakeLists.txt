@@ -38,6 +38,10 @@ endforeach()
 
 # The engine derives an instrument's parameters with pg::macro (evaluate, the
 # built-in library): its tests link the macro component too.
+# the tape (pg/tape) is mixed and recorded by the engine
+if(TARGET pg_engine AND TARGET pg_tape)
+  target_link_libraries(pg_engine PUBLIC pg_tape)
+endif()
 if(TARGET pg_engine AND TARGET pg_macro)
   target_link_libraries(pg_engine PUBLIC pg_macro)
 endif()

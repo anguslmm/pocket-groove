@@ -27,6 +27,9 @@
 #include "reverb.h"
 #include "stem_tap.h"
 #include "tables.h"
+#if PG_TAPE
+#include "../tape/tape.h"
+#endif
 
 namespace pg {
 namespace engine_detail {
@@ -196,6 +199,11 @@ struct State {
   uint32_t absStep;                   // master steps fired since Play (roll phase lock)
   uint32_t barCount;                  // bar lines fired (master step % 16 == 0), never reset: the output tap
   std::atomic<OutputTap*> outTap;     // engine.h OUTPUT TAP; nullptr = none
+#if PG_TAPE
+  tape::Tape* tape;                   // THE TAPE (Engine::setTape); nullptr = none
+  bool lastQueued;                    // the last boundary took a queued pattern (a detour: no song position)
+  uint32_t songStepsAt(int slot, int rep) const;   // the song position in steps at the start of (slot, rep)
+#endif
   int masterPos, masterNext;
   int64_t gridCd;                     // Q32 samples until the next STRAIGHT 16th grid line
   uint64_t stepLenFP;                 // Q32 samples per 16th
@@ -749,6 +757,9 @@ void State::refreshGlobals() {
     const uint64_t srQ8 = uint64_t(sr * 256.0f + 0.5f);
     stepLenFP = ((srQ8 * 15u) << 24) / uint64_t(bpm);
     stepTicks = int32_t(stepLenFP >> 24);
+#if PG_TAPE
+    if (tape) tape->setTempo(bpm, stepLenFP);
+#endif
     for (int t = 0; t < kNumTracks; ++t) {
       if (nativeV[t]) nativeV[t]->setTempo(float(bpm));
       if (tr[t].rollC) tr[t].rollInt = int64_t((stepLenFP * 2u) / tr[t].rollC);
@@ -856,6 +867,11 @@ void State::quiesceForSuspend() {
 void State::apply(const Command& c) {
   switch (c.type) {
     case CmdType::Play: play(c.a == 1); break;
+#if PG_TAPE
+    case CmdType::Tape:
+      if (tape) tape->apply(c);
+      break;
+#endif
     case CmdType::Stop: stop(); break;
     case CmdType::SetStep: {
       if (c.a >= kNumPatterns || c.b >= kNumTracks || c.c >= kMaxSteps) break;
@@ -1246,6 +1262,9 @@ void State::play(bool cont) {
       motDirty = 0xFF;   // motion picks up from where the macros are
       for (int t = 0; t < kNumTracks; ++t)
         if (tr[t].rollC) tr[t].rollCd = (tr[t].rollC & 1) && (absStep & 1) ? int64_t(stepLenFP) : 0;
+#if PG_TAPE
+      if (tape) tape->start(proj->songMode != 0, 0, true);
+#endif
     }
     return;
   }
@@ -1275,7 +1294,20 @@ void State::play(bool cont) {
 #endif
   for (int t = 0; t < kNumTracks; ++t)
     if (tr[t].rollC) tr[t].rollCd = 0;   // a held roll locks to the downbeat
+#if PG_TAPE
+  if (tape) tape->start(proj->songMode != 0, proj->songMode ? songStepsAt(songSlot, 0) : 0u, false);
+#endif
 }
+
+#if PG_TAPE
+uint32_t State::songStepsAt(int slot, int rep) const {
+  uint32_t n = 0;
+  for (int i = 0; i < slot && i < kSongSlots && proj->song[i].repeats; ++i)
+    n += uint32_t(proj->song[i].repeats) * uint32_t(sanitizeLength(proj->patterns[proj->song[i].pattern & 15].length));
+  if (slot < kSongSlots) n += uint32_t(rep) * uint32_t(sanitizeLength(proj->patterns[proj->song[slot].pattern & 15].length));
+  return n;
+}
+#endif
 
 // DECISION: Stop sends noteOff for every sequenced note that is still gated and
 // then choke()s every voice (voice.h names transport stop as a choke case), so
@@ -1306,6 +1338,9 @@ void State::stop() {
     tr[t].paramsSent = 0;
   }
   queued = kNoPattern;
+#if PG_TAPE
+  if (tape) tape->stop();
+#endif
 }
 
 // ------------------------------------------------------------ sequencer ----
@@ -2129,6 +2164,9 @@ uint8_t State::decideNext(bool commit) {
 
 void State::boundary() {
   boundaryNow = true;
+#if PG_TAPE
+  lastQueued = queued != kNoPattern;
+#endif
   curPattern = decideNext(true);
   queued = kNoPattern;
   masterNext = 0;
@@ -2157,6 +2195,14 @@ void State::fireMasterStep() {
   masterPos = idx;
   masterNext = idx + 1;
   if ((idx & 15) == 0) ++barCount;   // a bar line (the output tap's kTapBar)
+#if PG_TAPE
+  if (tape) {
+    // the tape follows the bars: at a song pattern boundary also the song position
+    const bool bar = (idx & 15) == 0;
+    const int32_t song = bar && boundaryNow && proj->songMode && !lastQueued ? int32_t(songStepsAt(songSlot, songRep)) : -1;
+    tape->masterStep(bar, len - idx < 16 ? len - idx : 16, song, gridCd);
+  }
+#endif
 
   // `frac`: where the ideal (fractional) step time sits relative to this
   // quantum edge; note-offs and ratchets are timed from the ideal time.
@@ -2501,9 +2547,20 @@ __attribute__((always_inline)) inline void State::renderT(Out* out) {
 
   const bool duckMoved = duckEnd != duckPrev;
   duckPrev = duckEnd;
+#if PG_TAPE
+  // THE TAPE: active only while it holds audio and rolls, or records (else nothing here)
+  tape::Tape* const tp2 = tape && tape->active() ? tape : nullptr;
+  const int capT = tp2 ? tp2->captureTrack() : -1;
+  float capL[kQuantum], capR[kQuantum];
+#endif
 
   for (int t = 0; t < kNumTracks; ++t) {
     TrackRt& r = tr[t];
+#if PG_TAPE
+    if (t == capT) {   // TRACK: what this track adds to the bus is recorded
+      for (int i = 0; i < kQuantum; ++i) { capL[i] = busL[i]; capR[i] = busR[i]; }
+    }
+#endif
     // ---- control: targets for this quantum ----
     // Fast path: when the raw mixer bytes, the mute and (for a ducked track)
     // the ducker gain are what they were, and the smoothed gains had already
@@ -2744,6 +2801,12 @@ __attribute__((always_inline)) inline void State::renderT(Out* out) {
     r.outR = endR;
     r.sendD = endD;
     r.sendR = endR2;
+#if PG_TAPE
+    if (t == capT) {
+      for (int i = 0; i < kQuantum; ++i) { capL[i] = busL[i] - capL[i]; capR[i] = busR[i] - capR[i]; }
+      tp2->capture(capL, capR, mono);
+    }
+#endif
   }
 
   // A voice that emits a NaN/inf (or absurd values) somewhere inside a block
@@ -2763,6 +2826,9 @@ __attribute__((always_inline)) inline void State::renderT(Out* out) {
     }
   }
 
+#if PG_TAPE
+  if (tp2) tp2->mix(busL, busR, sD, sR, mono, &dSend, &rSend);   // the tape's tracks, dry and sends
+#endif
   // ---- send FX at half rate; skipped entirely once silent ----
   if (dSend) dSilent = 0; else if (dSilent < 1000) ++dSilent;
   if (rSend) rSilent = 0; else if (rSilent < 1000) ++rSilent;
@@ -2840,6 +2906,9 @@ __attribute__((always_inline)) inline void State::renderT(Out* out) {
     fxRunning = false;
   }
   fxDuckPrev = fxEnd;
+#if PG_TAPE
+  if (tp2) tp2->post(busL, busR, mono);   // MIX is recorded here (the master bus's input)
+#endif
 
 #if PG_STEM_TAP
   if (tp) {
@@ -2912,10 +2981,16 @@ __attribute__((always_inline)) inline void State::quantumT(Out* out) {
   }
   if (fineTracks) fineTick();     // nothing moving: this compare is all macro motion costs
   refreshGlobals();
+#if PG_TAPE
+  if (tape && !playing && tape->countInDone()) play(false);   // a take from stop: after its count-in bar
+#endif
   if (playing) sequencerTick();
   else rollTick();
   for (int t = 0; t < kNumTracks; ++t) ensureParams(t);
   renderTo(out);
+#if PG_TAPE
+  if (tape) tape->endQuantum();
+#endif
   publishStatus();
   ++qCount;
 }
@@ -3126,6 +3201,9 @@ __attribute__((always_inline)) inline void Engine::processT(Out* out, int frames
       // ran during the suspend) belong to the old project: drop them.
       s.discardCommands(s.resumeTail.load());
       for (int t = 0; t < kNumTracks; ++t) s.vChoke(t);
+#if PG_TAPE
+      if (s.tape) s.tape->stop();
+#endif
       s.resetRuntime();
       s.resetFx();
       s.sanitizeProject();
@@ -3175,6 +3253,15 @@ void Engine::setOutputTap(OutputTap* tap) {
   while (s.inProcess.load()) {
   }
 }
+
+#if PG_TAPE
+void Engine::setTape(tape::Tape* t) {
+  engine_detail::State& s = *impl_;
+  s.tape = t;
+  if (t && s.gValid) t->setTempo(s.bpm, s.stepLenFP);
+}
+tape::Tape* Engine::tape() const { return impl_->tape; }
+#endif
 
 void Engine::setScope(int track, int decimation) {
   const int d = decimation < 1 ? 1 : (decimation > 255 ? 255 : decimation);

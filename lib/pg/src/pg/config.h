@@ -42,6 +42,12 @@ constexpr float kDefaultSampleRate = 44100.0f; // engine must work at 32000 too 
 #endif
 constexpr int   kMaxSampleRate     = PG_MAX_SAMPLE_RATE;
 static_assert(kMaxSampleRate >= 44100 && kMaxSampleRate <= 192000, "PG_MAX_SAMPLE_RATE: 44100 .. 192000");
+// THE TAPE (pg/tape/tape.h, docs/ARCHITECTURE.md "The tape"): a 4-track audio tape
+// beside the patterns, in memory the platform hands over. PG_TAPE=0 compiles all of
+// it out (the Cardputer, which has no RAM for it; the Daisy until phase 2).
+#ifndef PG_TAPE
+#define PG_TAPE 1
+#endif
 constexpr int   kLeadVoices        = 4;
 // Control rate of macro motion: while a macro moves, the engine evaluates the
 // track's instrument and hands the voice fractional parameters every this many
