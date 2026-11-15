@@ -25,7 +25,9 @@
 
 #include "itests/itest_util.h"
 #include "pg/demo/demo.h"
+#include "common/memfs.h"
 #include "pg/tape/tape.h"
+#include "pg/tape/tape_io.h"
 
 using namespace pg;
 using it::check;
@@ -611,6 +613,70 @@ void testTempo() {
   check(g_tape.undo() && g_tape.bpm() == 0, "undoing the first take forgets the tempo");
 }
 
+// ---- files ------------------------------------------------------------------------------
+// A tape with two tracks of audio and set values: saved in small pieces (many step()
+// calls), loaded back into a fresh tape sample for sample with its settings; a project
+// folder without a tape loads an empty tape; a tape of another rate is refused.
+void testFiles() {
+  const float sr = 48000.0f;
+  fresh(sr, 120, false);
+  std::vector<int16_t> a(200000), b(70000);
+  for (size_t i = 0; i < a.size(); ++i) a[i] = int16_t(int((i * 37) % 20000) - 10000);
+  for (size_t i = 0; i < b.size(); ++i) b[i] = int16_t(i % 300 == 0 ? 12000 : 0);
+  check(g_tape.write(0, 1000, a.data(), uint32_t(a.size())) && g_tape.write(2, 500000, b.data(), uint32_t(b.size())),
+        "files: tape written");
+  g_tape.setBpm(97);
+  g_tape.setLoop(8);
+  g_tape.setParam(2, tape::kPPan, 20);
+  g_tape.setParam(0, tape::kPMute, 1);
+  pgtest::MemFs fs;
+  tape::TapeFiles io;
+  check(io.startSave(&fs, "/int/pg/SONG1", &g_tape), "files: save starts");
+  int steps = 0;
+  tape::TapeFiles::State st = tape::TapeFiles::State::Saving;
+  while (st == tape::TapeFiles::State::Saving && steps < 10000) { st = io.step(5000); ++steps; }
+  check(st == tape::TapeFiles::State::Done && steps > 50, "files: saved in pieces (%d steps)", steps);
+  check(fs.exists("/int/pg/SONG1/tape.txt") && fs.exists("/int/pg/SONG1/track1.wav") &&
+        fs.exists("/int/pg/SONG1/track3.wav") && !fs.exists("/int/pg/SONG1/track2.wav"), "files: tape.txt, track1, track3");
+  // into another tape
+  std::vector<uint8_t> mem2(tape::Tape::bytesFor(60, 48000));
+  static tape::Tape t2;
+  check(t2.init(mem2.data(), mem2.size(), 48000), "files: second tape");
+  check(io.startLoad(&fs, "/int/pg/SONG1", &t2), "files: load starts");
+  steps = 0;
+  st = tape::TapeFiles::State::Loading;
+  while (st == tape::TapeFiles::State::Loading && steps < 10000) { st = io.step(5000); ++steps; }
+  check(st == tape::TapeFiles::State::Done && io.loaded(), "files: loaded (%s)", io.why());
+  std::vector<int16_t> ra(a.size() + 2000), rb(b.size());
+  t2.read(0, 0, ra.data(), uint32_t(ra.size()));
+  t2.read(2, 500000, rb.data(), uint32_t(rb.size()));
+  const bool same = std::memcmp(ra.data() + 1000, a.data(), a.size() * 2) == 0 && ra[999] == 0;
+  check(same, "files: track 1 sample for sample");
+  // the trailing silence of track 3 is not written: its last sound ends it
+  size_t lastNz = 0;
+  for (size_t i = 0; i < b.size(); ++i)
+    if (b[i]) lastNz = i;
+  check(std::memcmp(rb.data(), b.data(), (lastNz + 1) * 2) == 0, "files: track 3 sample for sample");
+  check(t2.trackEmpty(1) && t2.trackEmpty(3), "files: the empty tracks stay empty");
+  check(t2.bpm() == 97 && t2.loopBars() == 8 && t2.param(2, tape::kPPan) == 20 && t2.param(0, tape::kPMute) == 1,
+        "files: the settings");
+  // a project without a tape folder: empty
+  check(io.startLoad(&fs, "/int/pg/OTHER", &t2) && io.step() == tape::TapeFiles::State::Done && t2.empty() && !io.loaded(),
+        "files: no folder, an empty tape");
+  // another rate: refused, empty
+  std::vector<uint8_t> mem3(tape::Tape::bytesFor(60, 44100));
+  static tape::Tape t3;
+  t3.init(mem3.data(), mem3.size(), 44100);
+  check(!io.startLoad(&fs, "/int/pg/SONG1", &t3) && std::strcmp(io.why(), "TAPE IS 48K: NOT LOADED") == 0 && t3.empty(),
+        "files: a 48 kHz tape is refused at 44.1 kHz (%s)", io.why());
+  io.step();
+  // saving an empty tape over it removes the tracks' files
+  check(io.startSave(&fs, "/int/pg/SONG1", &t3), "files: an empty save");
+  while (io.step() == tape::TapeFiles::State::Saving) {
+  }
+  check(!fs.exists("/int/pg/SONG1/track1.wav") && fs.exists("/int/pg/SONG1/tape.txt"), "files: the empty tape's save");
+}
+
 }  // namespace
 
 int main() {
@@ -627,6 +693,7 @@ int main() {
   testSong();
   testLine();
   testTempo();
+  testFiles();
   eng().setTape(nullptr);
   return it::finish("itest_tape");
 }
