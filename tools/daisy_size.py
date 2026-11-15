@@ -99,8 +99,9 @@ def parse_map(path):
 
 def clipped(rows):
     """Merged string sections (.rodata.str1.*) are listed per input file with their size
-    before merging, overlapping each other: each entry is clipped at the next entry's
-    address, so the totals are what the output really holds."""
+    before merging, overlapping each other (often all at the merged block's address): of
+    the entries at one address only the largest counts, clipped at the next entry with a
+    higher address, so the totals are what the output really holds."""
     rows = [r for r in rows if r[3] > 0]
     by_out = {}
     for r in rows:
@@ -108,9 +109,15 @@ def clipped(rows):
     for out, rs in by_out.items():
         rs.sort(key=lambda r: (r[2], -r[3]))
         for i, (o, sec, addr, size, fname) in enumerate(rs):
-            nxt = rs[i + 1][2] if i + 1 < len(rs) else addr + size
-            if nxt < addr + size:
-                size = max(0, nxt - addr)
+            if i > 0 and rs[i - 1][2] == addr:
+                size = 0               # the largest entry at this address already counts
+            else:
+                j = i + 1
+                while j < len(rs) and rs[j][2] == addr:
+                    j += 1
+                nxt = rs[j][2] if j < len(rs) else addr + size
+                if nxt < addr + size:
+                    size = max(0, nxt - addr)
             yield o, sec, addr, size, fname
 
 
