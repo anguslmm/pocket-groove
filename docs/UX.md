@@ -6,7 +6,7 @@ Status: complete for v1 implementation. Mockups are in `docs/ux/` (contact sheet
 
 ## 0. The decisions in one page
 
-1. **Modes.** There is one home view, **GROOVE**: an 8-track overview above 16 step keys. There are five more views, each on its own key that never changes: **SOUND** `9`, **MIX** `0`, **FX** `o`, **SONG** `p` and **PROJECT** `\`. `` ` `` always goes home. Everything else is a temporary layer: a step held (STEP EDIT), a modifier held (FN mute, OPT patterns, ALT roll, TAB tempo, CTRL edit), a pop-up or a dialog. These never trap you, because releasing the key, or pressing `` ` ``, ends them. The keys that never change meaning anywhere (except while typing a file name) are SPACE (play/stop), `` ` `` (home), the five view keys, `[ ]` (DJ filter, with SHIFT for bass cutoff), TAB (tempo), `/` (help), the pads `a`-`k` (play and select a track), FN+pad (mute), OPT+step (queue a pattern) and the CTRL combos.
+1. **Modes.** There is one home view, **GROOVE**: an 8-track overview above 16 step keys. There are five more views, each on its own key that never changes: **SOUND** `9`, **MIX** `0`, **FX** `o`, **SONG** `p` and **PROJECT** `\`. (Where the build has a tape: `p` again goes from SONG to **TAPE**, 10.11.) `` ` `` always goes home. Everything else is a temporary layer: a step held (STEP EDIT), a modifier held (FN mute, OPT patterns, ALT roll, TAB tempo, CTRL edit), a pop-up or a dialog. These never trap you, because releasing the key, or pressing `` ` ``, ends them. The keys that never change meaning anywhere (except while typing a file name) are SPACE (play/stop), `` ` `` (home), the five view keys, `[ ]` (DJ filter, with SHIFT for bass cutoff), TAB (tempo), `/` (help), the pads `a`-`k` (play and select a track), FN+pad (mute), OPT+step (queue a pattern) and the CTRL combos.
 2. **Step grid.** Steps 1-8 are on `1`-`8` and steps 9-16 on `q`-`i`, as two rows of 8 that sit exactly under the on-screen 2x8 pads. The row `a`-`k` holds the 8 track pads (KICK SNAR CLAP CHH OHH PERC BASS LEAD). The row `z`-`,` holds the 8 note keys. `'` pages through 16-step pages (up to 4). SHIFT+step sets the pattern length. CTRL+SHIFT+step sets the length of the selected track only (polymeter).
 3. **Instruments (stage A, 2026-11-13).** Every track slot holds an **instrument**: a macro set (docs/MACROLAB.md) with up to four macros. **SOUND is the instrument page**: the instrument's name and its macros as four large controls, each moved by its own key pair (`z`/`x`, `c`/`v`, `b`/`n`, `m`/`,`), so two macros move at once with two fingers; `;` `.` (and `9` again) step through the track's instruments. The bare sound parameters are not shown to the player any more (only in a developer mode on the desktop). A track with no instrument is CLASSIC (demos, older projects): it plays its stored sound, and its page invites a choice (10.3).
 4. **Value editing.** There's exactly one "focused value", shown in the status-bar chip. `-` and `=` change it from every view. A tap moves it by 1. Holding sweeps it with acceleration. SHIFT moves it 8x. Pressing both keys resets it to the default. You choose what is focused in SOUND, MIX or FX, or by selecting a track, and it stays on `-`/`=` after you go back to GROOVE. Two performance sweeps are always live and ignore the focus: `[`/`]` move the **master DJ filter** (both keys together = off) and **SHIFT+`[`/`]` move the bass's macro 1** (on a CLASSIC bass: its cutoff). Neither needs any selection first.
@@ -56,6 +56,7 @@ All of this is UI-thread state except where it says Project. Nothing here is sav
 | `undo` | one Pattern snapshot plus its index, plus `kind` | empty | 4168 B static. |
 | `clip` | empty, Track(type), Pattern | empty | TrackPattern 520 B / Pattern 4168 B static. |
 | `dirty` | bool | false | Set when `status.revision` changes after a load or save. |
+| `tapeArm`, `tapeSrc`, `tapeField` | tape track 0..3; TRACK, MIX, LINE; SRC .. REV | 0, MIX, LVL | TAPE (10.11), not saved. The tape's own settings (levels, pans, sends, mutes, the loop) are the tape's, saved in its folder. |
 
 **Edit target.** Edits always go to the **pattern that is playing**, `status.pattern`. When stopped, that's the pattern last queued or played. There is no "edit a pattern that isn't playing" mode. To edit another pattern, queue it (OPT+step). While stopped, queuing switches immediately.
 
@@ -258,6 +259,26 @@ STEP HELD in SOUND or MIX is the same as the SOUND/MIX column, except that `-`/`
 | G0 tapped twice | Diagnostics strip (firmware). A tap (< 150 ms) never tilts. |
 
 Modifier overlays appear 200 ms after the modifier goes down, **or immediately** when the first combo key is pressed, and close on release. If the modifier is released without a combo, nothing else happens. A modifier tapped alone has no function. That rule exists so that accidental taps are harmless.
+
+---
+
+### 6.3 TAPE (`p` in SONG)
+
+| Key | TAPE |
+|---|---|
+| `z` `x` `c` `v` | arm tape track 1-4 (refused with `RECORDING` while another track records) |
+| `1`-`4` | mute tape track 1-4 on/off |
+| `5`-`8`, `q`-`i`, `'`, `,` | - |
+| `;` `.` | field previous / next (SRC LOOP LVL PAN DLY REV) |
+| `-` `=` | the field's value (SHIFT x8; both: its default) |
+| `l` | record: tap = on until `l` again; hold = while held; ends on the next bar line; from stop a count-in bar first |
+| SHIFT+`l` | record replacing |
+| `b` `n` `m` held | BRAKE, HALF, REVERSE (the last one held wins) |
+| `del` | erase the armed track's loop (asks); SHIFT+`del` all of it (asks) |
+| CTRL+`z` | the tape's undo / redo (the last take or erase) |
+| CTRL+`c` | lift the armed track's loop into the sample slot (the selected sampler track's, else PERC's) |
+| `p` | SONG |
+| everything else | G (pads play and select instrument tracks, which TRACK records; `enter` pattern REC; FN, OPT, ALT, TAB layers) |
 
 ---
 
@@ -543,6 +564,21 @@ Real-UI screenshots with real audio in the picture, drawn by `build/host/ui_shot
 * A legend from y 92 at a 9 px pitch, with 5 lines.
 * Holding a modifier while the help is up redraws the grid for that layer.
 * **Explain mode**: the same grid, plus the last pressed key framed WHITE and a card (2,93) 236x40 PANEL with an AMBER frame: the key chip + title WHITE, then 2 lines TEXT. Texts come from a per-mode table of 56 entries (one line title ≤ 30 chars, two lines ≤ 38 chars each).
+
+### 10.11 TAPE (`tape-empty.png`, `tape-countin.png`, `tape-recording.png`, `tape-waiting.png`, `tape-replace.png`, `tape-layers.png`, `tape-brake.png`, `tape-reverse.png`, `tape-field.png`, `tape-shift.png`, `tape-ctrl.png`, `tape-erase.png`, `tape-lift.png`, `sampler-lift.png`, `tape-tempo.png`, `tape-song.png`, `help-tape.png`)
+
+The tape (MANUAL chapter 21; the engine's side: `pg/tape/tape.h`, ARCHITECTURE.md "The tape"). Reached by `p` in SONG (the view key again = the next page, 3: SONG and TAPE are the arrangement's two pages; `p` on TAPE goes back to SONG). Only in builds with the tape (`PG_TAPE`, not the Cardputer); without a tape installed the view says `NO TAPE`. Real-UI screenshots: `build/host/ui_shot host/ui_scripts/tape.txt docs/ux`. Code: `lib/pg/src/pg/ui/ui_tape.cpp`.
+
+* **Header** y 13: a `TAPE` chip (TEXT); `LOOP n` TEXT (pattern mode) or `SONG` GREEN; the record state: counting in or waiting for the bar line, a hollow RED 5x5 square and the beats to the start WHITE (`4 3 2 1`, as resampling counts) or `WAITING`; recording, a filled RED square, `REC` (overdub) or `REPLACE` RED and the take's length WHITE (`3.2S`). Right-aligned: `FREE m:ss`, DIM (AMBER under 10 s): the tape's memory left as time at the engine's rate (four tracks share it); left of it, when the project's tempo is not the tape's and nothing records, the tape's tempo AMBER (`124 BPM`).
+* **Lanes**: four, lane *t* at y = 25 + 20t, 18 px tall. The key cap x 4..12: the track's number, a filled rounded cap in the lane colour when armed (RED while recording), a RAISED outline otherwise; `M` under the number when muted. The box x 15..234 (220 columns) PANEL with dotted RAISED bar lines. What it shows: pattern mode, the loop (from tape position 0, its measured length once the transport has wrapped it, else the nominal length at the tape's tempo); song mode, the page of 8 bars that holds the playhead (it turns by whole pages). Each column is the peak of its stretch of tape on a square-root scale, drawn from the centre line: lane colours CYAN, GREEN, AMBER, the lead's; the armed lane bright, the others dim, muted LINE, the armed lane RED while it records. The playhead WHITE full height where the tape is; during a trick an AMBER line where it is heard from (`tape-brake.png`). The count-in also shows large (2x WHITE) over the armed lane.
+* **Fields** y 105..123: six cells 37x19 at x = 4 + 39f, the label (DIM) over the value (TEXT): `SRC` (the source: the selected instrument track's name, `MIX` or `LINE`), `LOOP` (bars: 1 2 4 8 16 32), and the armed track's `LVL` (0..127, 100 = unity), `PAN` (`C`, `L9`, `R20`), `DLY`, `REV` (sends, 0..127). The field `-`/`=` change is a WHITE cell with BG ink. The status bar's chip shows the armed track (`T1` in its lane colour), the field and its value.
+* **Footer** y 127: `L REC  1-4 MUTE  B N M BRAKE HALF REV`; while counting in or recording `L ENDS ON THE BAR LINE`; SHIFT held: `SFT+L REPLACE  DEL ALL OF T`; CTRL held: `CTRL+C LIFT TO SLOT n  Z UNDO`.
+* **Toasts**: a take's end `T1 7.7S  CTRL+Z UNDO` (kind 1); `TAPE: MEMORY FULL`, `TAPE: END OF TAPE` (errors); `TAPE UNDO  CTRL+Z REDO` / `TAPE REDO`; `T1 LOOP ERASED  CTRL+Z UNDO`; `SLOT 1 TAP01 5.8S` after a lift; `TAPE BUSY`, `NO LINE INPUT`, `NO LIFT`, `T2 IS EMPTY`, `RECORDING`; the files' `TAPE IS 48K: NOT LOADED`, `TAPE: WRITE FAILED`.
+* **Dialogs** (the confirm dialog's style): `ERASE T1 LOOP?` / `ERASE ALL OF T1?` with `CTRL+Z BRINGS IT BACK`, `ENTER  ERASE`; the lift onto a slot holding a sample: `REPLACE SLOT 1?`, `TAP01 IS ERASED`, `ENTER  LIFT`.
+
+**Keys** (6.3). A record gesture that is a sibling of `L` / SHIFT+`L` on the sampler page: `L` records, SHIFT+`L` records differently (there resampling, here replacing). A tap latches it (on to the next `L`, which ends it on the following bar line); a hold longer than 400 ms records while held and its release ends it on the next bar line, so a looper can be played either way. Starts are on bar lines: while the transport runs, the next one; stopped, one bar of count-in (the engine counts, silent; `4 3 2 1`) and then the transport starts from the top with the take on its first bar line. The tricks are three adjacent keys of the right hand, held; a pad (playing a track) with a trick is two keys. Nothing here needs more than two non-modifier keys; no new combination closes a rectangle of the key matrix (docs/ghosting-audit.md row 32).
+
+**Recording, what is heard.** While a take records over a track, that track's earlier content plays (overdub: the passes so far; REPLACE: nothing until the pass has written it). MIX takes the master bus's input, so with its sources muted the bounce plays back what the mix was; the armed track itself is heard without sends while it records MIX. TRACK takes the selected instrument track's dry signal as heard, without its delay and reverb (the tape track has its own sends).
 
 ---
 

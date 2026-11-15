@@ -26,6 +26,7 @@ Headphones first: the jack is driven straight from the codec and the firmware ca
 18. [Troubleshooting](#18-troubleshooting)
 19. [Parameter reference](#19-parameter-reference)
 20. [Samples: vocal chops](#20-samples-vocal-chops)
+21. [The tape](#21-the-tape)
 
 ---
 
@@ -1309,3 +1310,84 @@ On the **desktop app** the same gesture works with no microphone at all. The sam
 
 **What is where.** The samples live in a part of the device's flash that projects never use: saving, loading and pushing projects never touches them, and a project only remembers the slot number. A project made with a sample sounds different on a device that has another sample in that slot. While a recording runs, the device does not save projects (`RECORDING: SAVE AFTER`) and `tools/pg` transfers that write wait (`ERR RECORDING`).
 
+
+---
+
+## 21. The tape
+
+![Three takes layered on the tape](ux/tape-layers.png)
+
+Beside its patterns the Pocket Groove has a **tape**: four tracks of audio that play with the instruments, through the same mixer, delay and reverb. You record onto it what you play, one instrument alone or the whole mix (a bounce), or an audio input; the tape rolls with the transport and stays in time with the bars. It is on the desktop app (and later on the Daisy device); the Cardputer has no memory for it.
+
+**Getting there.** `p` is SONG; `p` again is **TAPE** (and `p` once more goes back to SONG). The two are the arrangement's pages: patterns on one, audio on the other.
+
+**The screen.** Four lanes, one per tape track, each with the waveform of what is on it. In pattern mode the lanes show the **loop** (4 bars unless you change it), with dotted bar lines; in song mode a page of 8 bars that follows the song. The white line is where the tape is. The header says `LOOP 4` (or `SONG`), the record state, and `FREE 9:36`: how much tape is left, in minutes of track time (all four tracks share it). If the project's tempo is not the tempo the tape was recorded at, that tempo is shown in amber (`124 BPM`). Under the lanes the **armed** track's settings: `SRC` (what is recorded), `LOOP`, `LVL`, `PAN`, `DLY`, `REV`.
+
+| Key | On TAPE |
+|---|---|
+| `z` `x` `c` `v` | arm tape track 1 .. 4 (the one that records, and whose settings are shown) |
+| `1` .. `4` | mute / unmute tape track 1 .. 4 |
+| `;` `.` | the field: SRC LOOP LVL PAN DLY REV |
+| `-` `=` | change it (both: its default) |
+| `l` | record: **tap** to start, `l` again to stop; or **hold** and let go to stop |
+| `shift`+`l` | record, replacing what is there instead of adding to it |
+| `b` `n` `m` (held) | BRAKE, HALF, REVERSE |
+| `del` | erase the armed track's loop (asks); `shift`+`del`: all of the track |
+| `ctrl`+`z` | undo the last take or erase (again: redo) |
+| `ctrl`+`c` | lift: the armed track's loop into a sample slot |
+
+Everything else does what it does everywhere: the pads play and select tracks, `space` plays and stops, `fn`+pad mutes an instrument track.
+
+### Recording
+
+![Counting in from stop](ux/tape-countin.png)
+
+1. **Choose the track** with `z` `x` `c` `v`.
+2. **Choose what to record** (`SRC`, `;` to the field, `-` / `=`):
+   - **MIX**: everything you hear, instruments, delay and reverb and the other tape tracks, but not the track being recorded. This is a **bounce**: with its sources muted afterwards it sounds the same, so four tracks of instruments become one tape track and the instruments are free again.
+   - **TRACK**: the selected instrument track alone, as you hear it (its level, pan, mute and ducking), without its delay and reverb: give the tape track its own `DLY` and `REV` instead (recorded with them, they would be doubled). The field shows the track's name; select another with its pad (`shift`+pad: silently).
+   - **LINE**: the audio input (on the desktop app: the Mac's input, the one the microphone uses).
+3. **Press `l`.** While the groove plays, the header counts the beats to the next bar line (`4 3 2 1`) and recording starts exactly on it. Stopped, the count is one bar of silence (a large `4 3 2 1` in the lane), then the transport starts from the top with the recording.
+4. **Stop it**: tap `l` again, or, if you held `l`, let go. It ends on the **next bar line** after that, so a take is whole bars. Stopping the transport ends it at once.
+
+![Recording: the take grows in red](ux/tape-recording.png)
+
+**Layering.** In pattern mode the tape loops: a take that runs on past the end of the loop goes round and records on top of itself, and what you recorded in the earlier passes plays back while you add the next one, like a looper. A take onto a track that has audio **adds** to it (overdub). `shift`+`l` **replaces** instead: the track is silent while you record over it, and what you record is all that is left there. When added layers would get loud, the tape rounds off the peaks softly rather than clipping.
+
+**Undo.** `ctrl`+`z` on TAPE takes the last take (or erase) back; again brings it back. Only one level, and starting a new take forgets it.
+
+**Song mode** (`enter` on SONG): the tape runs along the song instead of looping, the song's position is the tape's position. The first bars of the song are the tape's first bars, so a loop made in pattern mode is where the song starts.
+
+![Song mode: a page of 8 bars](ux/tape-song.png)
+
+**In time.** The tape follows the bars, not a clock: each bar of tape plays from where the sequencer starts that bar. What you record lands where you heard it. If you change the tempo after recording, the tape does not stretch (its tempo stays, shown in amber): at a faster tempo each bar's end is cut, at a slower one there is a moment of silence before the next bar, and every bar still starts on its bar line.
+
+**When the tape is full** (`FREE 0:00`), a take stops by itself and says `TAPE: MEMORY FULL`; what it recorded until then stays. Silence costs no tape: only the stretches that have sound use memory.
+
+### Tricks
+
+![BRAKE held: the amber line is what you hear](ux/tape-brake.png)
+
+Hold one of three keys while the tape plays:
+
+- **`b` BRAKE**: the tape slows to a stop with falling pitch, like a turntable switched off. Let go and it spins back up.
+- **`n` HALF**: half speed, an octave down.
+- **`m` REVERSE**: backwards from where it is.
+
+Only the tape is affected; the instruments keep playing. Underneath, the tape keeps going at its own speed (the white line), and the amber line is what you hear: when you let go, the tape is back exactly where it would have been, on the beat. Hold two and the last one pressed wins; let it go and the other one is back.
+
+### Erase
+
+`del` asks `ERASE T1 LOOP?` and `enter` clears the armed track's loop (in song mode: the 8 bars on the screen). `shift`+`del` asks for all of the track. `ctrl`+`z` brings it back.
+
+### Lift: from tape to a sample
+
+`ctrl`+`c` copies the armed track's loop into a **sample slot**, so a sampler instrument can play it: CHOP slices it, STUTTER repeats it, PLUCK and CLOUD play it from the keys. The slot is the selected track's if that track plays a sampler instrument (PERC or LEAD), otherwise PERC's. A slot holds about 6 seconds: a loop longer than that is lifted in whole bars, as many as fit (`SLOT 1 TAP01 5.8S`). A slot that holds a sample asks first (`REPLACE SLOT 1?`). On the desktop the sample is the file `samples/NN-tapNN.wav`.
+
+![The lifted bass in CHOP](ux/sampler-lift.png)
+
+### Files
+
+The tape is saved **beside** the project, not inside it, so a project stays small. Saving `GROOVE01` also writes the folder `GROOVE01/` next to it: `tape.txt` (the loop, the levels, pans, sends and mutes, the tape's tempo and rate) and one WAV per track that has audio (`track1.wav` ..). Loading the project loads its tape; a project without such a folder has an empty tape; a new project starts with an empty tape. Unsaved changes on the tape mark the project as changed (`*`), like any edit. The WAVs are ordinary mono files you can open anywhere. The tape is saved only with the project: the autosaved session keeps your patterns when you quit, but the tape comes back as it was last saved with `ctrl`+`s`.
+
+A tape recorded at another sample rate than the one the app runs at is not loaded (`TAPE IS 48K: NOT LOADED`).

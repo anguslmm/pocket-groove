@@ -63,6 +63,7 @@
 #include "pg/ui/ui.h"
 #include "recorder.h"
 #include "common/host_resample.h"
+#include "common/host_tape.h"
 #include "mic.h"
 #include "mic_sdl.h"
 #include "samples.h"
@@ -106,6 +107,8 @@ struct Options {
   bool deviceKeys = false;
   bool record = false;
   bool printKeymap = false;
+  int tapeMinutes = 10;              // --tape-minutes N: the tape's memory, minutes of track time (0 = no tape)
+  int lineLatencyMs = -1;            // --line-latency MS: LINE's round trip (-1 = estimated from the buffers)
 };
 
 void usage(FILE* f) {
@@ -140,6 +143,10 @@ void usage(FILE* f) {
                "  --lab [DIR]       the macro lab (docs/MACROLAB.md): macro sets from DIR (default ./macros),\n"
                "                    hot-reloaded; marks go to ./lab-notes.txt (--lab-notes FILE). Implies --dev\n"
                "  --dev             developer mode: SOUND can also show the bare parameter pages (l flips)\n"
+               "  --tape-minutes N  the tape's memory in minutes of track time, all tracks together (default 10;\n"
+               "                    0 = no tape)\n"
+               "  --line-latency MS the tape's LINE input: the round trip from what you hear to what comes in\n"
+               "                    (default: estimated from the audio buffers, printed at the start)\n"
                "keys: F1 or Esc = G0, F9 or Cmd+R = record on/off, F2 or Cmd+I = stats,\n"
                "Cmd+L = listen to the connected device, Cmd+B = stems. Command never reaches the instrument.\n"
                "With --lab: Cmd+G / Cmd+D mark good / bad, Cmd+Left / Right the set, Cmd+1..4 a macro,\n"
@@ -193,6 +200,8 @@ bool parseArgs(int argc, char** argv, Options* o) {
     else if (a == "--device-keys") o->deviceKeys = true;
     else if (a == "--record") o->record = true;
     else if (a == "--print-keymap") o->printKeymap = true;
+    else if (a == "--tape-minutes") o->tapeMinutes = std::atoi(next("minutes"));
+    else if (a == "--line-latency") o->lineLatencyMs = std::atoi(next("milliseconds"));
     else if (a == "-h" || a == "--help") { usage(stdout); std::exit(0); }
     else {
       std::fprintf(stderr, "unknown option %s\n", a.c_str());
@@ -203,6 +212,7 @@ bool parseArgs(int argc, char** argv, Options* o) {
   if (o->sr != 44100 && o->sr != 32000) { std::fprintf(stderr, "--sr must be 44100 or 32000\n"); return false; }
   if (o->scale < 1 || o->scale > 16) { std::fprintf(stderr, "--scale must be 1..16\n"); return false; }
   if (o->buffer < 16 || o->buffer > 8192) { std::fprintf(stderr, "--buffer must be 16..8192\n"); return false; }
+  if (o->tapeMinutes < 0 || o->tapeMinutes > 120) { std::fprintf(stderr, "--tape-minutes must be 0..120\n"); return false; }
   if (o->lab && !o->scaleGiven) o->scale = 3;   // the panel widens the window: keep it on a laptop screen
   return true;
 }
@@ -242,6 +252,28 @@ class App final : public desk::ScriptHost, public desk::LabHost {
   desk::SdlMicSource micSource;   // hold L on a sampler page (mic.h)
   desk::Mic mic;
   hostrs::HostResample resample;  // SHIFT+L on a sampler page: the engine's own output (no input device)
+  hosttape::HostTape tape;        // the tape (p in SONG), its memory from the heap
+  hosttape::Lift tapeLift;        // CTRL+C on TAPE: into the selected slot's samples/ file
+  bool tapeOn = false;
+  bool lineOpen = false;          // the tape's LINE input is open (the microphone's source)
+  static void onLine(const int16_t* mono, int n, void* user) { static_cast<pg::tape::Tape*>(user)->lineIn(mono, n); }
+  // The tape's LINE source: the microphone's input, open while the tape wants it.
+  void lineService() {
+    if (!tapeOn) return;
+    const bool want = tape.tape.lineWanted();
+    if (want && !lineOpen) {
+      std::string err;
+      lineOpen = micSource.open(&App::onLine, &tape.tape, &err);
+      std::printf("[tape] line in %s%s\n", lineOpen ? "open: " : "cannot open: ", lineOpen ? micSource.name().c_str() : err.c_str());
+      std::fflush(stdout);
+      if (!lineOpen) g_ui.notify("LINE: CANNOT OPEN", true);
+    } else if (!want && lineOpen) {
+      micSource.close();
+      lineOpen = false;
+      std::printf("[tape] line in closed (%u underruns)\n", tape.tape.lineUnderruns());
+      std::fflush(stdout);
+    }
+  }
   bool labMouse = false;     // a drag that started on the lab panel
   bool textInput = false;    // SDL text input on (only while a lab note is typed)
   std::unique_ptr<desk::SimCapture> simCapture;
@@ -1084,7 +1116,32 @@ int main(int argc, char** argv) {
       std::printf("[samples] cannot create %s: the built-in sounds only\n", sdir.c_str());
     }
   }
+  // The tape: its memory, the engine plays and records it (before the audio starts).
+  if (opt.tapeMinutes > 0) {
+    app.tapeOn = app.tape.init(uint32_t(opt.tapeMinutes) * 60u, uint32_t(opt.sr));
+    if (app.tapeOn) {
+      g_inst.engine().setTape(&app.tape.tape);
+      desk::Samples* smp = &app.samples;
+      app.tapeLift.commit = [smp](int slot, const int16_t* d, uint32_t n, uint32_t rate, std::string* err) {
+        return smp->putRecording(slot, d, n, rate, err, "tap");
+      };
+      // LINE: what is heard leaves after the output buffer (SDL keeps about two), comes back
+      // in the capture's chunks (512), and waits in the tape's ring (1024)
+      const int est = 2 * opt.buffer + 512 + 1024;
+      const int lat = opt.lineLatencyMs >= 0 ? opt.lineLatencyMs * opt.sr / 1000 : est;
+      pg::Command c = pg::tape::tapeCommand(pg::tape::kOpLatency, 0, 1024 / 64, lat & 0xFF);
+      c.step.vel = uint8_t(lat >> 8);
+      c.step.gate = uint8_t(lat >> 16);
+      g_inst.engine().post(c);
+      std::printf("[tape] %d min of track time (%.0f MB), %u blocks of %u samples; LINE latency %.1f ms%s\n",
+                  opt.tapeMinutes, double(app.tape.mem.size()) / 1.0e6, app.tape.tape.blocks(), pg::tape::kBlock,
+                  1000.0 * lat / opt.sr, opt.lineLatencyMs >= 0 ? " (--line-latency)" : " (estimated: --line-latency MS)");
+    } else {
+      std::printf("[tape] NO TAPE: %d min do not fit\n", opt.tapeMinutes);
+    }
+  }
   g_ui.init(g_inst.engine(), g_inst.project(), &fs);
+  if (app.tapeOn) g_ui.setTape(&app.tape.tape, &app.tapeLift, opt.sr == 44100);   // LINE: the microphone's 44.1 kHz
   g_ui.setSampler(&g_inst.sampler());
   g_ui.setMelodic(&g_inst.melodic());
   g_ui.setMic(&app.mic);                 // L on a sampler page records the Mac's microphone
@@ -1237,6 +1294,7 @@ int main(int argc, char** argv) {
 
     app.tiltService(app.nowMs());
     app.padService(app.nowMs());
+    app.lineService();
     const uint32_t now = app.nowMs();
     if (int32_t(now - nextFrame) >= 0) {
       app.labFrame(now);   // the lab's values go out before the frame, so the SOUND page shows them
@@ -1265,6 +1323,7 @@ int main(int argc, char** argv) {
   app.lab.finishTyping(false);   // a mark waiting for its note is written without one
   app.releaseAll();
   if (app.rec.active()) app.toggleRecord();
+  if (app.lineOpen) app.micSource.close();
   app.stems.shutdown();
   app.listen.shutdown();
   std::printf("[keys] %u key events reached the instrument\n", app.uiKeyEvents);

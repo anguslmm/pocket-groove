@@ -22,6 +22,7 @@ sidechain ducker, tempo-synced delay, reverb, master DJ filter and drive.
         engine/   sequencer, command queue, mixer, ducker, send FX, master bus
         ui/       screens and key handling, draws into pg::Framebuffer
         io/       project (de)serialisation over pg::FileSystem
+        tape/     the tape: four audio tracks beside the patterns ("The tape" below)
     src/                       firmware only: Arduino/M5 glue (audio out, keys, display, storage)
     host/                      desktop build: tests, WAV renderers, UI screenshot tool
     docs/                      hardware notes, UX spec, manual
@@ -125,6 +126,89 @@ output is all zeros 4.5 s after Stop while the float tail lasts to 6.1 s. A 24-b
 fed the float output adds -143 dBFS RMS. Cost per frame, callgrind on the host (busy
 pattern, stereo 48 kHz, x86 instructions per frame): int16 2130 before the change, 2123
 after, float 2108 (no rounding step); the Daisy also drops its int16 -> float pass.
+
+## The tape
+
+`lib/pg/src/pg/tape/` (component `pg_tape`; the contract is `tape.h`'s header comment): four
+mono audio tracks the engine mixes and records, beside the patterns. Compiled out with
+`PG_TAPE=0` (config.h; the Cardputer's envs and the Daisy's Makefile set it): then the
+engine, the UI and the files carry none of it, and `itest_golden_notape` builds the whole
+core that way and renders the golden demos against it.
+
+**In the engine.** `Engine::setTape(tape::Tape*)` (before audio starts or suspended). Per
+quantum, only while the tape is active (it holds audio and the transport rolls, or a take is
+armed or running; otherwise one load and a flag): the instrument tracks mix as before; for a
+TRACK take the selected track's contribution to the bus is recorded (the bus before and after
+that track: post level, pan, mute and ducking, before the sends); then `Tape::mix` adds the
+tape tracks to the bus and to the delay and reverb sends with the instrument tracks' laws
+(level 100 = unity cubic, constant-power pan, sends `(v/127)^2`, 4 ms smoothing); the send
+effects run; `Tape::post` records MIX there (the master bus's input: tracks, effect returns,
+other tape tracks; the armed track is added after the capture and without sends so it cannot
+feed itself back), writes the take, and the master bus runs on it all. With no tape, or an
+empty one recording nothing, the output is bit for bit what it was (`itest_tape`, int16 and
+float). The sequencer tells the tape about every master step (`masterStep`: bar lines, the
+steps to the next one, the song position at a song pattern boundary, and `gridCd`, how far the
+bar's exact time lies from the quantum's first frame), Play / Stop, the tempo, and starts the
+transport after a take's count-in (`countInDone`).
+
+**Position.** In samples at the engine's rate. At each bar line the true address of the
+quantum's first frame is the bar's start on tape (the steps played times a step at the tape's
+tempo, Q32 as the sequencer counts) minus `gridCd`; between bar lines one sample per frame. At
+the tape's own tempo that is exactly where the tape already was, so it never jumps, and a take
+lands on the tape where the exact grid puts it: a bar line's impulse on the bar's address. The
+sequencer fires notes on quantum edges up to half a quantum off that grid, so a live note and
+its copy on tape coincide sample for sample when the phases match (a bar of whole quanta, 120
+BPM at 48 kHz) and are within one quantum (0.33 ms) otherwise. Pattern mode: the tape loops
+over `loopBars` bar lines (the address is taken modulo the loop's length); song mode: the
+address is the song position (re-derived at each song pattern boundary; a hand-queued detour
+just runs on). At another tempo than the tape's, each bar line moves the address: playback
+goes over to the new place at once (a downbeat stays whole) while the old place fades out over
+256 frames, a bar longer than its stretch of tape fades out 64 frames before its end and is
+silent to the bar line, and a take writes no further than its bar's end.
+
+**Storage.** One block of memory from the platform (`Tape::init(ptr, bytes, rate)`: on the
+desktop the heap, on the Daisy SDRAM in phase 2); the core carves its tables from it and
+allocates nothing. Blocks of `kBlock` = 16,384 samples (32 KB: 0.34 s at 48 kHz) and 98 bytes
+of bookkeeping each (the four tracks' table entries, 64 overview peaks, the free, quarantine,
+take and undo lists): 5.78 MB per minute of track time at 48 kHz, 5.31 at 44.1. A track's table
+has one 32-bit entry per block of its address space, a base and a take block id (atomic: the
+audio thread reads both at once); silence has no block. Takes write into take blocks only
+(zeroed blocks the main thread keeps in a 64-deep ready ring), so the audio thread never
+copies; playback reads base + take through the overdub guard (identity to 75 % of full
+scale, a soft knee above, never a wrap); replace writes input - base. After the take the main
+thread (`Tape::service`, every UI frame) merges each take block into a new block and swaps it
+in; the replaced bases are the undo (undo and redo swap them back and forth); blocks taken out
+of use go to a quarantine and are reused once the audio thread has finished two more quanta.
+Running out of ready blocks ends a take cleanly (`MEMORY FULL`). The int16 samples hold the
+bus at half scale (`kHeadroom` 2: a full-scale tape sample is +6 dB over the master's 1.0).
+
+**Threads.** UI edits go through the engine's queue (`CmdType::Tape`, `tape::tapeCommand`);
+the audio thread publishes the view (state, address, read head, count-in, take length) in
+atomics the UI reads to draw; the settings are atomics the audio thread writes from commands
+(loading writes them directly with the transport stopped). The main thread owns the block
+pool, the merge, undo, erase, clear and the files; it touches the tables only with atomic
+stores and only while no take runs. The line input (LINE) is a ring the platform's capture
+thread fills (`Tape::lineIn`) and the audio thread drains at a steady fill; the take writes
+each quantum's input at the address the tape had a round trip earlier (a history of 1,024
+quanta), and a take's end waits that long for the input still on its way.
+
+**Tricks.** The read head is an offset from the true address with a speed and an
+acceleration (Q32): BRAKE ramps the speed to 0 over 0.6 s and fades the level with it, its
+release starts a spin-up ahead of the true address by as much as the spin-up will lag, so it
+lands on it; HALF and REVERSE run at -0.5 and -2 samples per frame relative to the tape;
+releases cross-fade (256 frames) back onto the true address. Transitions wait for a running
+cross-fade to finish (at most 5.8 ms). Only playback moves; recording and the bars do not.
+
+**Files** (`tape_io.h`): `<mount>/pg/NAME/tape.txt` and `track1.wav` .. `track4.wav` beside
+`NAME.pgv`, written and read incrementally through `FileSystem`'s streaming calls (the UI runs
+256 K samples a frame on the desktop), each WAV written to a `.tmp` and renamed.
+
+**Cost** (callgrind, x86 instructions per frame, the busy pattern stereo at 48 kHz:
+`host/tools/bench_tape`): no tape 2101, an empty tape 2107, four tracks playing 2236 (+135),
+and one of them recording MIX over itself 2310 (+209), four playing with HALF held 2608
+(+507: per-sample interpolated reads). On the Daisy (1.0..1.6 cycles per instruction at 480
+MHz) four tracks playing are an ESTIMATED 1.4..2.2 % of the core, a take 2.1..3.3 %, a trick
+held 5..8 %.
 
 ## CPU budget (per sample at 44.1 kHz, ESP32-S3 @ 240 MHz = ~5400 cycles)
 

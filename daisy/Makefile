@@ -30,10 +30,13 @@ SIZE := $(PREFIX)size
 
 MCU := -mcpu=cortex-m7 -mthumb -mfpu=fpv5-d16 -mfloat-abi=hard
 OPT ?= -O2
+# PG_TAPE=0: the tape (lib/pg/src/pg/tape) is not on the Daisy yet; phase 2 gives it the
+# SDRAM and the SD card (docs/STATE.md "TAPE PHASE 1").
 DEFS := -DUSE_HAL_DRIVER -DSTM32H750xx -DSTM32H750IB -DHSE_VALUE=16000000 -DCORE_CM7 -DARM_MATH_CM7 \
         -DUSE_FULL_LL_DRIVER -DBOOT_APP -DFILEIO_ENABLE_FATFS_READER \
         -DPG_BULK_ATTR='__attribute__((section(".qspi_rom")))' \
-        -DPG_DAISY_STAGE=$(STAGE) -DPG_DAISY_PANEL=$(PANEL) -DPG_VERSION='"$(PG_VERSION)"' -DPG_LIBDAISY_COMMIT='"$(LIBDAISY_COMMIT)"'
+        -DPG_DAISY_STAGE=$(STAGE) -DPG_DAISY_PANEL=$(PANEL) -DPG_VERSION='"$(PG_VERSION)"' -DPG_LIBDAISY_COMMIT='"$(LIBDAISY_COMMIT)"' \
+        -DPG_TAPE=0
 DAISY_INC := -isystem $(LIBDAISY)/src -isystem $(LIBDAISY)/src/sys -isystem $(LIBDAISY)/src/usbd \
              -isystem $(LIBDAISY)/src/usbh -isystem $(LIBDAISY) \
              -isystem $(LIBDAISY)/Drivers/CMSIS_5/CMSIS/Core/Include \

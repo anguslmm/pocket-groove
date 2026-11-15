@@ -253,6 +253,10 @@ void Ui::drawStatus(Framebuffer& fb) {
     } else {
       g.text(xx + 3, 2, "END", DIM);
     }
+#if PG_TAPE
+  } else if (view_ == View::Tape && !helpVisible()) {
+    drawTapeChip(fb);
+#endif
   } else if (view_ == View::Project) {
     char t[12];
     char* o = cat(t, curName_[0] ? curName_ : "NEW");
@@ -1560,6 +1564,9 @@ uint32_t Ui::bodySignature() const {
   h = fnv(h, uint32_t(erasing_) | uint32_t(helpVisible()) << 1 | uint32_t(dirty_) << 2 | uint32_t(writeBusy_) << 3);
   if (view_ == View::Song) h = fnv(h, uint32_t(st_.songSlot) | uint32_t(st_.songRepeat) << 8 | uint32_t(st_.masterStep) << 16 | uint32_t(proj_->songMode) << 24);
   if (view_ == View::Project) h = fnv(h, uint32_t(env_.sdPresent));
+#if PG_TAPE
+  if (view_ == View::Tape) h = fnv(h, tapeSignature());
+#endif
   if (view_ == View::Sound) {
     uint32_t mv = 0;
     for (int m = 0; m < kTrackMacros; ++m) mv |= uint32_t(macroMoving(m)) << m;
@@ -1589,6 +1596,9 @@ void Ui::drawAll(Framebuffer& fb) {
     case View::Fx: drawFx(fb); break;
     case View::Song: drawSong(fb); break;
     case View::Project: drawProject(fb); break;
+#if PG_TAPE
+    case View::Tape: drawTape(fb); break;
+#endif
   }
   if (banner_ && view_ == View::Groove) drawBanner(fb);
   if (overlay_ != Overlay::None) drawOverlay(fb);

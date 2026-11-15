@@ -10,6 +10,8 @@
 
 namespace pg {
 
+namespace tape { class Tape; }
+
 enum class CmdType : uint8_t {
   Play,             // start from step 0 (a = 1: continue from current position)
   Stop,             // stop transport, release/choke voices, let FX tails ring
@@ -58,6 +60,8 @@ enum class CmdType : uint8_t {
                     //   a signed target in a ramp. Build it with macroOffsetCommand().
   SetSampleSlot,    // a = track, c = sample pool slot 0..kSampleSlots-1 (TrackSettings::sampleSlot;
                     //   a sampler instrument plays it from the track's next note on)
+  Tape,             // THE TAPE (pg/tape/tape.h): a = tape::Op, the rest as that op says (tape::tapeCommand).
+                    //   Ignored without a tape (Engine::setTape) or in a build with PG_TAPE=0.
 };
 
 // INSTRUMENTS (docs/MACROLAB.md): a track whose TrackSettings name an
@@ -347,6 +351,16 @@ class Engine {
   // takes effect at the next process() call. Removing (nullptr) returns once the
   // audio thread is no longer inside the old tap, so its memory may be freed then.
   void setOutputTap(OutputTap* tap);
+
+#if PG_TAPE
+  // THE TAPE (pg/tape/tape.h, docs/ARCHITECTURE.md "The tape"): four audio tracks the
+  // engine plays into the master bus with the instruments, rolling with the transport
+  // and locked to its bars, and records onto (CmdType::Tape). Not while process() runs
+  // (before audio starts, or suspended); nullptr removes it. With no tape, or an empty
+  // one that records nothing, the output is bit for bit what it is without the tape.
+  void setTape(tape::Tape* t);
+  tape::Tape* tape() const;
+#endif
 
   // Stop touching the Project (output silence) so the UI thread can load a
   // new one into the same memory. suspend() returns once the audio thread has

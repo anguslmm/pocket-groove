@@ -934,6 +934,9 @@ void Ui::keyDown(int k, bool shift) {
     else if (heldStep_ >= 0 && view_ == View::Groove && (k == kKSemicolon || k == kKDot))
       semicolonDot(k == kKSemicolon ? 1 : -1, true);   // CTRL+;/. = note +-12 (was SHIFT: ghosting, 16.1)
     else if ((k == kKSemicolon || k == kKDot) && stepTune(k == kKSemicolon ? 1 : -1, shift)) return;   // a sampler's tune
+#if PG_TAPE
+    else if (view_ == View::Tape && tapeCtrl(k, shift)) return;
+#endif
     else ctrlCombo(k, shift);
     return;
   }
@@ -942,6 +945,9 @@ void Ui::keyDown(int k, bool shift) {
     editFocus(r, k == kKSemicolon ? 1 : -1, true);
     return;
   }
+#if PG_TAPE
+  if (view_ == View::Tape && tapeKey(k, shift)) return;
+#endif
   if (view_ == View::Song) {
     if (step >= 0) { songStepKey(step, shift); return; }
     switch (k) {
@@ -1008,6 +1014,10 @@ void Ui::keyUp(int k) {
       break;
     case kActTab: tabUp(k); break;
     case kActMic: micRelease(); break;
+#if PG_TAPE
+    case kActTapeRec: tapeRecUp(k); break;
+    case kActTrick: tapeTrickUp(k); break;
+#endif
     case kActHelp:
       if (!after(now_, helpDownMs_ + 400)) {      // tap: explain mode
         explain_ = true;
@@ -1066,6 +1076,9 @@ void Ui::viewKey(View v) {
       focus_ = ValueRef{false, sel_, kMixRowParam[mixRow_]};
       break;
     case View::Fx: fxTab_ = uint8_t((fxTab_ + 1) % kNumFxTabs); break;
+#if PG_TAPE
+    case View::Song: view_ = View::Tape; break;   // p again: the tape, the arrangement's other page
+#endif
     case View::Project:                             // LOAD <-> SAVE AS
       projTab_ ^= 1;
       projCursor_ = 0;
@@ -1517,6 +1530,9 @@ Ui::Target Ui::valueTarget() const {
   if (heldStep_ >= 0) return view_ == View::Groove ? Target::Field : Target::Lock;
   if (view_ == View::Song) return Target::Song;
   if (view_ == View::Project) return Target::Inert;
+#if PG_TAPE
+  if (view_ == View::Tape) return Target::Tape;
+#endif
   return Target::Focus;
 }
 
@@ -1534,6 +1550,9 @@ bool Ui::targetIsSmall(Target t) const {
       return false;
     }
     case Target::Lock: return focus_.global ? false : isSmallRange(trackInfo(heldTrack_, focus_.index));
+#if PG_TAPE
+    case Target::Tape: return tapeField_ <= kTfLoop;
+#endif
     default: return false;
   }
 }
@@ -1566,6 +1585,9 @@ void Ui::valueEvent(int dir, int mag, bool shift) {
     case Target::Field: editField(dir, mag, shift); return;
     case Target::Lock: editLock(dir, mag, shift); return;
     case Target::Song: songRepeats(dir * (shift ? 8 : mag)); return;
+#if PG_TAPE
+    case Target::Tape: tapeEdit(dir, mag, shift); return;
+#endif
     case Target::Focus: {
       const ParamInfo* info = infoFor(focus_);
       if (!info) return;
@@ -1591,6 +1613,9 @@ void Ui::editFocus(const ValueRef& r, int delta, bool popup) {
 
 void Ui::resetValue() {
   switch (valueTarget()) {
+#if PG_TAPE
+    case Target::Tape: tapeReset(); return;
+#endif
     case Target::Tempo: case Target::Focus: {
       const ValueRef r = valueTarget() == Target::Tempo ? ValueRef{true, 0, kGTempo} : focus_;
       const ParamInfo* info = infoFor(r);
@@ -1922,6 +1947,9 @@ bool Ui::update(const UiEnv& env, Framebuffer& fb) {
   updateFocusLock();
   if (env.sdPresent != listedSd_ && view_ == View::Project) refreshFiles();   // SD inserted / pulled
   micTick();
+#if PG_TAPE
+  tapeTick();
+#endif
   autosave();
   if (clipUntil_ && after(now_, clipUntil_)) clipUntil_ = 0;
   // The instrument page's picture: the engine taps the selected track only while it is shown.

@@ -51,6 +51,12 @@ screen or sound card) and checks it against the rest of the host build:
      set's macro position is remembered; deleting the active file (an extra
      instrument) leaves the track playing its values; no lab key, click or note reaches the instrument; the window grows
      by the panel and the device screen in it is untouched.
+  10. the tape (p in SONG, docs/DESKTOP.md "Tape"): the start line names its memory; L
+     on TAPE records a take of what plays (MIX) from stop (a count-in bar, then the
+     transport); CTRL+S saves the project and beside it GROOVE01/tape.txt and
+     track1.wav (44.1 kHz, the take's audio, not silent); the next launch resumes the
+     session and loads the tape (its lane drawn); LINE from SDL's disk driver opens the
+     input, records it and closes it; --tape-minutes 0 runs without a tape.
   9. the microphone's input (hold L on a sampler page): --list-inputs prints
      SDL's capture names; the start line names the inputs and the one used;
      --mic-device by part of a name, any case, and one that matches nothing;
@@ -956,12 +962,114 @@ def part_mic():
     check(MIC_SILENT_LINE not in log and "MIC SILENT" not in log, "quiet noise: no MIC SILENT")
 
 
+TAPE_SCRIPT = """wait 400
+tap p
+tap p
+wait 200
+tap l
+wait 4500
+tap l
+wait 2600
+app print-toast
+down ctl
+tap s
+up ctl
+wait 300
+tap enter
+wait 300
+app print-toast
+wait 1200
+tap p
+tap p
+wait 300
+shot tape
+quit
+"""
+
+
+def lane_pixels(path, lane):
+    """Pixels of the lane's colour in tape lane `lane` (0..3) of a 1x TAPE shot (ui_tape.cpp's layout)."""
+    w, h, rows = png_rgb(path)
+    y0 = 25 + 20 * lane
+    n = 0
+    for y in range(y0 + 1, y0 + 17):
+        for x in range(16, 234):
+            r, g, b = px(rows, x, y)
+            if b > 120 and r < 110 and g > 90:   # CYAN (lane 1's), dim or bright
+                n += 1
+    return n
+
+
+def wav_info(path):
+    d = read(path)
+    if d[:4] != b"RIFF" or d[8:12] != b"WAVE":
+        return None
+    ch, rate, bits = struct.unpack("<HIxxxxxxH", d[22:36])
+    pos = 12
+    while pos < len(d):
+        cid, sz = d[pos:pos + 4], struct.unpack("<I", d[pos + 4:pos + 8])[0]
+        if cid == b"data":
+            pcm = d[pos + 8:pos + 8 + sz]
+            peak = max((abs(v) for (v,) in struct.iter_unpack("<h", pcm)), default=0)
+            return {"channels": ch, "rate": rate, "bits": bits, "samples": sz // 2, "peak": peak}
+        pos += 8 + sz + (sz & 1)
+    return None
+
+
+def part_tape():
+    print("10. the tape: a take, saved beside the project, loaded with the session, LINE")
+    cwd = fresh(os.path.join(WORK, "tape"))
+    rc, log = run_app([], cwd, TAPE_SCRIPT, "tape", timeout=90)
+    check(rc == 0, "app exited 0")
+    check(re.search(r"\[tape\] 10 min of track time \(\d+ MB\)", log) is not None, "the start line names the memory")
+    check(re.search(r'\[toast\] "T1 [\d.]+S  CTRL\+Z UNDO"', log) is not None, "the take ended with its toast")
+    check('[toast] "SAVED GROOVE01"' in log, "CTRL+S saved GROOVE01")
+    d = os.path.join(cwd, "projects", "GROOVE01")
+    txt = read(os.path.join(d, "tape.txt")).decode() if os.path.exists(os.path.join(d, "tape.txt")) else ""
+    check("rate 44100" in txt and "loop 4" in txt and "bpm 124" in txt, "GROOVE01/tape.txt: rate, loop, tempo (%r)" % txt[:60])
+    info = wav_info(os.path.join(d, "track1.wav")) if os.path.exists(os.path.join(d, "track1.wav")) else None
+    check(info is not None and info["channels"] == 1 and info["rate"] == 44100 and info["bits"] == 16,
+          "track1.wav: mono 16-bit 44.1 kHz (%r)" % info)
+    check(info is not None and info["samples"] > 44100 and info["peak"] > 1000, "track1.wav: the take, not silence (%r)" % info)
+    check(not os.path.exists(os.path.join(d, "track2.wav")), "no file for an empty track")
+    shot1 = os.path.join(cwd, "shots-tape", "tape.png")
+    check(os.path.exists(shot1) and lane_pixels(shot1, 0) > 300, "the take is drawn in lane 1")
+    # the next launch: the session names GROOVE01, its tape comes back
+    rc, log = run_app([], cwd, "wait 1500\ntap p\ntap p\nwait 300\nshot tape2\nquit\n", "tape2", timeout=60)
+    shot2 = os.path.join(cwd, "shots-tape2", "tape2.png")
+    check(rc == 0 and "resumed the session" in log, "relaunch resumed the session")
+    check(os.path.exists(shot2) and lane_pixels(shot2, 0) > 300, "the saved tape loaded with it (lane 1 drawn)")
+    # LINE: SDL's disk driver reads a file as the input
+    cwd = fresh(os.path.join(WORK, "tape-line"))
+    raw = bytearray()
+    for i in range(44100 * 20):
+        raw += struct.pack("<h", int(8000 * math.sin(2 * math.pi * 220.0 * i / 44100.0)))
+    inp = os.path.join(cwd, "in.raw")
+    with open(inp, "wb") as f:
+        f.write(raw)
+    env = dict(os.environ, PG_TOOL="false", SDL_AUDIODRIVER="disk", SDL_DISKAUDIOFILEIN=inp,
+               SDL_DISKAUDIOFILE=os.path.join(cwd, "out.raw"))
+    line_script = TAPE_SCRIPT.replace("tap p\ntap p\nwait 200\n", "tap p\ntap p\nwait 200\ntap ;\ntap ;\ntap =\n")
+    rc, log = run_app([], cwd, line_script, "tape", env=env, timeout=120)
+    if "NOT RUNNING" in log:
+        print("  skipped LINE: this SDL has no disk audio driver")
+    else:
+        check("[tape] line in open:" in log and "[tape] line in closed" in log, "LINE: the input opened for the take and closed after it")
+        info = wav_info(os.path.join(cwd, "projects", "GROOVE01", "track1.wav")) if os.path.exists(
+            os.path.join(cwd, "projects", "GROOVE01", "track1.wav")) else None
+        check(info is not None and info["peak"] > 1000, "LINE: the input's tone on tape (%r)" % info)
+    # no tape
+    cwd = fresh(os.path.join(WORK, "tape-none"))
+    rc, log = run_app(["--tape-minutes", "0"], cwd, "wait 300\ntap p\ntap p\nwait 200\ntap l\nwait 200\napp print-toast\nquit\n", "none")
+    check(rc == 0 and '[toast] "NO TAPE"' in log, "--tape-minutes 0: TAPE says NO TAPE")
+
+
 def main():
     global APP, UI_SHOT, AUDIO_REF, XFER_SIM, WORK, ANALYZE
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", required=True, help="host build directory")
     ap.add_argument("--work", required=True, help="scratch directory (wiped)")
-    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt,pads,mic)")
+    ap.add_argument("--only", default="", help="comma-separated parts (keys,session,audio,xfer,strip,listen,stems,lab,tilt,pads,mic,tape)")
     a = ap.parse_args()
     b = os.path.abspath(a.bin)
     APP, UI_SHOT = os.path.join(b, "pocket-groove"), os.path.join(b, "ui_shot")
@@ -974,7 +1082,7 @@ def main():
     parts = [("keys", part_keys), ("session", part_session), ("audio", part_audio), ("xfer", part_xfer),
              ("strip", part_strip), ("listen", part_listen), ("listen", part_listen_specs),
              ("listen", part_listen_sdl), ("stems", part_stems), ("lab", part_lab), ("tilt", part_tilt),
-             ("pads", part_pads), ("mic", part_mic)]
+             ("pads", part_pads), ("mic", part_mic), ("tape", part_tape)]
     for name, fn in parts:
         if not only or name in only:
             fn()
