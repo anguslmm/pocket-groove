@@ -1388,6 +1388,6 @@ Only the tape is affected; the instruments keep playing. Underneath, the tape ke
 
 ### Files
 
-The tape is saved **beside** the project, not inside it, so a project stays small. Saving `GROOVE01` also writes the folder `GROOVE01/` next to it: `tape.txt` (the loop, the levels, pans, sends and mutes, the tape's tempo and rate) and one WAV per track that has audio (`track1.wav` ..). Loading the project loads its tape; a project without such a folder has an empty tape; a new project starts with an empty tape. Unsaved changes on the tape mark the project as changed (`*`), like any edit. The WAVs are ordinary mono files you can open anywhere.
+The tape is saved **beside** the project, not inside it, so a project stays small. Saving `GROOVE01` also writes the folder `GROOVE01/` next to it: `tape.txt` (the loop, the levels, pans, sends and mutes, the tape's tempo and rate) and one WAV per track that has audio (`track1.wav` ..). Loading the project loads its tape; a project without such a folder has an empty tape; a new project starts with an empty tape. Unsaved changes on the tape mark the project as changed (`*`), like any edit. The WAVs are ordinary mono files you can open anywhere. The tape is saved only with the project: the autosaved session keeps your patterns when you quit, but the tape comes back as it was last saved with `ctrl`+`s`.
 
 A tape recorded at another sample rate than the one the app runs at is not loaded (`TAPE IS 48K: NOT LOADED`).
