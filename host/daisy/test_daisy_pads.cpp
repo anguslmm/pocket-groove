@@ -387,13 +387,28 @@ void testSettings() {
   s.touchOrientation = 5;
   s.spiDivider = 4;
   s.padJob = 1;
+  CHECK(!DaisySettings{}.potsOn);   // the pots are off unless switched on
+  s.potsOn = true;
   uint8_t b[DaisySettings::kBytes];
   CHECK_EQ(s.encode(b, sizeof(b)), DaisySettings::kBytes);
   DaisySettings t;
   CHECK(t.decode(b, sizeof(b)));
   CHECK(t.pads[1].threshold == 22.5f && t.pads[2].ceiling == 700.0f && t.pads[3].curve == 0.6f && !t.pads[0].on);
   CHECK(t.padGlobal.windowScans == 3 && t.padGlobal.xtalkRatio == 0.3f);
-  CHECK(t.displayTurned && t.touchOrientation == 5 && t.spiDivider == 4 && t.padJob == 1);
+  CHECK(t.displayTurned && t.touchOrientation == 5 && t.spiDivider == 4 && t.padJob == 1 && t.potsOn);
+  // a version 2 file (the job, no pots byte): read, the pots off
+  {
+    uint8_t v2[DaisySettings::kBytesV2];
+    std::memcpy(v2, b, DaisySettings::kBytesV2 - 4);
+    v2[4] = 2;
+    v2[5] = uint8_t(DaisySettings::kBytesV2);
+    const uint32_t crc = pg::sampler::crc32(v2, DaisySettings::kBytesV2 - 4);
+    std::memcpy(v2 + DaisySettings::kBytesV2 - 4, &crc, 4);
+    DaisySettings o;
+    o.potsOn = true;
+    CHECK(o.decode(v2, sizeof(v2)));
+    CHECK(o.padJob == 1 && !o.potsOn && o.spiDivider == 4);
+  }
   // a version 1 file (no job): read, the job drums
   {
     uint8_t v1[DaisySettings::kBytesV1];

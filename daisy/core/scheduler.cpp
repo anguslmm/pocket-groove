@@ -41,7 +41,9 @@ void Scheduler::runOnce(MsClock ms, UsClock us, void* clockUser) {
       if (static_cast<int32_t>(now - t.next) >= 0) t.next = now + t.st.periodMs;
     }
     const uint32_t t0 = us(clockUser);
+    current_ = static_cast<int8_t>(i);
     t.fn(t.user, now);
+    current_ = -1;
     const uint32_t dt = us(clockUser) - t0;
     ++t.st.runs;
     ++t.st.windowRuns;

@@ -13,7 +13,9 @@
 // task table does.
 //
 // Portable (host-tested: host/daisy/test_daisy_core.cpp). Times are passed in, so
-// the tests drive a fake clock.
+// the tests drive a fake clock. Every comparison and difference of times is modular
+// (unsigned subtraction, or its signed reading for "is it due"), so the 32-bit clocks'
+// wraps are ordinary steps (host/daisy/test_daisy_clock.cpp runs across them).
 #pragma once
 #include <cstdint>
 
@@ -50,6 +52,9 @@ class Scheduler {
   void takeWindow();
   uint32_t passes() const { return passes_; }
   uint32_t maxPassUs() const { return maxPassUs_; }   // longest whole pass in the window
+  // The task running now, -1 between tasks: read by the audio interrupt for the load
+  // meter's records (which main-loop work an over-long block interrupted).
+  int current() const { return current_; }
 
  private:
   struct Task {
@@ -63,6 +68,7 @@ class Scheduler {
   Task t_[kMaxTasks];
   int n_ = 0;
   uint32_t passes_ = 0, maxPassUs_ = 0;
+  volatile int8_t current_ = -1;
 };
 
 }  // namespace pgd

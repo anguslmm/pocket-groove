@@ -115,6 +115,10 @@ int KeyScript::step(uint32_t nowMs, Emit emit, void* user) {
     }
     const uint64_t bit = 1ull << c.key;
     const bool down = c.op == kDown;
+    if (down && (held_ & bit)) {   // auto-repeat (or a doubled down): already held
+      ++repeats_;
+      continue;
+    }
     if (down) held_ |= bit;
     else held_ &= ~bit;
     pg::KeyEvent e;

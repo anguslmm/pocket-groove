@@ -4,7 +4,9 @@
 // project load) a pot does nothing until it is turned past the macro's current
 // value, so it never makes the sound jump. Turned, it follows: the macro gets
 // the pot's position (0..255). A dead band (kDeadband) keeps ADC noise from
-// sending a stream of tiny changes. Switchable off ('p' on the serial port).
+// sending a stream of tiny changes. OFF by default: switched on by the saved setting
+// (DaisySettings::potsOn; 'p' or ">pots on" on the serial port), because an ADC pin
+// with no pot on it floats and its noise would move the macros.
 // Portable (host/daisy/test_daisy_core.cpp): the reads and the macro access are
 // passed in.
 #pragma once
@@ -35,7 +37,7 @@ class PotMacros {
   uint32_t moves() const { return moves_; }
 
  private:
-  bool on_ = true;
+  bool on_ = false;
   int track_ = -1;
   bool engaged_[kPots] = {};
   int pos_[kPots] = {-1, -1, -1, -1};
