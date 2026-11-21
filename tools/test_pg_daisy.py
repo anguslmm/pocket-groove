@@ -223,6 +223,152 @@ class DaisyTest(unittest.TestCase):
             self.assertGreater(len(data), 48000 // 2)
 
 
+class BenchTest(unittest.TestCase):
+    """tools/pg-daisy bench against daisy_sim (the firmware's App: the bench runs in its
+    simulated interrupt, the host's clock as cycles), the table it prints, the restart
+    afterwards keeping the session; the pots' setting; compare; the mirror's key filter."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="pgbench")
+        self.flash = os.path.join(self.tmp, "qspi.bin")
+        self.s = Sim("--autoplay", "--flash", self.flash)
+
+    def tearDown(self):
+        if self.s.proc.poll() is None:
+            self.s.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def report(self, dev):
+        dev.send("r")
+        out = []
+        for line in dev.lines(5.0):
+            if "REPORT BEGIN" in line:
+                out = [line]
+            elif out:
+                out.append(line)
+                if "REPORT END" in line:
+                    return "\n".join(out)
+        self.fail("no report")
+
+    def test_bench_quick(self):
+        dev = pg_daisy.Device(self.s.port)
+        try:
+            dev.pump(1.0)
+            rep = self.report(dev)
+            self.assertIn("[audio] late blocks:", rep)   # (the sim runs on the host's clock: it may have some)
+            self.assertIn("after the warm-up (the first 32 blocks", rep)
+        finally:
+            dev.close()
+        out_file = os.path.join(self.tmp, "bench.txt")
+        p = subprocess.run([sys.executable, os.path.join(HERE, "pg_daisy.py"), "--port", self.s.port, "--file",
+                            out_file, "bench", "quick"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        with open(out_file) as fh:
+            lines = fh.read().splitlines()
+        r = pg_daisy.parse_bench(lines)
+        self.assertTrue(r["complete"])
+        self.assertEqual(r["order"], ["idle", "ACIDJAM", "BASSHAUS", "WAREHOUS", "busy"])
+        for s in r["order"]:
+            row = r["rows"][s]
+            self.assertGreater(row["avg"], 0)
+            self.assertLessEqual(row["min"], row["avg"])
+            self.assertGreaterEqual(row["max"], row["avg"])
+            self.assertIsNotNone(row["split"])
+            self.assertIsNotNone(row["host"], "daisy/app/bench_ref.h has no count for %s" % s)
+        self.assertGreater(r["rows"]["busy"]["host"], r["rows"]["ACIDJAM"]["host"])
+        self.assertIn("QUICK", "\n".join(lines))
+        self.assertIn("[bench] live before the bench", "\n".join(lines))
+        # The board restarts at the end (the sim boots again): the session came back,
+        # and it plays (stage 0's autoplay) its own project, not the bench's last scene.
+        time.sleep(2.5)
+        dev = pg_daisy.Device(self.s.port)
+        try:
+            dev.pump(0.5)
+            rep = self.report(dev)
+            self.assertIn("playing yes", rep)
+            self.assertIn('project "ACIDJAM"', rep)
+            # compare: two runs (the same one twice, the second relabelled) in one table
+            r2 = pg_daisy.parse_bench(lines)
+            for row in r2["rows"].values():
+                row["avg"] = row["avg"] * 2
+            table = pg_daisy.compare([("base", r), ("itcm", r2)])
+            self.assertIn("busy", table)
+            self.assertIn("(+100%)", table)
+            # the pots: off by default, switched on, kept over a restart
+            self.assertIn("setting off", rep)
+            out = dev.ask("pots on")
+            self.assertTrue(any("setting on" in l for l in out), out)
+            self.assertTrue(any("? " in l for l in dev.ask("pots maybe")))
+        finally:
+            dev.close()
+        for _ in range(40):
+            time.sleep(0.25)
+            d = pg_daisy.Device(self.s.port)
+            try:
+                if "on flash" in self.report(d):
+                    break
+            finally:
+                d.close()
+        time.sleep(2.5)
+        self.s.stop()
+        self.s = Sim("--flash", self.flash)
+        dev = pg_daisy.Device(self.s.port)
+        try:
+            self.assertIn("setting on", self.report(dev))
+        finally:
+            dev.close()
+
+    def test_clock_wrap(self):
+        """daisy_sim with its clocks about to wrap (--clock-wrap-in): the report's task
+        times stay sane across the wrap of micros() (2^32 us) and millis()."""
+        self.s.stop()
+        self.s = Sim("--autoplay", "--clock-wrap-in", "1")
+        dev = pg_daisy.Device(self.s.port)
+        try:
+            dev.pump(3.0)
+            rep = self.report(dev)
+            self.assertNotIn("4294", rep)
+            m = re.search(r"longest pass (\d+)us", rep)
+            self.assertIsNotNone(m)
+            self.assertLess(int(m.group(1)), 1000000)
+        finally:
+            dev.close()
+
+    def test_key_filter(self):
+        """The mirror window's keys: auto-repeat (presses while held, or release + press
+        pairs) is one down and one up."""
+        sent, timers = [], {}
+
+        def later(ms, fn):
+            tid = len(timers) + 1
+            timers[tid] = fn
+            return tid
+
+        def cancel(tid):
+            timers.pop(tid, None)
+
+        def fire():
+            for tid in list(timers):
+                timers.pop(tid)()
+
+        f = pg_daisy.KeyFilter(sent.append, later, cancel)
+        f.press("q")
+        for _ in range(10):        # macOS: repeated presses
+            f.press("q")
+        for _ in range(10):        # X11: release + press at once
+            f.release("q")
+            f.press("q")
+        self.assertEqual(sent, ["down q"])
+        f.release("q")
+        fire()                     # no press followed: the release goes out
+        self.assertEqual(sent, ["down q", "up q"])
+        self.assertEqual(f.repeats, 20)
+        f.press("w")
+        f.release("w")
+        f.release_all()
+        self.assertEqual(sent[-2:], ["down w", "up w"])
+
+
 class PadTest(unittest.TestCase):
     """Pads without sensors: ">hit" (tools/pg-daisy pad) through App::padEvent into the
     core's pad API, on PERC set to TAP (`vel HIT 0.5`, `press PRESS fast`)."""

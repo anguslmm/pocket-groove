@@ -18,6 +18,16 @@
                                        letter is SHIFT + the letter; Ctrl-R report;
                                        Ctrl-S screenshot; Esc or Ctrl-C quits
     tools/pg-daisy bootloader          restart into the Daisy bootloader (to flash)
+    tools/pg-daisy [--file FILE] bench [quick] [scene N]
+                                       the on-device benchmark of the audio path (about a
+                                       minute; the sound stops, the board restarts at the
+                                       end): cycles per frame per scene, in the audio
+                                       interrupt; prints the [bench] lines to paste back
+                                       (and writes them to FILE). docs/DAISY.md section 11
+    tools/pg-daisy compare FILE...     one table from several bench outputs (one per build
+                                       variant: tools/daisy-bench.sh writes them)
+    tools/pg-daisy pots on|off         the four pots on A0..A3 (off by default: an unwired
+                                       pin floats); saved on the device
     tools/pg-daisy pads [MS]           stage 1's force-sensor pads while you press them:
                                        a [pads] line every MS (default 100: raw readings,
                                        conductance, peaks, pressure, state, velocity
@@ -206,6 +216,77 @@ def hit(dev, pad, vel, hold=100, press=None):
     return dev.ask(cmd)
 
 
+BENCH_ROW = re.compile(r"\[bench\] (\S+)\s+(\d+)\s+(\d+)\s+(\d+)\s+([\d.]+)\s+(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(\S+)\s+\|"
+                       r"\s*(.*)$")
+
+
+def parse_bench(lines):
+    """The [bench] lines of one run: {"variant", "build", "caches", "rows": {scene: {...}},
+    "order": [scenes], "complete": bool}."""
+    out = {"variant": "?", "build": "", "caches": "", "rows": {}, "order": [], "complete": False}
+    for line in lines:
+        line = line.strip()
+        m = re.match(r"\[bench\] build: variant (\S+)", line)
+        if m:
+            out["variant"], out["build"] = m.group(1), line[len("[bench] build: "):]
+            continue
+        if line.startswith("[bench] caches:"):
+            out["caches"] = line[len("[bench] caches: "):]
+            continue
+        if line.startswith("[bench] end"):
+            out["complete"] = True
+            continue
+        m = BENCH_ROW.match(line)
+        if m and m.group(1) != "scene":
+            split = re.findall(r"(\d+)%", m.group(11))
+            row = {"avg": int(m.group(2)), "min": int(m.group(3)), "max": int(m.group(4)), "load": float(m.group(5)),
+                   "max_us": int(m.group(6)), "cold": int(m.group(7)), "out": int(m.group(8)),
+                   "host": None if m.group(9) == "-" else int(m.group(9)),
+                   "ratio": None if m.group(10) == "-" else float(m.group(10)),
+                   "split": [int(x) for x in split] if len(split) == 5 else None}
+            out["rows"][m.group(1)] = row
+            out["order"].append(m.group(1))
+    return out
+
+
+def compare(runs):
+    """One table: per scene, each variant's cycles per frame (and the change against the
+    first), then the cold-cache figure. runs: [(label, parse_bench result)]."""
+    if not runs:
+        return "pg-daisy: no bench outputs"
+    scenes = []
+    for _, r in runs:
+        for s in r["order"]:
+            if s not in scenes:
+                scenes.append(s)
+    labels = [lab for lab, _ in runs]
+    w = max(12, max(len(x) for x in labels) + 2)
+    lines = ["cycles per frame (average of the measured blocks; in brackets the change against %s)" % labels[0]]
+    lines.append("%-9s" % "scene" + "".join("%*s" % (w, x) for x in labels))
+    for kind, key in (("warm", "avg"), ("cold", "cold"), ("max", "max")):
+        if kind != "warm":
+            lines.append("%s caches emptied before each block:" % "cold:" if kind == "cold" else
+                         "max: the dearest block, per frame:")
+        for s in scenes:
+            base = runs[0][1]["rows"].get(s, {}).get(key)
+            cells = []
+            for _, r in runs:
+                v = r["rows"].get(s, {}).get(key)
+                if v is None:
+                    cells.append("-")
+                elif base and r is not runs[0][1]:
+                    cells.append("%d (%+.0f%%)" % (v, 100.0 * (v - base) / base))
+                else:
+                    cells.append("%d" % v)
+            lines.append("%-9s" % s + "".join("%*s" % (w, c) for c in cells))
+    lines.append("load %% of a 2 ms block at the average, busy scene: " + ", ".join(
+        "%s %s" % (lab, ("%.1f" % r["rows"]["busy"]["load"]) if "busy" in r["rows"] else "-") for lab, r in runs))
+    bad = [lab for lab, r in runs if not r["complete"]]
+    if bad:
+        lines.append("INCOMPLETE (no '[bench] end'): " + ", ".join(bad))
+    return "\n".join(lines)
+
+
 def rgb(c):
     r, g, b = (c >> 11) & 31, (c >> 5) & 63, c & 31
     return (r * 255 // 31, g * 255 // 63, b * 255 // 31)
@@ -328,18 +409,67 @@ TK_KEYS = {"space": "spc", "Return": "ent", "BackSpace": "del", "Tab": "tab", "S
            "apostrophe": "'", "comma": ",", "period": ".", "slash": "/"}
 
 
+class KeyFilter:
+    """The mirror window's keys, one down and one up per physical press. A keyboard's
+    auto-repeat reaches Tk as more presses while a key is held (macOS) or as release +
+    press pairs a few milliseconds apart (X11, and Tk on macOS for some keys): either
+    would send the device a stream of presses for one held key (missed and stuck
+    notes, and a flood that once overran the device's key queue). So a press of a key
+    already down sends nothing, and a release is sent only when no press of the same
+    key follows within REPEAT_MS. `later(ms, fn)` / `cancel(id)` are the window's
+    timers (Tk's after / after_cancel); `send(line)` the device's key line."""
+
+    REPEAT_MS = 25
+
+    def __init__(self, send, later, cancel):
+        self.send, self.later, self.cancel = send, later, cancel
+        self.held = set()
+        self.pending = {}   # key -> the timer that will send its up
+        self.repeats = 0
+
+    def press(self, k):
+        if k in self.pending:          # released and pressed again at once: auto-repeat
+            self.cancel(self.pending.pop(k))
+            self.repeats += 1
+            return
+        if k in self.held:             # repeated press without a release
+            self.repeats += 1
+            return
+        self.held.add(k)
+        self.send("down %s" % k)
+
+    def release(self, k):
+        if k in self.held and k not in self.pending:
+            self.pending[k] = self.later(self.REPEAT_MS, lambda: self._up(k))
+
+    def _up(self, k):
+        self.pending.pop(k, None)
+        if k in self.held:
+            self.held.discard(k)
+            self.send("up %s" % k)
+
+    def release_all(self):
+        for k in list(self.pending):
+            self.cancel(self.pending.pop(k))
+        for k in list(self.held):
+            self._up(k)
+
+
 def mirror(dev, scale):
     try:
         import tkinter as tk
     except ImportError:
-        print("pg-daisy: no tkinter here (macOS Homebrew: brew install python-tk); using the terminal")
+        print("pg-daisy: this Python (%s) has no tkinter, so no mirror window: using the terminal keyboard. "
+              "The usual cause: PlatformIO's Python, which tools/pg-daisy prefers, has pyserial but no tkinter. "
+              "Run tools/pg-daisy mirror (the shell launcher, not pg_daisy.py directly): it looks for a Python "
+              "with both and says how to make one (~/.venvs/pg)." % sys.executable)
         dev.send("m")
         return keys_terminal(dev)
     root = tk.Tk()
     root.title("Pocket Groove (Daisy) - F1 = G0")
     img = tk.PhotoImage(width=240 * scale, height=135 * scale)
     tk.Label(root, image=img, bd=0).pack()
-    held = set()
+    keys = KeyFilter(dev.key, root.after, root.after_cancel)
 
     def legend(ev):
         k = TK_KEYS.get(ev.keysym, ev.keysym.lower() if len(ev.keysym) == 1 else None)
@@ -347,15 +477,13 @@ def mirror(dev, scale):
 
     def press(ev):
         k = legend(ev)
-        if k and k not in held:
-            held.add(k)
-            dev.key("down %s" % k)
+        if k:
+            keys.press(k)
 
     def release(ev):
         k = legend(ev)
-        if k and k in held:
-            held.discard(k)
-            dev.key("up %s" % k)
+        if k:
+            keys.release(k)
 
     root.bind("<KeyPress>", press)
     root.bind("<KeyRelease>", release)
@@ -391,6 +519,7 @@ def mirror(dev, scale):
     try:
         root.mainloop()
     finally:
+        keys.release_all()
         dev.send("m")
         dev.key("release")
 
@@ -400,9 +529,19 @@ def main(argv=None):
     ap.add_argument("--port", help="serial port (default: the Daisy by USB id, or $PG_PORT)")
     ap.add_argument("--out", default="shots", help="where script shots go (default ./shots)")
     ap.add_argument("--scale", type=int, default=3, help="PNG / window scale (default 3)")
+    ap.add_argument("--timeout", type=float, default=180.0, help="bench: give up after this many seconds")
+    ap.add_argument("--file", help="bench: also write the [bench] lines to this file")
     ap.add_argument("cmd")
     ap.add_argument("args", nargs="*")
     a = ap.parse_args(argv)
+    if a.cmd == "compare":   # no device needed
+        runs = []
+        for path in a.args:
+            with open(path) as fh:
+                r = parse_bench(fh.read().splitlines())
+            runs.append((r["variant"] if r["variant"] != "?" else os.path.basename(path), r))
+        print(compare(runs))
+        return 0
     try:
         port = a.port or os.environ.get("PG_PORT") or pg.find_port()
         dev = Device(port)
@@ -495,6 +634,32 @@ def main(argv=None):
             dev.key(" ".join(a.args))
             dev.sync("cmd")
             dev.pump(0.3)
+        elif c == "bench":
+            words = " ".join(a.args)
+            dev.key(("bench " + words).strip())
+            got, done = [], False
+            for line in dev.lines(a.timeout):
+                if line.startswith("[bench]"):
+                    print(line)
+                    got.append(line)
+                    if line.startswith("[bench] end") or line.startswith("[bench] ?") or \
+                            line.startswith("[bench] already") or line.startswith("[bench] the audio"):
+                        done = True
+                        break
+            if a.file:
+                with open(a.file, "w") as fh:
+                    fh.write("\n".join(got) + "\n")
+            if not done:
+                print("pg-daisy: the bench did not finish within %.0f s" % a.timeout)
+                return 1
+            return 0 if parse_bench(got)["complete"] else 1
+        elif c == "pots":
+            if not a.args or a.args[0] not in ("on", "off"):
+                print("pg-daisy: pots on|off")
+                return 2
+            for line in dev.ask("pots %s" % a.args[0]):
+                if line.startswith("[pots]"):
+                    print(line)
         elif c == "bootloader":
             dev.send("B")
             time.sleep(0.2)
