@@ -5,7 +5,9 @@ The target device is built around an Electrosmith Daisy Seed: an STM32H750 (Cort
 `daisy/`, how to build and flash it from a Mac, what to wire, and what has been checked so far.
 Read the first-power-on checklist before plugging anything in.
 
-**Status (2026-11-14): nothing has run on a Seed yet.** The firmware compiles and links for the
+**Status (2026-11-21): it runs on the owner's Seed3** (stage 0, first try: section 12's
+"verified on hardware"; the first audio-load measurements and the bench are in section 11).
+Before that (2026-11-14) nothing had run on a Seed. The firmware compiles and links for the
 STM32H750 without warnings, in both stages. Everything portable runs on the host: the scheduler,
 the serial protocol, /int, the sample pool, the display path (now the Adafruit 2090's ILI9341),
 the BMI270 and FT6206 drivers on their shared I2C bus, the force-sensor pad scanner and the
@@ -32,11 +34,11 @@ recording path is the codec's stereo line input** (section 10).
 8. Pin map
 9. How the firmware runs (no operating system)
 10. Stage 1: the breadboard prototype (display, touch, pads, line in: parts, wiring, algorithms)
-11. Audio load (an estimate)
+11. Audio load (measured), the bench, the build variants
 12. What is verified, what only the hardware can show
 13. libDaisy facts relied on, and assumptions not verified
 14. Seams in the core, risks, licences
-15. More code space later (analysis, nothing built)
+15. More code space later (analysis; ITCM built as a speed variant)
 
 ## 1. Layout and choices
 
@@ -50,6 +52,7 @@ recording path is the codec's stereo line input** (section 10).
 | `daisy/src/` | The device: libDaisy glue (main, USB serial, QSPI, memory, stage 1 drivers). |
 | `host/daisy/` | The host tests (`ctest -L daisy`) and `daisy_sim`. |
 | `tools/daisy-setup.sh`, `tools/daisy-flash.sh`, `tools/pg-daisy`, `tools/daisy_size.py` | Fetch and build libDaisy, flash, drive the device, report the memory map. |
+| `tools/daisy-bench.sh`, `tools/daisy_itcm.py`, `daisy/itcm_profile.txt` | Compare build variants on the board (build, flash, bench, one table); pick the ITCM functions; the host's profile they come from (section 11). |
 
 Choices made (the lead left them open):
 - **libDaisy comes in through a fetch script, not a git submodule.** `tools/daisy-setup.sh`
@@ -82,9 +85,18 @@ Choices made (the lead left them open):
   freshly flashed board makes sound with nothing else connected. `>tap spc` stops it.
 - **The four pots** move the selected track's four instrument macros, with pickup (a pot does
   nothing until it is turned past the macro's current value, so the sound never jumps). At
-  boot the selected track is BASS (the demo's ACID: OPEN, BITE, ...). `p` on the serial port
-  turns them off. Why this: it needs no UI, it is the instrument's own "four controls" design,
-  and it is audible at once.
+  boot the selected track is BASS (the demo's ACID: OPEN, BITE, ...). Why this: it needs no UI,
+  it is the instrument's own "four controls" design, and it is audible at once.
+  **They are OFF unless switched on** (since 2026-11-21): an ADC pin with nothing wired floats,
+  and on the first Seed3 the four bare pins read 254 254 251 251, counted as "engaged" and dragged
+  the bass's macros to maximum (29 moves in 14 s; 5,436 in 12 minutes). Switch them on once the
+  pots are wired: `p` on the serial port, or `tools/pg-daisy pots on` (`>pots on|off`); the
+  setting is saved with the Daisy's settings (`/int/pg/daisy.cfg`) and the report's `[pots]`
+  line says which (the readings are shown either way). Telling a floating pin from a pot without
+  relying on a setting would be possible: switch the pin's internal pull-up on, then its
+  pull-down, for a few ms each; a pot's wiper (2.5 k at most) holds its voltage, a floating pin
+  follows the pull to the rail. Not built (it would have to pause the ADC's DMA scan); not to be
+  relied on with a high-resistance source.
 
 ## 2. Setting up on macOS, building
 
@@ -177,6 +189,20 @@ there is to it.
 
 ## 4. Stage 0: the first hardware
 
+**Before wiring anything: check the header's orientation with a multimeter.** The sources read
+here do not say which physical end of the header pin 1 is at; a search result quoting
+Electrosmith's pinout does confirm that pins 1 and 40 share the row at the USB end and pins 20
+and 21 share the row at the far end. With the Seed on USB (nothing else connected), the
+multimeter on DC volts, the black probe on the USB connector's metal shell:
+- pin 21 (3V3A) and pin 38 (3V3D) read **3.3 V**;
+- pin 20 (AGND) and pin 40 (DGND) read **0 V**.
+If they do not, you are counting from the other end: stop and recount before connecting a wire.
+
+**Join AGND and DGND: wire header pin 20 (AGND) to header pin 40 (DGND), in every setup.**
+Electrosmith's Daisy Seed datasheet says "For all applications, AGND must be connected to DGND"
+(found through a search result quoting the datasheet; the PDF itself was not reachable from
+here). This replaces the earlier "not verified" note.
+
 What the owner will have first: a **Daisy Seed3** (the 65 MB version, with headers), and either
 a **TPA6132 headphone amplifier board** or the **Erica Synths EDU DIY Labor** (a breadboard
 platform with a built-in output amplifier, a headphone output and a line output), plus pots.
@@ -194,14 +220,15 @@ the Seed3 is pin-compatible per libDaisy's `daisy_seed.h`.)
 | 20 | AGND | the amplifier's ground, and the pots' low ends |
 | 21 | 3V3A | the pots' high ends |
 | 22, 23, 24, 25 | A0, A1, A2, A3 | the wipers of pots 1-4 (macros 1-4 of the selected track) |
-| 40 | DGND | digital ground (whether the Seed joins it to AGND on the board is not verified): join every board's ground to the Seed's grounds |
+| 40 | DGND | digital ground: **wire it to pin 20 (AGND)** in every setup (below), and join every board's ground to the Seed's grounds |
 | USB | | the Mac: power and everything else |
 
 Pots: 10 k linear, one end to 3V3A (pin 21), the other end to AGND (pin 20), the wiper to the A
 pin. **Never** wire a pot to anything but the Seed's 3.3 V and ground.
 
 ### With a TPA6132 board (the standalone option)
-Seed pins 18 / 19 into the board's L / R inputs, pin 20 to its ground. Power the TPA6132 board
+Seed pins 18 / 19 into the board's L / R inputs, pin 20 to its ground (and pin 20 to pin 40,
+as always). Power the TPA6132 board
 from the Seed's 3V3D (pin 38) and DGND (pin 40) **if its documentation says 3.3 V is fine**
 (the TPA6132A2 chip runs from 1.62 to 3.6 V; check the board's own regulator or jumpers). It has
 its own volume or gain setting: start low.
@@ -216,7 +243,8 @@ Safety rules, plainly:
 2. **Power the Seed from USB only.** Do not power it from the Labor. libDaisy's source says
    nothing about the Seed's VIN pin (39) or its range; Electrosmith's datasheet does, and it has
    not been read here. A +5 V rail on the Labor is not confirmed either. So: USB.
-3. **Join the grounds**: the Seed's AGND (pin 20) to the Labor's ground. Without a common ground
+3. **Join the grounds**: the Seed's AGND (pin 20) to its DGND (pin 40), as in every setup, and
+   pin 20 to the Labor's ground. Without a common ground
    the audio signal has no reference. With the Mac on USB and the Labor on its own supply you
    may hear hum (a ground loop). That is a nuisance, not a danger: a battery-powered laptop
    avoids it.
@@ -247,7 +275,8 @@ Do these in order. Stop at the first step that does not do what it says, and pas
 listed at the end.
 
 1. **The Seed alone on USB** (nothing else connected). An unflashed Seed3 runs whatever it came
-   with (Electrosmith usually ships a blink program).
+   with (Electrosmith usually ships a blink program). Check the header's orientation with a
+   multimeter now (section 4: pins 21 and 38 at 3.3 V, pins 20 and 40 at 0 V).
 2. **Install the Daisy bootloader**: `tools/daisy-flash.sh bootloader` (hold BOOT, tap RESET, let go
    of BOOT first). Expect: the LED pulses slowly; tapping RESET makes it pulse again for ~2.5 s.
 3. **Flash the firmware**: `tools/daisy-flash.sh`. Expect: LED steady for a moment, then
@@ -256,7 +285,8 @@ listed at the end.
    prints a report. Check: `[board] Daisy Seed3 (TAC5242 codec)`, `running from AXI SRAM
    (BOOT_SRAM, as intended)`, `[audio] RUNNING, 48000 Hz, block 96 frames`, `AUD now` some
    percent, `underruns ... 0`, `[mem] SDRAM ... ROM copy ... (ok ...)`, `[crash] no fault`.
-5. **Sound, measured first.** Connect the outputs (section 4), amplifier gain at minimum. On the
+5. **Sound, measured first.** Unplug USB, wire pin 20 (AGND) to pin 40 (DGND) (section 4), connect
+   the outputs, amplifier gain at minimum. On the
    **Labor Scope**, the hard-wired channel should show the demo: a busy waveform and, in its
    spectrum mode, energy from the low bass up to the hats. No signal there means nothing comes
    out of the Seed: check the wiring and the report's `[audio]` line before raising any gain.
@@ -264,15 +294,32 @@ listed at the end.
 6. **Keys from the Mac**: `tools/pg-daisy tap spc` stops the demo (the LED goes to two flashes a
    second); again starts it. `tools/pg-daisy mirror` opens a window with the screen. Its keyboard
    plays the device as the desktop app's does (F1 = G0). Without tkinter: `tools/pg-daisy keys`.
-7. **Pots** (if wired): turn pot 1 slowly across its range. Nothing happens until it passes the
-   macro's value, then the bass's first macro follows it (a `[pots]` line in the report shows
-   the positions and `engaged 1...`).
+7. **Pots** (if wired): they are off by default (unwired pins float). Switch them on, once (it
+   is saved):
+   ```sh
+   tools/pg-daisy pots on
+   ```
+   Turn pot 1 slowly across its range. Nothing happens until
+   it passes the macro's value, then the bass's first macro follows it (the report's `[pots]` line
+   shows `ON`, the positions and `engaged 1...`). With no pots wired, leave them off: the
+   `[pots]` line then says `OFF` and `macro moves 0`.
+7b. **The bench** (section 11), once the board plays (about a minute, the board restarts at the
+   end); **paste back** its `[bench]` lines:
+   ```sh
+   tools/pg-daisy bench
+   ```
+   Then compare the build variants (about 10 minutes; it builds, flashes and benches each) and
+   paste back its final table:
+   ```sh
+   tools/daisy-bench.sh
+   ```
 8. **Projects and samples**: `tools/pg ls` lists `_last` (the session autosave) once the UI has
    written it; `tools/pg push FILE.pgv` / `tools/pg pull NAME` work as on the Cardputer.
 9. **Power-cycle** (unplug, plug). The session comes back (the report's `[fs] boot load: loaded`).
 
 **Paste back if anything is off:** the output of `tools/pg-daisy report`; the boot log
-(`tools/pg-daisy log`, then send `l`, or `screen /dev/cu.usbmodem* 115200`, type `l`); `dfu-util -l`
+(`tools/pg-daisy log`, then send `l`, or `screen /dev/cu.usbmodem* 115200`, type `l`); the
+`[bench]` lines of `tools/pg-daisy bench`; `dfu-util -l`
 with the board in each mode; what the LED does; any `[crash]` line with the ELF it came from
 (`build/daisy/stage0/pocket-groove-daisy.elf`).
 
@@ -282,7 +329,8 @@ debug build with a probe (the Seed3 has pads for an SWD header).
 
 ### Stage 1, one part at a time
 
-Do stage 0 first. Then **unplug USB before every wiring change**, add one part, flash stage 1
+Do stage 0 first. Pin 20 (AGND) stays wired to pin 40 (DGND). Then **unplug USB before every
+wiring change**, add one part, flash stage 1
 (`make -C daisy STAGE=1`, `tools/daisy-flash.sh 1`) and check it before the next part. Wiring is
 in section 10. Each step: what you should see, and what to paste back if you do not.
 
@@ -350,8 +398,20 @@ One USB serial port carries everything, as on the Cardputer:
   (`battery`, `sd`, ...) are skipped, so `host/ui_scripts/*.txt` run unchanged:
   `tools/pg-daisy script host/ui_scripts/firstboot.txt` (its `shot` lines save PNGs into `./shots`).
 - **Letters**: `r` report, `h` help, `l` boot log, `f` one screen frame, `m` screen mirror on/off,
-  `p` pots on/off, `S` save /int to flash now, `B` then `y` restart into the Daisy bootloader,
-  `R` then `y` restart. A stats line comes every 5 s.
+  `p` pots on/off (saved; off by default), `S` save /int to flash now, `B` then `y` restart into
+  the Daisy bootloader, `R` then `y` restart. A stats line comes every 5 s.
+- **More commands** (`>` lines): `>pots on|off` (the pots, saved), `>bench [quick] [scene N]
+  [norestart]` (the on-device bench, section 11; `tools/pg-daisy bench` wraps it).
+- **Keys from the computer are never dropped** (since 2026-11-21): the key queue holds 256
+  commands, and while it is nearly full the firmware leaves the rest of the input in the USB
+  receive ring (136 KB) and reads it as the queue plays, so a burst waits instead of being lost
+  (`[keys] ... input held back N times`). A down for a key already held is ignored (`repeated
+  downs ignored`): a keyboard's auto-repeat never turns one held key into a stream of presses.
+  The mirror window sends one down and one up per physical press (it ignores Tk's auto-repeat,
+  both the repeated presses of macOS and the release + press pairs of X11). The owner's second
+  report showed `dropped 30` of 135 from the mirror: a burst (auto-repeat while a key was held,
+  or input arriving during a long main-loop pass) parsed in one pass, up to 4,096 bytes, into
+  a 128-command queue before the keys task could play any of it.
 - **The screen** comes back as `~PGF` lines: a frame's begin, the palette, one line per
   framebuffer row (base64), the end (`daisy/core/fb_stream.h`). A full frame is ~44 KB; the
   mirror sends only the rows the UI changed. It costs nothing while off.
@@ -396,7 +456,7 @@ From the real link (`make -C daisy size`, stage 0 at commit 515cf67 merged with 
 | D2 SRAM 0x30000000 | 32 KB | libDaisy's audio DMA buffers (not cached) | 16.3 KB | 15.7 KB |
 | D2 SRAM 0x30008000 | 256 KB | **the App**: Instrument (voices + Project, 71 KB), UI (19 KB), framebuffer (33 KB), transfer, file table | 128.6 KB | 127.4 KB |
 | D3 SRAM | 64 KB | the fault record (kept over a reset) | 40 B | |
-| ITCM | 64 KB | nothing yet (a tuning option: hot DSP code) | 0 | 64 KB |
+| ITCM | 64 KB | nothing in the default build; `ITCM=1`: the hot audio functions, 60 KB from 0x400 (section 11) | 0 | 64 KB |
 | SDRAM 0xC0000000 | 64 MB | the ROM part's copy (192 KB); /int's files (48 x 96 KB), its snapshot staging (1 MB); the sample pool's image (3.2 MB); the serial rings (136 KB); the line input's ring (128 KB, 1.37 s) | 9.1 MB | 55 MB |
 | QSPI 0x90000000 | 8 MB | see below | | |
 
@@ -588,6 +648,39 @@ Interrupt priorities are libDaisy's: the SAI DMA, USB, SPI, I2C and SDMMC interr
 priority 0, so none preempts another. A USB or SPI-DMA interrupt can delay the audio callback by
 its own length (microseconds), which a 2 ms block absorbs. The report's "late starts" counts
 callbacks that began more than 1.5 periods after the previous one.
+
+**The clocks (fixed 2026-11-21, after the owner's second report).** The report's task table read
+`max 4277071601us` for every task after a while: 2^32 minus 17,895,695. libDaisy's
+`System::GetUs()` is TIM2's 32-bit count divided by its ticks per microsecond (`src/per/tim.cpp`:
+`GetTick() / (GetFreq() / 1000000)`, TIM2 at 2 x PCLK1 = 240 MHz), so it does not wrap at 2^32 us
+(71 minutes) but jumps from 17,895,697 back to 0 every 17.9 s, and a difference taken across
+the jump is about 4.28 billion. The firmware's microsecond clock is now its own
+(`daisy/src/clock.cpp`, `daisy/core/us_clock.h`): it adds the TIM2 ticks since its previous
+reading (modulo 2^32, so the timer's wrap is an ordinary step), carries the remainder, and wraps
+at 2^32 us like any 32-bit clock; the main loop and every audio block read it, far more often
+than once per 17.9 s. `millis()` is the HAL's 1 kHz SysTick count (`HAL_GetTick`), a plain
+32-bit counter that wraps after 49.7 days; `cycles()` is the DWT cycle counter (480 MHz, wraps
+every 8.9 s), used only for the length of one block and the gap between two block starts. Every
+use was audited: all of them take unsigned differences or the signed reading of one ("is it
+due": the scheduler's due times, the key script's `>wait`, the pads' hand-over and pressure
+rate, the pots, the injected pads and touches, the autosave's quiet time, the transfer
+timeouts in the core, the IMU and touch polling), which are right across a wrap. What the
+17.9 s jump did besides the report: the scheduler's task and pass times, the UI frame time, the
+QSPI erase / write times and the ROM copy time (reports only), and in stage 1 the I2C bus
+guard's timing (a stalled bus's 1 s hold could end early, and a transaction spanning the jump
+read as slow). Nothing functional ran on `micros()` in stage 0: the scheduler, the keys and the
+UI run on `millis()`. `host/daisy/test_daisy_clock.cpp` checks the new clock against a 240 MHz
+counter across 45 of its wraps, and runs the whole App across the wraps of all three clocks
+(`daisy_sim --clock-wrap-in S` does the same with the computer tools).
+
+**The UI frame's longest (`[ui] frame ... max`).** The second report had `max 28585us` against
+an average of 624 us. It runs in the main loop, so it never delays the audio, only keys and pads
+by up to one frame. The report now says what that frame did (`that frame: a full redraw, /int
+changes N`). The candidates, from the code: a project or session load (the UI suspends the engine
+and waits for the audio thread's fade, copies and sanitizes the 67 KB Project, resumes), the
+session's autosave (2 s after a stop: the project encoded and written to /int), a full redraw at
+-Os (about 4 ms: the first report's `max 4165us`), all of them stretched by the audio interrupt
+taking its 28 % meanwhile.
 
 ## 10. Stage 1: the breadboard prototype
 
@@ -879,51 +972,257 @@ on the Labor Scope.
   that gap, as it does for the Cardputer's FAT card.
 - **Battery**: A4 through a divider. **Pots** stay as in stage 0.
 
-## 11. Audio load (an ESTIMATE, not a measurement)
+## 11. Audio load: the first measurements, the bench, the build variants
 
-From the two measured or counted figures in the repository:
-- **The Cardputer, measured on hardware**: AUD 41-50 % of one 240 MHz ESP32-S3 core at 44.1 kHz,
-  stereo (the USB audio build; jack-only mono ~30 %). That is roughly 108 M cycles/s, ~2450
-  cycles per frame. At 48 kHz the same work is 8.8 % more per second (per-frame cost is
-  unchanged, as measured by the 48 kHz core work: callgrind 2130 x86 instructions per frame for
-  the busy pattern in stereo either way).
-- **The x86 instruction counts** (callgrind, `docs/STATE.md` "48 KHZ CORE BUILT"): busy stereo
-  2130 instructions per frame, the demos 838-1093. At 1.0-1.6 Cortex-M7 cycles per x86
-  instruction and 480 MHz: busy 21-34 % of the core, the demos 8-18 %.
-- Scaling the Cardputer's measurement instead: an M7 needing 0.5-1.0x the LX7's cycles per frame
-  (dual issue, a full single-precision FPU, code in RAM instead of a flash cache) gives
-  **12-25 %** for what the Cardputer measured.
+### What the board measured (2026-11-21, MEASURED on the owner's Seed3)
 
-**Estimate: 10-35 % of the core, 0.2-0.7 ms of each 2 ms block**, depending on how busy the
-pattern is. The report's `AUD now / peak` and `longest block` will replace this number.
+**One report, ACIDJAM, 14 s after power-on, stage 0 built on macOS (Homebrew Arm GNU toolchain 14.x,
+commit 13e1469):** `AUD now 27.8%` of a 2 ms block, i.e. about 556 us per 96 frames, **about
+2,780 CPU cycles per frame**. The host's callgrind count for the same song in stereo is about
+1,076-1,093 x86 instructions per frame, so the board spent **about 2.5 cycles per x86
+instruction**, where this section's earlier estimate assumed 1.0-1.6 (it predicted 8-18 % for
+the demos, 21-34 % for the busy pattern). At that ratio the busy pattern (2,107 instructions per
+frame) would be above 50 %.
 
-What could make it worse:
-- **Code placement and the caches.** The audio path's code (engine 49 KB, lead 21, bass 28, drums
-  22, sampler 17 KB) runs from AXI SRAM through a 16 KB instruction cache. Its working set per
-  quantum is larger than that, so misses go to AXI SRAM (fast, but not zero wait). ITCM (64 KB,
-  unused) is the remedy for the hottest voices if the report shows it.
-- **Data.** The engine's state is in DTCM (no cache needed). The voices and the Project are in D2
-  SRAM, which is cached but further away than AXI. The lead wavetables are in AXI (40 KB against
-  a 16 KB data cache). The ROM sounds and the pool are in SDRAM (cached; misses cost tens of
-  cycles, but reads are mostly sequential).
-- **One core.** The UI, the display's strip expansion (a full 480x270 frame is ~130 k pixels), USB
-  and the flash writes all run on the same core as the audio. The audio interrupt preempts them,
-  so they take what the audio leaves: a heavy audio load slows the UI, not the reverse. The
-  exception is interrupts at the audio's priority (USB, SPI DMA), which add their own length to a
-  callback's start.
-- **Denormals (checked and changed 2026-11-14).** The FX tails decaying in silence produced
-  subnormal floats on the host. libDaisy does not touch FPSCR anywhere (its only FPU code is
-  `SystemInit`'s CP10/CP11 enable, which a `BOOT_APP` build skips), so the firmware ran with
-  flush-to-zero off. It now **sets FZ (bit 24) and DN (default NaN, bit 25)** in the preinit hook
-  (`daisy/src/memory.cpp`), before any constructor: in FPSCR (the main loop) and in FPU->FPDSCR,
-  the value the core gives an interrupt handler's FPSCR, so the audio callback gets them too. The
-  same hook enables CP10/CP11 again (harmless if the bootloader did). The audio callback reads its
-  own FPSCR, sets FZ / DN if they are missing and counts it; the report's `[fpu]` line shows the
-  main loop's, the callback's and FPDSCR, so the first power-on proves it. Effect on the sound:
-  values below 1.2e-38 become 0, about -750 dBFS. The M7 handles subnormals in hardware without a
-  trap, so the speed gain is likely small; the point is that both contexts compute the same way.
+**A second report, 12 minutes of uptime, the demo playing, the mirror window on (a 703.9 s
+window):** `AUD now 28.4% peak 40.7%, longest block 814us of 2000us, blocks 352087, late 0`.
+In that window the QSPI was erased twice (`longest erase 115741 us`, /int saved twice, `last save
+3088 B in 146 ms`, no failure) and 22 MB went out over USB to the mirror (44,024 packets): **not
+one late block**. So a 116 ms QSPI erase in the main loop does not disturb the audio, and
+saving to flash works on the real chip. Stack high-water 6,296 B of 25 KB.
+
+**The one long block: start-up only.** The first report had `longest block 3424us` (171 % of
+the period), one underrun and one late start; 12 minutes later these were still the only ones.
+What it was (host evidence, `daisy_sim`'s App with a fake clock under callgrind, and the
+firmware's code read): the **first block after boot** does the boot-time session load's
+audio-thread half. `Ui::boot` loads the session with the engine suspended; at `resume()` the
+engine, in the audio thread, sanitizes the whole Project (`sanitizeAll`, 67 KB read), clears
+the FX buffers (`Delay::reset`, `Reverb::reset`: 66 KB of DTCM), re-evaluates every track's
+instrument and starts the transport (stage 0's autoplay). On the host that first block is
+**621,000 x86 instructions against 146,000 for an average block: 4.3 times**; `sanitizeAll` alone
+is 58 % of it. On the board it ran with cold caches too (the code and the Project had never been
+in them): 6.2 times the average (3,424 / 556 us). The late start is its consequence: the next
+callback began when it ended, 1.71 periods after it began. Checked and ruled out as causes:
+interrupts at the same priority (libDaisy puts SAI DMA, USB, SPI, I2C, SDMMC at priority 0, so
+none preempts the audio callback: they can delay its start, never lengthen it, and the meter
+times inside the callback), critical sections (libDaisy masks interrupts only in its UART and
+SPI drivers, unused in stage 0; ours only for a few cycles in the microsecond clock), the ROM
+copy and the memory-mapped QSPI reads (all before the audio starts), the QSPI erases (shown
+harmless above), USB enumeration (the USB interrupt is short; at most a late start). The same
+audio-thread work comes with every project load (the UI suspends the engine, loads, resumes):
+then the output is fading anyway. A cheap fix, not made (it changes the boot): render one
+silent block in `main` before `StartAudio`, so the first interrupt block is an ordinary one.
+
+**The report now tells start-up from steady state.** The first 32 blocks (64 ms,
+`LoadMeter::kWarmupBlocks`, as on the Cardputer) are left out of the average, the peaks and
+the longest block; the warm-up's own longest block is shown apart, and the underrun and
+late-start counts say how many fell in it:
+(an example of the lines, with the board's figures:)
+```
+[audio] since boot: longest block 814us after the warm-up (the first 32 blocks: longest 3424us), blocks ..., underruns ... 1 (1 in the warm-up), late starts ... 1 (1 in the warm-up)
+[audio] late #1 at 0.412 s, block 0: 3424us (171% of the period), UNDERRUN, ...; warm-up, the first block after the audio started, the transport started, instruments re-evaluated, playing, USB not configured, main loop between tasks
+[audio] longest after the warm-up: at 312.504 s, block ...: 814us (40% of the period), ...; playing, a QSPI erase/write under way, main loop in task store
+```
+Every underrun and late start keeps a record (the first 4 for good, then the latest 4): the
+uptime since the firmware's boot, the block number, its duration, the gap since the previous
+block's start, and what was going on: the main-loop task it interrupted, whether a QSPI erase or
+write was under way, USB not configured, USB bytes arriving, the transport starting, instruments
+re-evaluated, a pot moving a macro, a key event. The longest block after the warm-up keeps its
+record too. So one pasted report says when, and probably why.
+
+### Why about twice the cycles (the analysis; nothing measured on the board yet)
+
+What is where today (from the link, `make -C daisy size`, and the bench's `code:` / `data:`
+lines on the board):
+
+| What | Size | Where | Touched |
+|---|---|---|---|
+| The audio path's code: engine 49 KB, bass 28, lead 21, drums 22, sampler 20 | ~140 KB | AXI SRAM, through the **16 KB instruction cache** | the hot ~55-60 KB of it every 16-frame quantum (all eight voices, the FX, the master) |
+| The engine's state block: delay 36 KB, reverb 30 KB, queue, sequencer, mixer | 77 KB | DTCM (zero wait, no cache) | per sample |
+| The Instrument: the voices' state (4.7 KB) and the Project (67 KB) | 72 KB | D2 SRAM (cached, further from the core than AXI) | voices per sample (small enough to stay in the 16 KB D-cache); the Project per quantum and per step |
+| The voices' tables: lead wavetables 38.5 KB, bass sine + BLEP 4.3 KB | 43 KB | AXI SRAM (cached) | per sample while a lead / bass plays |
+| The ROM sounds, the sample pool | 138 KB, 3.2 MB | SDRAM (cached) | per sample while a sampler plays, sequentially |
+| DMA buffers, stack | 16 KB, 25 KB | D2 SRAM (not cached), DTCM | per block |
+
+The leading suspect is the **instruction side**: the hot code per quantum is about four times
+the I-cache, so it is refetched from AXI SRAM every quantum. 55 KB is about 1,700 cache-line
+fills a quantum; at an assumed 10-20 core cycles each that is 1,100-2,100 cycles per frame,
+the size of the gap between the measured 2,780 and what the instruction count alone suggests.
+The data side is mostly in DTCM already, and the voices' working state fits the D-cache.
+Everything the interrupt does besides the engine is small: the output level and clamp over 192
+samples and libDaisy's two conversions are about 10-20 cycles per frame together (the bench
+measures the first as `out`), the pad scan (stage 1) a few microseconds, the meter a handful of
+cycles. The bench below measures the cost with the caches emptied before every block (`cold`)
+next to the normal one, which shows how much of it is cache refills.
+
+**The host's profile** (`build/host/daisy/daisy_bench_ref --profile daisy/itcm_profile.txt`:
+callgrind's self cost per function over the bench's five scenes, the core built as on the
+Daisy): the reverb's `run` 22 %, the engine's `renderF` (the mixer) 13 %, the lead's voice loop
+9 %, the master bus 8 %, the hats 6 %, the master's rumble filter 4 %, the kick 4 %, the bass
+loops 3-4 % each, the delay 3 %, the sequencer tick 2 %, ...; 69 functions carry all of it.
+
+### The bench (one command; the numbers mean what the interrupt sees)
+
+```sh
+tools/pg-daisy bench
+```
+About a minute; the sound stops meanwhile and **the board restarts at the end** (the session
+is saved first and comes back as after a power cycle). Paste back everything it prints (the
+`[bench]` lines). `tools/pg-daisy bench quick` is a few seconds with short spans (a first look),
+`tools/pg-daisy bench scene 4` one scene; `--file FILE` also writes the lines to a file.
+
+How it runs (`daisy/app/bench.h`): **inside the audio interrupt**, one bench block per
+callback, the live output muted, so it is the same code, optimisation, memory placement,
+interrupt context and 2 ms rhythm as playing. The main loop meanwhile only serves the serial
+port (the UI must not see or save the bench's projects), so the caches are a little warmer
+than with the UI running: compare the bench's ACIDJAM with the live `AUD` it prints first. The
+scenes are deterministic: **idle** (the engine stopped), **ACIDJAM, BASSHAUS, WAREHOUS** (each ROM
+demo's song from its start) and **busy** (host/tools/bench_instrument's busy pattern: all eight
+tracks, ratchets, p-locks, every send, the master's filter and drive), at 48 kHz stereo through
+`processFloat`. Per scene: 1,000 blocks of warm-up (2 s, as bench_instrument), 2,000 measured
+one by one (min, average, max), 250 more with both caches emptied before each (`cold`), then the
+scene again with every voice behind a cycle timer for the split (drums, bass, lead, sampler;
+the engine's own share, sequencer, mixer, FX and master, is the rest).
+
+What it prints first: the build (variant, flags, compiler), the caches (`SCB->CCR`: I-cache,
+D-cache, branch prediction; `ITCMCR`, `DTCMCR`; CPU and AXI clock), where the audio code sits
+(`Engine::processFloat`, `Reverb::run`, `LeadVoice::render`, `BassVoice::render`,
+`HatVoice::render` with their addresses and regions, the bytes in ITCM) and where its data sits
+(the engine's state, the Instrument, the voice tables, the stack). Then the table:
+```
+[bench] scene      cyc/fr     min     max  load%  max_us    cold   out host_Ir cyc/Ir | drums  bass  lead  smpl engine
+[bench] ACIDJAM      ....     ...     ...   ..       ...    ....    ..    1076   ..   |   ..%   ..%   ..%   ..%    ..%
+```
+`cyc/fr` cycles per frame over the measured blocks, `min` / `max` the cheapest and dearest
+block (per frame), `load%` that average against a 2 ms block, `max_us` the dearest block,
+`cold` the same with emptied caches, `out` the output stage, `host_Ir` the host's x86
+instructions per frame for the same scene and blocks (`daisy/app/bench_ref.h`, written by
+`build/host/daisy/daisy_bench_ref --header`), `cyc/Ir` their ratio (the figure the old
+estimate had to guess), then the split in percent of its own pass (the timers cost a little,
+two cycle-counter reads per voice call).
+
+### The build variants, and how to compare them on the board
+
+Each is a `make -C daisy` option, off by default (the default build is today's), builds for
+both stages with zero warnings, and builds into its own directory (`build/daisy/stage0-itcm/`,
+...). EXPECTATIONS, not measurements:
+
+| Variant | Make options | What changes | Expected on the board |
+|---|---|---|---|
+| `base` | (none) | today's build | the reference |
+| `itcm` | `ITCM=1` | the hot audio functions (`tools/daisy_itcm.py` picks them from the host profile by cost per byte, then adds the ARM functions they call: 67 functions, 60 KB, carrying 99.8 % of the profiled per-frame cost on the host's count) run from ITCM: zero-wait fetches that never touch the I-cache | **the most likely win**: if the I-cache refills explain the gap, ACIDJAM from ~2,780 to roughly 1,300-1,900 cycles per frame (30-50 % less); `cold` close to the normal figure |
+| `itcm-align` | `ITCM=1 ALIGN=1` | and the audio path's functions aligned to 32 bytes, loops to 16 | 0-5 % on top of `itcm`; image +7.5 KB |
+| `itcm-O3part` | `ITCM=1 AUDIO_OPT=-O3 AUDIO_OPT_FILES="lead/lead drums/%"` | and the lead and the drums at -O3 | -5 % to +5 %: more unrolling, but code that may push others out of the ITCM list |
+| `dtcm` | `TABLES=dtcm` | the bass's sine and BLEP tables (4.3 KB) in DTCM | 0-2 %: those tables most likely stay in the D-cache anyway |
+| `align` | `ALIGN=1` | alignment alone, code in AXI SRAM | 0-5 % |
+
+Image sizes (MEASURED, `make`'s daisy_size line, arm-none-eabi-gcc 13.2.1 in the sandbox; the
+owner's 14.x makes them about 5 KB smaller), of 491,520:
+
+| Variant | Stage 0 | Stage 1 |
+|---|---|---|
+| base | 430,176 (59.9 KB free) | 461,680 (29.1 KB free) |
+| itcm | 430,780 | 462,284 |
+| itcm-align | 438,284 | 469,892 |
+| itcm-O3part | 436,908 | 468,412 |
+| dtcm | 430,172 | 461,676 |
+| align | 437,684 | 469,292 |
+
+(The base build grew by 9.3 KB in both stages with this work: the bench, the late-block
+records, the clock, the key handling; the bench's and the late-block records' text went into the ROM part (with the ROM part missing they print empty lines), 215,616 / 223,808
+bytes now. Before: 420,848 and 452,480.)
+
+Why not more: **-O3 on the whole audio path does not fit** (+105 KB measured: `engine.cpp` 43 ->
+89 KB, `bass.cpp` 30 -> 56 KB); `AUDIO_OPT_FILES` limits it to named objects. **The lead's
+wavetables do not fit in DTCM** next to the engine's 77 KB state and the stack (measured: 19 KB
+over). **The Instrument into AXI SRAM** does not fit stage 1 (72 KB against the ~57 KB left there).
+The ITCM's code is loaded from the image by the preinit hook (its load address is in the image,
+so the image does not shrink; moving it into the ROM part is section 15's later space win), from
+1 KB on (a write through a null pointer lands in nothing that runs). Calls between ITCM and AXI
+SRAM go through linker veneers (76 in stage 0). The ITCM list is made at build time from the
+committed profile (`daisy/itcm_profile.txt`) and a first link without ITCM (the ARM sizes), so it
+follows the code; regenerate the profile when the engine changes:
+```sh
+cmake --build build/host --target daisy_bench_ref
+build/host/daisy/daisy_bench_ref --profile daisy/itcm_profile.txt
+build/host/daisy/daisy_bench_ref --header > daisy/app/bench_ref.h
+```
+
+**One script compares them** (it builds each variant, flashes it, runs the bench, and prints one
+table; the board must be running Pocket Groove and be on USB):
+```sh
+tools/daisy-bench.sh
+```
+About 2 minutes per variant (build, flash, boot, a minute of bench, the restart). It tries
+`base itcm itcm-align itcm-O3part dtcm` in that order, most likely win first; `tools/daisy-bench.sh
+base itcm` runs only those, `--quick` short spans, `--stage 1` stage 1 builds. It ends with a table
+of cycles per frame per scene and variant (warm, cold and the dearest block, each with its change
+against `base`); the same is in `build/daisy/bench/compare.txt`, and each run's lines in
+`build/daisy/bench/<variant>.txt`. **Paste back the final table** (and, if anything looks odd,
+the `.txt` of that variant). The board is left running the last variant; to put the base build
+back:
+```sh
+tools/daisy-flash.sh
+```
+**A variant that does not boot** (a fault, or a hang): the script says `<variant> DID NOT ANSWER
+within 30 s after flashing` and goes on with the next variant, whose flash brings the board back.
+What you see on the board: after a fault the board resets by itself (the fault handler), and
+each reset passes through the Daisy bootloader's 2.5 s grace period (the LED pulses), which the
+next flash uses; after a hang the LED stays steady and the flash script asks you to tap RESET.
+By hand, the one command that recovers (tap RESET when it asks; pressing BOOT while the LED
+pulses keeps the bootloader waiting):
+```sh
+tools/daisy-flash.sh
+```
+A crashed variant's next report has its `[crash]` line: send it with the variant's name (its
+ELF is `build/daisy/stage0-<variant>/pocket-groove-daisy.elf`).
+
+What could go wrong with each, on the board: `itcm`: a function in ITCM called before the
+preinit hook loads it (none is: the list is audio-path code, and memcpy / memset are never
+chosen), the ITCM not enabled at reset (the bench's `ITCMCR` shows bit 0), a veneer the linker
+got wrong (all are linker-generated); any of these would fault at the first audio block (the
+`[crash]` pc would be in 0x0000xxxx). `align`: none beyond a bigger image. `O3part`: none in
+principle (the same code, optimised harder), but a compiler difference shows only in the sound:
+listen once. `dtcm`: none (the tables are copied before any constructor).
+
+### Denormals (checked and changed 2026-11-14; MEASURED on the board 2026-11-21)
+
+The FX tails decaying in silence produced subnormal floats on the host. libDaisy does not touch
+FPSCR anywhere (its only FPU code is `SystemInit`'s CP10/CP11 enable, which a `BOOT_APP` build
+skips), so the firmware ran with flush-to-zero off. It now **sets FZ (bit 24) and DN (default
+NaN, bit 25)** in the preinit hook (`daisy/src/memory.cpp`), before any constructor: in FPSCR
+(the main loop) and in FPU->FPDSCR, the value the core gives an interrupt handler's FPSCR, so
+the audio callback gets them too. The audio callback reads its own FPSCR, sets FZ / DN if they
+are missing and counts it. **The board's first report:** `FPSCR main loop 0x83000010, audio
+interrupt 0x83000010, FPDSCR 0x03000000: flush-to-zero on, default NaN on; the interrupt had to set
+them 0 times`. Effect on the sound: values below 1.2e-38 become 0, about -750 dBFS.
 
 ## 12. What is verified, what only the hardware can show
+
+**Verified on hardware** (the owner's Daisy Seed3, stage 0 built on macOS with the Homebrew Arm
+GNU toolchain 14.x, commit 13e1469; two reports, 2026-11-21: 14 s and 12 minutes after power-on):
+- **It boots, first try, from BOOT_SRAM with the Daisy bootloader v6.1 or later**: `running from
+  AXI SRAM (BOOT_SRAM, as intended); Daisy bootloader v6.1 or later; CPU 480 MHz`. The image the
+  bootloader copies (415,472 B with that compiler) runs as linked.
+- **The board is detected as the Seed3 with its TAC5242 codec** (`CheckBoardVersion`), and the
+  audio runs with libDaisy's reset-only codec setup: `[audio] RUNNING, 48000 Hz, block 96 frames`,
+  the demo's output peak -3 dBFS reaching the codec's buffer.
+- **USB CDC on macOS**: configured, no driver, `tools/pg-daisy report` works; 22 MB to the mirror
+  in 12 minutes without a dropped byte (`tx 22473568 B in 44024 packets (dropped 0)`).
+- **Flush-to-zero and default NaN in both contexts**: `FPSCR main loop 0x83000010, audio interrupt
+  0x83000010, FPDSCR 0x03000000 ... the interrupt had to set them 0 times`.
+- **The ROM part's copy**: `ROM copy 208 KB (ok, copied in 3653 us)` (the marker matched: the
+  whole .bin was flashed and read back from QSPI correctly).
+- **Memory as laid out**: `.data 1668 B, .bss 104060 B` in DTCM, D2 SRAM `DMA buffers 16 of 32 KB;
+  statics 136 KB`, SDRAM `buffers 9164 KB`, all as the link says.
+- **Stack**: 25,340 B, at most 4,016 B used after 14 s, 6,296 B after 12 minutes with the mirror.
+- **Saving to the QSPI flash** while the audio plays: two /int saves (`last save 3088 B in
+  146 ms`), the longest erase 115,741 us, no failure, and no late audio block meanwhile.
+- **The audio load** (section 11): ACIDJAM 27.8-28.4 % average, 40.7 % peak over 12 minutes;
+  one start-up block of 3,424 us (the only underrun), explained in section 11.
+- Found on the board and fixed since (section 9): libDaisy's `System::GetUs()` wraps every
+  17.9 s (the report's task times read as 4.28 billion us); the unwired pots moved the macros
+  (now off by default); keys from the mirror were dropped in bursts.
 
 Verified here (sandbox, no hardware):
 - The firmware compiles and links for the STM32H750 with arm-none-eabi-gcc 13.2.1, stages 0 and 1,
@@ -962,12 +1261,12 @@ Verified here (sandbox, no hardware):
   (search results quoting SLASF27A; the PDF itself was not opened here).
 - The Cardputer firmware and the host build are untouched and pass (`docs/STATE.md`).
 
-Only the hardware can show: that the board boots (clocks, SDRAM, QSPI init in BOOT_SRAM), that
-the TAC5242 plays with libDaisy's reset-only codec setup, the real audio load, USB CDC on a Mac
-(enumeration, throughput, no lost bytes), QSPI erase/write timing and its effect on the main
-loop, the ADC's pots (noise, range), the LED patterns, stage 1's panel, touch, card, IMU and
-timing, the force sensors' real curves and the pads' latency, the line input's level and noise,
-the [fpu] line, and any interrupt-priority effects.
+Only the hardware can show (still open): the bench's numbers and which build variant is faster
+(section 11), the ADC's pots with real pots (noise, range), the LED patterns, the power-cycle
+persistence of /int on the real flash (saves were seen to work; a reload after a power cut not
+yet reported), stage 1's panel, touch, card, IMU and timing, the force sensors' real curves and
+the pads' latency, the line input's level and noise, and any interrupt-priority effects beyond
+the ones the reports above rule out.
 
 ## 13. libDaisy facts relied on, and assumptions not verified
 
@@ -1075,8 +1374,9 @@ Risks for the first power-on, most likely first:
    TX ring are there for this.
 3. **No or distorted sound from the Seed3's TAC5242**: libDaisy treats it like the AK4556. The
    wiring into the amplifier (levels, ground) is the more likely cause.
-4. **Audio load higher than estimated** (caches, D2 latency): underruns in the report. Remedies:
-   ITCM for hot code, engine state stays in DTCM, voices into AXI.
+4. **Audio load higher than estimated**: confirmed (2026-11-21: about 2.5 cycles per x86
+   instruction, ACIDJAM 28 %, section 11). The bench and the build variants (ITCM first) are there
+   to bring it down.
 5. **QSPI writes misbehaving** (a block erase leaving the mapping off, timing). This shows up
    as `[qspi]` failures or a /int that does not survive a power cycle. The snapshots and the CRCs
    keep the previous state safe.
@@ -1116,7 +1416,7 @@ Industries. If the table is treated as copyrightable, the notice to carry is Ada
 by Limor "ladyada" Fried for Adafruit Industries. BSD license, all text here must be included in
 any redistribution."
 
-## 15. More code space later (analysis, nothing built)
+## 15. More code space later (analysis; option 1's speed half is built as ITCM=1, section 11)
 
 The 480 KB the bootloader copies is the limit that will bind as engines and features grow (stage
 1 has 38 KB left after section 7's move). The options, with what libDaisy's source at 1289a00

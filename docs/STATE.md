@@ -1,4 +1,44 @@
-# Work state (2026-11-14)
+# Work state (2026-11-21)
+
+THE FIRST SEED3 RUNS (2026-11-21, owner's board, stage 0 from commit 13e1469 built on macOS with
+the Homebrew Arm GNU toolchain 14.x; MEASURED on hardware, two reports). It booted first try from
+BOOT_SRAM with the Daisy bootloader v6.1+, detected as the Seed3 (TAC5242), 480 MHz, image 415,472
+B; USB CDC works (22 MB to the mirror in 12 minutes, 0 dropped); flush-to-zero and default NaN on
+in both contexts (FPSCR 0x83000010 in the main loop and the interrupt, FPDSCR 0x03000000, 0 fixes);
+the ROM part's copy ok (208 KB in 3,653 us); stack high-water 4,016 B after 14 s, 6,296 B after 12
+min; two /int saves to the QSPI (3,088 B in 146 ms, longest erase 115,741 us) with no late audio
+block. AUDIO LOAD: ACIDJAM 27.8 % at 14 s (about 2,780 cycles per frame, about 2.5 cycles per x86
+instruction of the host's 1,076-1,093: docs/DAISY.md section 11's old estimate assumed 1.0-1.6),
+28.4 % average and 40.7 % peak over 12 minutes, longest block 814 us; the only underrun was the
+first block after boot (3,424 us, 171 %, plus the late start it caused): the boot-time session
+load's audio-thread half (sanitizeAll of the Project, the FX buffers cleared, every instrument
+evaluated, Play), 4.3x an average block's instructions on the host, with cold caches on the board.
+Found on the board and fixed on the branch of this work (daisy/, host/daisy/, tools/, docs only;
+lib/pg untouched): (1) libDaisy's System::GetUs() is TIM2 / 240 and wraps every 17.9 s (the task
+table read "max 4277071601us"): the firmware's micros() is its own now (daisy/core/us_clock.h,
+daisy/src/clock.cpp), every time use in daisy/ audited (all modular; the I2C guard in stage 1 was
+the functional victim), test_daisy_clock runs the App across the wraps of millis, micros and
+cycles; (2) unwired pots moved the macros (5,436 moves in 12 min): the pots are OFF unless
+switched on, a saved setting (settings v3; 'p', >pots on|off, tools/pg-daisy pots); (3) keys
+from the mirror were dropped (30 of 135): the key queue is 256, the serial input waits in the
+USB ring while it is nearly full (nothing dropped: test_daisy_keys sends 4x the queue at once),
+a down of a held key is ignored, the mirror filters Tk's auto-repeat. NEW: the on-device bench
+(tools/pg-daisy bench: inside the audio interrupt, output muted, idle / the three demos / the
+busy pattern, cycles per frame min/avg/max, cold caches, the output stage, a split by part, the
+ratio to the host's callgrind count from daisy/app/bench_ref.h; then a restart) with the build,
+SCB->CCR and where the code and data sit; the load meter's warm-up (32 blocks) and a record per
+late block with its context; build variants (make -C daisy ITCM=1 [the hot 60 KB, 99.8 % of the
+host profile, chosen by tools/daisy_itcm.py from daisy/itcm_profile.txt], ALIGN=1, AUDIO_OPT=-O3
+AUDIO_OPT_FILES=..., TABLES=dtcm; all default off) and tools/daisy-bench.sh, which builds,
+flashes, benches each and prints one table. NOTHING OF THE NEW CODE HAS RUN ON THE BOARD. Expected
+(not measured): ITCM the big one (I-cache refills of ~55 KB of hot code per quantum against a
+16 KB cache would explain the factor), the others a few percent. Sizes (sandbox gcc 13.2): base
+stage 0 430,176 / stage 1 461,680 B (+9.3 KB); every variant fits both stages, zero warnings.
+Host 121/121 (new test_daisy_clock, test_daisy_keys); tools/test_pg_daisy.py (bench, pots, clock
+wrap, key filter); Cardputer unchanged (flash 1,336,235, RAM 202,284). docs/DAISY.md sections 4
+(ground pins 20-40 joined, the multimeter check), 5, 6, 9 (clocks, keys, the UI frame), 11
+(rewritten), 12 (verified on hardware).
+
 
 DIRECTION (owner, 2026-11-14): THE TARGET IS A PURPOSE-MADE DEVICE ON AN ELECTROSMITH DAISY SEED
 (STM32H750, 480 MHz, 64 MB SDRAM, PCM3060 / TAC5242 stereo codec, 48 kHz). The Cardputer is no
