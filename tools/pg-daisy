@@ -3,13 +3,45 @@
 #   tools/pg-daisy report | log | tap KEY | script FILE | shot FILE.png | mirror | keys | bootloader
 # Needs Python 3 with pyserial. PlatformIO's own Python has it, so that one is
 # preferred (Homebrew Python refuses `pip install` system-wide); otherwise python3.
+# The mirror window also needs tkinter, which PlatformIO's Python does not have and
+# Homebrew's gets from `brew install python-tk`: so for `mirror` a Python with BOTH is
+# looked for first (a virtualenv at ~/.venvs/pg is tried; the message below makes one).
 here=$(cd "$(dirname "$0")" && pwd)
-for py in "${PG_PYTHON:-}" "$HOME/.platformio/penv/bin/python" python3; do
-  [ -n "$py" ] || continue
-  if command -v "$py" >/dev/null 2>&1 && "$py" -c 'import serial' >/dev/null 2>&1; then
+
+# pick NEED_TK: the first candidate with pyserial (and tkinter when NEED_TK is 1).
+pick() {
+  for py in "${PG_PYTHON:-}" "$HOME/.venvs/pg/bin/python" "$HOME/.platformio/penv/bin/python" python3; do
+    [ -n "$py" ] || continue
+    command -v "$py" >/dev/null 2>&1 || continue
+    "$py" -c 'import serial' >/dev/null 2>&1 || continue
+    if [ "$1" = 1 ]; then
+      "$py" -c 'import tkinter' >/dev/null 2>&1 || continue
+    fi
+    echo "$py"
+    return 0
+  done
+  return 1
+}
+
+if [ "${1:-}" = mirror ]; then
+  if py=$(pick 1); then
     exec "$py" "$here/pg_daisy.py" "$@"
   fi
-done
+  cat >&2 <<'MSG'
+pg-daisy: the mirror window needs a Python that has both pyserial and tkinter.
+  PlatformIO's Python has pyserial but no tkinter; Homebrew's has tkinter (after
+  `brew install python-tk`) but no pyserial. Make one that has both, once:
+      brew install python-tk
+      $(brew --prefix)/bin/python3 -m venv --system-site-packages ~/.venvs/pg
+      ~/.venvs/pg/bin/pip install pyserial
+  then run `tools/pg-daisy mirror` again (it finds ~/.venvs/pg by itself).
+  Falling back to the terminal keyboard now.
+MSG
+fi
+
+if py=$(pick 0); then
+  exec "$py" "$here/pg_daisy.py" "$@"
+fi
 cat >&2 <<'MSG'
 pg-daisy: no Python 3 with pyserial found.
   PlatformIO's Python has it: install PlatformIO (pip install platformio, or the VS Code
