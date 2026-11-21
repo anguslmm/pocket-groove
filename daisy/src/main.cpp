@@ -25,6 +25,8 @@
 #include "../app/app.h"
 #include "../core/layout.h"
 #include "../core/pins.h"
+#include "bench_info.h"
+#include "clock.h"
 #include "daisy_seed.h"
 #include "memory.h"
 #include "qspi_flash.h"
@@ -117,6 +119,7 @@ void audioCallback(daisy::AudioHandle::InterleavingInputBuffer in, daisy::AudioH
     __set_FPSCR(fpscr | kFpscrFzDn);
     g_isrFpscrFixes = g_isrFpscrFixes + 1;
   }
+  (void)pgdev::clock::micros();   // keeps the microsecond clock's count fresh (clock.h)
   const int frames = static_cast<int>(size / 2);
   if (frames > static_cast<int>(kBlock) || frames % 16) {   // not a block the engine renders: silence
     for (size_t i = 0; i < size; ++i) out[i] = 0.0f;
@@ -131,8 +134,9 @@ void audioCallback(daisy::AudioHandle::InterleavingInputBuffer in, daisy::AudioH
 uint32_t uptimeMs() { return daisy::System::GetNow(); }
 
 struct DaisyHal final : pgd::Hal {
+  uint32_t lastRx_ = 0;
   uint32_t millis() override { return daisy::System::GetNow(); }
-  uint32_t micros() override { return daisy::System::GetUs(); }
+  uint32_t micros() override { return pgdev::clock::micros(); }   // not GetUs: clock.h
   uint32_t cycles() override { return DWT->CYCCNT; }
   uint32_t cpuHz() override { return HAL_RCC_GetSysClockFreq(); }
   void serialWrite(const char* p, size_t n) override { pgdev::usbserial::write(p, n); }
@@ -188,6 +192,20 @@ struct DaisyHal final : pgd::Hal {
     return PG_DAISY_STAGE == 0 ? "stage 0 (Seed + line out, USB control, pots)" : "stage 1 (breadboard prototype)";
   }
   void service(uint32_t nowMs) override { pgdev::stage1::service(nowMs); }
+  uint16_t contextFlags() override {   // the audio interrupt: cheap reads
+    uint16_t f = 0;
+    if (pgdev::qspiBusy()) f |= pgd::LoadMeter::kFlagQspi;
+    if (!pgdev::usbserial::configured()) f |= pgd::LoadMeter::kFlagUsbDown;
+    const uint32_t rx = pgdev::usbserial::rxCount();
+    if (rx != lastRx_) f |= pgd::LoadMeter::kFlagSerialRx;
+    lastRx_ = rx;
+    return f;
+  }
+  void flushCaches() override {   // the bench's cold pass (audio interrupt)
+    SCB_CleanInvalidateDCache();
+    SCB_InvalidateICache();
+  }
+  void benchInfo(pgd::LineFn fn, void* user) override { pgdev::benchInfo(fn, user, &g_app.instrument()); }
   void reportLines(pgd::LineFn fn, void* user) override {
     char l[400];
     std::snprintf(l, sizeof(l), "[board] %s; running from %s; Daisy bootloader %s; CPU %lu MHz; libDaisy %s",
@@ -276,6 +294,7 @@ int main() {
   // 480 MHz (libDaisy's Boost: VOS0). Also brings up SDRAM, QSPI (memory-mapped),
   // the codec and SAI1, the LED.
   g_hw.Init(true);
+  pgdev::clock::begin();
   g_hw.SetLed(true);
   pgdev::memory::setUptimeHook(uptimeMs);
   g_fault = pgdev::memory::lastFault();

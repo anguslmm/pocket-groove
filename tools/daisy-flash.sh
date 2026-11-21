@@ -8,6 +8,8 @@
 #                                     serial port is asked to restart into the bootloader;
 #                                     otherwise tap RESET (then the bootloader waits 2.5 s:
 #                                     press BOOT during that time to make it wait forever)
+#   tools/daisy-flash.sh FILE.bin     that firmware file (a build variant: build/daisy/stage0-itcm/
+#                                     pocket-groove-daisy.bin, tools/daisy-bench.sh), the same way
 #   tools/daisy-flash.sh list         what dfu-util sees
 # Needs dfu-util (macOS: brew install dfu-util). Both DFU modes show as USB 0483:df11;
 # the script tells them apart by the memory layout dfu-util lists, so the bootloader
@@ -67,13 +69,19 @@ case "${1:-0}" in
   0 | 1)
     stage=${1:-0}
     ;;
+  *.bin)
+    bin=$1
+    [ -f "$bin" ] || { say "no such file: $bin"; exit 1; }
+    ;;
   *)
-    sed -n '2,15p' "$0"
+    sed -n '2,17p' "$0"
     exit 2
     ;;
 esac
 
+if [ -z "${bin:-}" ]; then
 bin="$here/build/daisy/stage$stage/pocket-groove-daisy.bin"
+fi
 if [ ! -f "$bin" ]; then
   say "no $bin: building it (make -C daisy STAGE=$stage)"
   make -C "$here/daisy" STAGE="$stage" -j4 >/dev/null

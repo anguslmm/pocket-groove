@@ -135,9 +135,10 @@ void testKeyScript() {
   // Full queue: the command is dropped and counted.
   KeyScript f;
   int queued = 0;
-  for (int i = 0; i < 200; ++i) queued += f.parse("wait 1") == KeyScript::Parse::Queued ? 1 : 0;
+  for (int i = 0; i < 300; ++i) queued += f.parse("wait 1") == KeyScript::Parse::Queued ? 1 : 0;
   CHECK_EQ(queued, KeyScript::kQueue);
-  CHECK_EQ(f.dropped(), 200u - KeyScript::kQueue);
+  CHECK_EQ(f.dropped(), 300u - KeyScript::kQueue);
+  CHECK_EQ(f.room(), 0);
   CHECK(f.parse("tap q") == KeyScript::Parse::Full);
   // The desktop's padjob key (F4): one key id more than the Cardputer's.
   KeyScript j;
@@ -145,10 +146,22 @@ void testKeyScript() {
   CHECK(j.parse("down padjob") == KeyScript::Parse::Queued);
   CHECK(j.parse("tap F4") == KeyScript::Parse::Queued);
   j.step(0, collect, nullptr);
-  CHECK(g_ev.size() == 2u && g_ev[0].key == KeyScript::kKeyPadJob && g_ev[0].down);
+  // the tap's down is a key already held: ignored as a repeat (no second press)
+  CHECK(g_ev.size() == 1u && g_ev[0].key == KeyScript::kKeyPadJob && g_ev[0].down);
+  CHECK_EQ(j.repeats(), 1u);
   CHECK(j.held() == (1ull << KeyScript::kKeyPadJob));
   j.releaseAll(10, collect, nullptr);
   CHECK(j.held() == 0 && !g_ev.back().down && g_ev.back().key == KeyScript::kKeyPadJob);
+  // Auto-repeat from a client: down down down ... up is one press and one release.
+  KeyScript r;
+  g_ev.clear();
+  CHECK(r.parse("down q") == KeyScript::Parse::Queued);
+  for (int i = 0; i < 20; ++i) CHECK(r.parse("down q") == KeyScript::Parse::Queued);
+  CHECK(r.parse("up q") == KeyScript::Parse::Queued);
+  r.step(0, collect, nullptr);
+  CHECK_EQ(g_ev.size(), 2u);
+  CHECK(g_ev[0].down && !g_ev[1].down && g_ev[0].key == q && g_ev[1].key == q);
+  CHECK_EQ(r.repeats(), 20u);
 }
 
 void testSerialLink() {
@@ -189,27 +202,70 @@ void testLoadMeter() {
   const uint32_t hz = 480000000u, period = hz / 500u;   // 2 ms blocks
   m.configure(hz, period);
   uint32_t t = 0;
-  for (int i = 0; i < 1000; ++i) {
+  // The first block as on the first Seed3: 171 % of its period (the session's one-time
+  // work, cold caches), then a late start for the next one. Both in the warm-up.
+  LoadMeter::Context c0;
+  c0.flags = LoadMeter::kFlagFirstBlock | LoadMeter::kFlagPlayStart;
+  m.begin(t);
+  m.end(t + period * 171 / 100, c0, 412);
+  t += period * 171 / 100;
+  for (int i = 1; i < 1000; ++i) {
     m.begin(t);
     m.end(t + period / 4);   // 25 %
     t += period;
   }
-  CHECK(m.nowPermille() >= 245 && m.nowPermille() <= 255);
+  CHECK(m.nowPermille() >= 245 && m.nowPermille() <= 255);   // the warm-up is not in the average
+  CHECK_EQ(m.overruns(), 1u);
+  CHECK_EQ(m.warmupOverruns(), 1u);
+  CHECK_EQ(m.lateStarts(), 1u);   // the next block started 1.71 periods later, as on the board
+  CHECK_EQ(m.warmupLateStarts(), 1u);
+  CHECK(m.warmupMaxUs() >= 3419u && m.warmupMaxUs() <= 3421u);
+  CHECK_EQ(m.bootMaxUs(), 500u);                               // the longest after the warm-up
+  LoadMeter::Window w0 = m.takeWindow();
+  CHECK(w0.peakPermille >= 249u && w0.peakPermille <= 251u);   // the warm-up is not a peak either
+  CHECK_EQ(w0.blocks, 1000u);
   // One block over its period, one late start.
+  LoadMeter::Context c1;
+  c1.task = 4;
+  c1.flags = LoadMeter::kFlagQspi;
   m.begin(t);
-  m.end(t + period + 10);
+  m.end(t + period + 10, c1, 5000);
   t += period * 2;   // a missed slot: 2 periods since the last start
   m.begin(t);
-  m.end(t + 10);
+  m.end(t + 10, LoadMeter::Context{}, 5004);
   const LoadMeter::Window w = m.takeWindow();
-  CHECK_EQ(m.overruns(), 1u);
-  CHECK_EQ(m.lateStarts(), 1u);
+  CHECK_EQ(m.overruns(), 2u);
+  CHECK_EQ(m.lateStarts(), 2u);
+  CHECK_EQ(m.warmupLateStarts(), 1u);
   CHECK_EQ(w.late, 2u);
   CHECK(w.peakPermille >= 1000u);
-  CHECK_EQ(w.blocks, 1002u);
+  CHECK_EQ(w.blocks, 2u);
   CHECK_EQ(m.periodUs(), 2000u);
   CHECK(w.maxUs >= 2000u);
   CHECK_EQ(m.takeWindow().blocks, 0u);
+  // The records: the warm-up's underrun and late start, the underrun with its context,
+  // the late start after it.
+  LoadMeter::Event e[8];
+  CHECK_EQ(m.events(e, 8), 4);
+  CHECK(e[1].kind == LoadMeter::kLateStart && e[1].block == 1 && (e[1].ctx.flags & LoadMeter::kFlagWarmup));
+  CHECK(e[0].kind == LoadMeter::kUnderrun && e[0].block == 0 && e[0].ms == 412 && e[0].us >= 3419u);
+  CHECK((e[0].ctx.flags & LoadMeter::kFlagWarmup) && (e[0].ctx.flags & LoadMeter::kFlagFirstBlock));
+  CHECK(e[2].kind == LoadMeter::kUnderrun && e[2].block == 1000 && e[2].ctx.task == 4 &&
+        (e[2].ctx.flags & LoadMeter::kFlagQspi) && !(e[2].ctx.flags & LoadMeter::kFlagWarmup));
+  CHECK(e[3].kind == LoadMeter::kLateStart && e[3].block == 1001 && e[3].gapUs >= 4000u);
+  CHECK(m.longest().block == 1000 && m.longest().us >= 2000u);
+  // Many events: the first four kept, then the latest four.
+  for (int i = 0; i < 20; ++i) {
+    m.begin(t);
+    m.end(t + period + 1, LoadMeter::Context{}, 6000u + uint32_t(i));
+    t += period;
+  }
+  CHECK_EQ(m.eventCount(), 24u);
+  CHECK_EQ(m.events(e, 8), 8);
+  CHECK(e[0].seq == 1 && e[3].seq == 4 && e[4].seq == 21 && e[7].seq == 24 && e[7].ms == 6019u);
+  m.start();
+  CHECK_EQ(m.eventCount(), 0u);
+  CHECK_EQ(m.periodUs(), 2000u);
 }
 
 void testLed() {
@@ -278,6 +334,18 @@ void testPots() {
   PotMacros p;
   Macros m;
   float raw[4] = {0.0f, 0.5f, 1.0f, -1.0f};   // pot 4 absent
+  // Off until switched on (unwired pins float): even a pot right on a value moves nothing.
+  CHECK(!p.enabled());
+  {
+    float near[4] = {100.0f / 255.0f, 1.0f, 0.0f, 0.5f};
+    for (int i = 0; i < 20; ++i) {
+      near[1] = (i & 1) ? 1.0f : 0.0f;   // a floating pin's noise
+      CHECK_EQ(p.update(near, 6, Macros::cur, Macros::set, &m), 0);
+    }
+    CHECK_EQ(m.sets, 0);
+    CHECK_EQ(p.moves(), 0u);
+  }
+  p.setEnabled(true);
   // Pickup: pot 1 at 0 and pot 3 at 255 are far from 100: nothing moves.
   CHECK_EQ(p.update(raw, 6, Macros::cur, Macros::set, &m), 0);
   // Pot 2 at 0.5 (128) is far from 100 too; sweep pot 1 up past 100: it catches.

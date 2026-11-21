@@ -20,6 +20,16 @@
  *   - SDRAM: .qspi_rom's copy, then .sdram_bss (libDaisy's DSY_SDRAM_BSS: the pool
  *     image, /int's files, buffers). Never zeroed by the startup: SDRAM only works
  *     after DaisySeed::Init.
+ *   - BUILD VARIANTS (daisy/Makefile ITCM=1, TABLES=dtcm; docs/DAISY.md section 11): two
+ *     fragments the Makefile writes for each build into its own directory (the link's -L),
+ *     empty in the default build, so these output sections are empty and vanish:
+ *       pg_itcm.ld   the hot audio functions (tools/daisy_itcm.py) -> .itcm_text, run from
+ *                    ITCM (zero-wait, no I-cache), loaded from the image by the preinit hook
+ *       pg_dtcm.ld   the bass's per-sample tables (sine, BLEP) -> .dtcm_tables in DTCM
+ *                    (zero-wait, no D-cache), likewise
+ *     Each is placed BEFORE the section whose wildcards would otherwise take its input
+ *     sections (the first matching rule wins). Their load addresses are in the image (the
+ *     bootloader copies them with the rest), so the image does not shrink.
  */
 
 ENTRY(Reset_Handler)
@@ -34,6 +44,9 @@ MEMORY
 	RAM_D3      (RWX) : ORIGIN = 0x38000000, LENGTH = 64K
 	BACKUP_SRAM (RWX) : ORIGIN = 0x38800000, LENGTH = 4K     /* the bootloader's boot info */
 	ITCMRAM     (RWX) : ORIGIN = 0x00000000, LENGTH = 64K
+	/* The ITCM's code from 1 KB on: a write through a null pointer (address 0 is ITCM on the
+	   H7) then hits nothing that runs. */
+	ITCM_CODE   (RX)  : ORIGIN = 0x00000400, LENGTH = 63K
 	SDRAM       (RWX) : ORIGIN = 0xc0000000, LENGTH = 64M
 	QSPI_ROM    (RX)  : ORIGIN = 0x900B8000, LENGTH = 288K   /* daisy/core/layout.h kRomAddr */
 }
@@ -51,6 +64,28 @@ SECTIONS
 		KEEP(*(.isr_vector))
 		. = ALIGN(4);
 	} > SRAM
+
+	/* The hot audio code in ITCM (ITCM=1; empty otherwise), loaded from the image. */
+	.itcm_text :
+	{
+		. = ALIGN(8);
+		_sitcm_text = .;
+		INCLUDE pg_itcm.ld
+		. = ALIGN(8);
+		_eitcm_text = .;
+	} > ITCM_CODE AT > SRAM
+	_siitcm_text = LOADADDR(.itcm_text);
+
+	/* The bass's per-sample tables in DTCM (TABLES=dtcm; empty otherwise), loaded from the image. */
+	.dtcm_tables :
+	{
+		. = ALIGN(8);
+		_sdtcm_tables = .;
+		INCLUDE pg_dtcm.ld
+		. = ALIGN(8);
+		_edtcm_tables = .;
+	} > DTCMRAM AT > SRAM
+	_sidtcm_tables = LOADADDR(.dtcm_tables);
 
 	/* The constant tables that go to QSPI / SDRAM. First, so these input sections are
 	   matched here and not by .text's wildcards below. */
@@ -76,6 +111,9 @@ SECTIONS
 		*/pg/macro/macro_parse.o(.rodata*.str1.*)
 		*/pg/demo/?*.o(.rodata*.str1.*)
 		*/pg/demo/demo_*.o(.rodata .rodata.*)
+		/* The bench's text (daisy/app/app_bench.cpp: the >bench table, the late-block
+		   records): main loop only, long after the ROM copy. */
+		*/daisy/app/app_bench.o(.rodata*.str1.*)
 		. = ALIGN(32);
 		_eqspi_rom = .;
 	} > SDRAM AT > QSPI_ROM
@@ -171,6 +209,10 @@ SECTIONS
 		. = ALIGN(4);
 		_sbss = .;
 		PROVIDE(__bss_start__ = _sbss);
+		/* The engine's state block first, bracketed so the bench can say where it is. */
+		_pg_engine_state = .;
+		*/pg/engine/engine.o(.bss .bss.*)
+		_pg_engine_state_end = .;
 		*(.bss)
 		*(.bss*)
 		*(COMMON)

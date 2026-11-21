@@ -15,7 +15,12 @@
 // is handed back to the caller (shot, expect-released, ...) or reported as an error.
 //
 // Commands queue up in arrival order and are executed by step() from the main loop,
-// so a whole script can be streamed at once and still plays with its timing.
+// so a whole script can be streamed at once and still plays with its timing. A down
+// for a key the script already holds is ignored (counted as a repeat): a client's
+// keyboard auto-repeat must not turn one held key into a stream of presses. The
+// caller stops reading the serial port while the queue is nearly full (room() below:
+// App::serviceSerial), so a burst waits in the USB receive ring instead of being
+// dropped; dropped() counts only what still did not fit.
 // Portable (host-tested: host/daisy/test_daisy_core.cpp).
 #pragma once
 #include <cstdint>
@@ -26,7 +31,9 @@ namespace pgd {
 
 class KeyScript {
  public:
-  static constexpr int kQueue = 128;
+  static constexpr int kQueue = 256;
+  // Below this much room the App leaves further serial input in the receive ring.
+  static constexpr int kLowWater = 16;
   static constexpr uint32_t kDefaultTapMs = 40;
   // Not a Cardputer key: the desktop's padjob binding (F4, host/app/keymap.h). Its
   // down event toggles the pads' job (App::handleKey); bit 60 of held().
@@ -54,6 +61,8 @@ class KeyScript {
   void releaseAll(uint32_t nowMs, Emit emit, void* user);
 
   int queued() const { return count_; }
+  int room() const { return kQueue - count_; }
+  uint32_t repeats() const { return repeats_; }   // downs of a key already held, ignored
   bool idle() const { return count_ == 0; }
   uint64_t held() const { return held_; }   // bit = key id (kKeyG0 = bit 56, kKeyPadJob 60)
   uint32_t eventsEmitted() const { return events_; }
@@ -72,7 +81,7 @@ class KeyScript {
   bool waiting_ = false;
   uint32_t until_ = 0;
   uint64_t held_ = 0;
-  uint32_t events_ = 0, dropped_ = 0;
+  uint32_t events_ = 0, dropped_ = 0, repeats_ = 0;
   char buf_[96] = {};
   const char* verb_ = "";
   const char* arg_ = "";

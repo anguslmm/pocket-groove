@@ -4,6 +4,11 @@
 // and tested without the board (tools/test_pg_daisy.py).
 //
 //   daisy_sim [--flash FILE] [--autoplay] [--stdio] [--line-in mono|stereo|silent]
+//             [--clock-wrap-in S]
+//
+// --clock-wrap-in S: the simulated millis(), micros() and cycles() start so that each
+// 32-bit clock wraps S seconds after the start (cycles() at 480 MHz wraps every 8.9 s
+// anyway), to try the firmware across its clocks' wraps (host/daisy/test_daisy_clock.cpp).
 //
 // --line-in: a synthetic signal on the codec's line input (the recording path,
 // line_mic.h): a 440 Hz tone at -12 dBFS, 0.8 s on and 0.7 s off, over a -66 dBFS
@@ -65,9 +70,10 @@ struct SimHal final : Hal {
   int fdIn = -1, fdOut = -1;
   ByteRing tx;
   uint64_t t0 = nowUs64();
-  uint32_t millis() override { return uint32_t((nowUs64() - t0) / 1000u); }
-  uint32_t micros() override { return uint32_t(nowUs64() - t0); }
-  uint32_t cycles() override { return uint32_t((nowUs64() - t0) * 480u); }
+  uint32_t msOff = 0, usOff = 0;   // --clock-wrap-in
+  uint32_t millis() override { return uint32_t((nowUs64() - t0) / 1000u) + msOff; }
+  uint32_t micros() override { return uint32_t(nowUs64() - t0) + usOff; }
+  uint32_t cycles() override { return uint32_t((nowUs64() - t0 + usOff) * 480u); }
   uint32_t cpuHz() override { return 480000000u; }
   void serialWrite(const char* p, size_t n) override { tx.pushSome(reinterpret_cast<const uint8_t*>(p), uint32_t(n)); }
   size_t serialRoom() override { return tx.space(); }
@@ -158,11 +164,13 @@ int main(int argc, char** argv) {
   std::string flashPath;
   bool autoplay = false, useStdio = false;
   int lineIn = 0;
+  double wrapIn = -1.0;
   for (int i = 1; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--flash" && i + 1 < argc) flashPath = argv[++i];
     else if (a == "--autoplay") autoplay = true;
     else if (a == "--stdio") useStdio = true;
+    else if (a == "--clock-wrap-in" && i + 1 < argc) wrapIn = std::atof(argv[++i]);
     else if (a == "--line-in" && i + 1 < argc) {
       const std::string m = argv[++i];
       lineIn = m == "mono" ? 1 : m == "stereo" ? 2 : m == "silent" ? 3 : -1;
@@ -171,7 +179,9 @@ int main(int argc, char** argv) {
         return 2;
       }
     } else {
-      std::fprintf(stderr, "usage: daisy_sim [--flash FILE] [--autoplay] [--stdio] [--line-in mono|stereo|silent]\n");
+      std::fprintf(stderr,
+                   "usage: daisy_sim [--flash FILE] [--autoplay] [--stdio] [--line-in mono|stereo|silent] "
+                   "[--clock-wrap-in S]\n");
       return 2;
     }
   }
@@ -186,6 +196,10 @@ int main(int argc, char** argv) {
   std::signal(SIGINT, onSignal);
   SimHal hal;
   hal.lineIn = lineIn;
+  if (wrapIn >= 0.0) {
+    hal.msOff = uint32_t(0x100000000ull - uint64_t(wrapIn * 1000.0));
+    hal.usOff = uint32_t(0x100000000ull - uint64_t(wrapIn * 1.0e6));
+  }
   hal.tx.attach(g_txMem.data(), uint32_t(g_txMem.size()));
   if (useStdio) {
     hal.fdIn = 0;

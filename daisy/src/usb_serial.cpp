@@ -49,6 +49,8 @@ bool configured() {
 
 int read() { return g_rx.popByte(); }
 
+uint32_t rxCount() { return g_rxBytes; }
+
 void write(const char* p, size_t n) {
   const uint32_t k = g_tx.pushSome(reinterpret_cast<const uint8_t*>(p), static_cast<uint32_t>(n));
   g_txBytes += k;
