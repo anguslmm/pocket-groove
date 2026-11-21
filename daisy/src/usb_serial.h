@@ -24,6 +24,7 @@ void write(const char* p, size_t n);
 size_t room();
 void flush();
 bool configured();                // a computer has set the device up (enumerated)
+uint32_t rxCount();               // bytes received since boot (the USB interrupt counts them)
 
 struct Stats {
   uint32_t rxBytes, rxDropped, txBytes, txDropped, txPackets, txBusy;

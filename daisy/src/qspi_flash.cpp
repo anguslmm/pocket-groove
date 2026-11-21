@@ -3,6 +3,7 @@
 
 #include <cstring>
 
+#include "clock.h"
 #include "daisy_seed.h"
 
 extern daisy::DaisySeed g_hw;   // main.cpp
@@ -11,11 +12,17 @@ namespace pgdev {
 
 namespace {
 bool g_mapped = true;
+volatile bool g_busy = false;
+struct Busy {
+  Busy() { g_busy = true; }
+  ~Busy() { g_busy = false; }
+};
 constexpr uint32_t kBlock = 65536, kSector = 4096;
 }  // namespace
 
 void qspiMarkUnmapped() { g_mapped = false; }
 bool qspiMapped() { return g_mapped; }
+bool qspiBusy() { return g_busy; }
 
 void QspiRegion::attach(daisy::QSPIHandle* q, uint32_t baseAddr, uint32_t bytes) {
   q_ = q;
@@ -25,7 +32,8 @@ void QspiRegion::attach(daisy::QSPIHandle* q, uint32_t baseAddr, uint32_t bytes)
 
 bool QspiRegion::erase(uint32_t offset, uint32_t bytes) {
   if (!q_ || (offset % kSector) || (bytes % kSector) || !inRange(offset, bytes)) return false;
-  const uint32_t t0 = daisy::System::GetUs();
+  const Busy busy;
+  const uint32_t t0 = clock::micros();
   const uint32_t a = base_ + offset;
   bool ok;
   if ((a % kBlock) == 0 && (bytes % kBlock) == 0) {
@@ -36,7 +44,7 @@ bool QspiRegion::erase(uint32_t offset, uint32_t bytes) {
     for (uint32_t s = 0; s < bytes && ok; s += kSector) ok = q_->EraseSector(a + s) == daisy::QSPIHandle::Result::OK;
     if (ok) g_mapped = true;
   }
-  const uint32_t us = daisy::System::GetUs() - t0;
+  const uint32_t us = clock::micros() - t0;
   if (us > st_.maxEraseUs) st_.maxEraseUs = us;
   ++st_.erases;
   if (!ok) ++st_.failures;
@@ -46,12 +54,13 @@ bool QspiRegion::erase(uint32_t offset, uint32_t bytes) {
 bool QspiRegion::write(uint32_t offset, const void* data, uint32_t bytes) {
   if (!q_ || !inRange(offset, bytes)) return false;
   if (!bytes) return true;
-  const uint32_t t0 = daisy::System::GetUs();
+  const Busy busy;
+  const uint32_t t0 = clock::micros();
   // libDaisy's Write takes a non-const buffer and only reads it.
   const bool ok = q_->Write(base_ + offset, bytes, const_cast<uint8_t*>(static_cast<const uint8_t*>(data))) ==
                   daisy::QSPIHandle::Result::OK;
   g_mapped = ok;
-  const uint32_t us = daisy::System::GetUs() - t0;
+  const uint32_t us = clock::micros() - t0;
   if (us > st_.maxWriteUs) st_.maxWriteUs = us;
   ++st_.writes;
   if (!ok) ++st_.failures;

@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include "../core/layout.h"
+#include "clock.h"
 #include "daisy_seed.h"
 
 extern "C" {
@@ -15,6 +16,8 @@ extern uint8_t _sdata[], _edata[], _sbss[], _ebss[], _sdtcmram_bss[], _edtcmram_
 extern uint8_t _saxi_bss[], _eaxi_bss[], _sd2_bss[], _ed2_bss[], _pg_d2_end[];
 extern uint8_t _ssram1_bss[], _esram1_bss[], _ssdram_bss[], _esdram_bss[];
 extern uint8_t _sd3_noinit[], _ed3_noinit[];
+extern uint8_t _sitcm_text[], _eitcm_text[], _siitcm_text[];
+extern uint8_t _sdtcm_tables[], _edtcm_tables[], _sidtcm_tables[];
 extern void* g_pfnVectors[];
 }
 
@@ -53,6 +56,16 @@ uint32_t faultCheck(const FaultRecord& f) {
 
 uint32_t* stackLow() { return reinterpret_cast<uint32_t*>(_edtcmram_bss); }
 
+// The build variants' sections (pg_daisy.lds BUILD VARIANTS: empty in the default
+// build), from their load addresses in the image. A plain word loop: memcpy itself
+// is not to be called before its home is known (tools/daisy_itcm.py never moves it).
+void copyWords(uint8_t* to, const uint8_t* from, const uint8_t* toEnd) {
+  uint32_t* d = reinterpret_cast<uint32_t*>(to);
+  const uint32_t* s = reinterpret_cast<const uint32_t*>(from);
+  const uint32_t* e = reinterpret_cast<const uint32_t*>(toEnd);
+  while (d < e) *d++ = *s++;
+}
+
 // Before any constructor (and before main): __libc_init_array runs .preinit_array
 // first. The startup code has copied .data and zeroed .bss (both DTCM) by now.
 void preinit() {
@@ -76,6 +89,13 @@ void preinit() {
   RCC->AHB2ENR |= RCC_AHB2ENR_D2SRAM1EN | RCC_AHB2ENR_D2SRAM2EN | RCC_AHB2ENR_D2SRAM3EN;
   (void)RCC->AHB2ENR;
   __DSB();
+  // ITCM=1: the hot audio code into ITCM; TABLES=dtcm: the bass's tables into DTCM.
+  // Before any constructor; nothing of it runs or is read before (the startup code only
+  // copies .data and zeroes .bss).
+  copyWords(_sitcm_text, _siitcm_text, _eitcm_text);
+  copyWords(_sdtcm_tables, _sidtcm_tables, _edtcm_tables);
+  __DSB();
+  __ISB();
   std::memset(_saxi_bss, 0, static_cast<size_t>(_eaxi_bss - _saxi_bss));
   std::memset(_sd2_bss, 0, static_cast<size_t>(_ed2_bss - _sd2_bss));
   // Paint the free stack (DTCM above the statics, below the frame we run in).
@@ -140,10 +160,10 @@ Fault lastFault() {
 
 bool copyRom() {
   const size_t n = static_cast<size_t>(_eqspi_rom - _sqspi_rom);
-  const uint32_t t0 = daisy::System::GetUs();
+  const uint32_t t0 = pgdev::clock::micros();
   std::memcpy(_sqspi_rom, _siqspi_rom, n);
   SCB_CleanDCache_by_Addr(reinterpret_cast<uint32_t*>(_sqspi_rom), static_cast<int32_t>(n));
-  g_romUs = daisy::System::GetUs() - t0;
+  g_romUs = pgdev::clock::micros() - t0;
   // The SDRAM copy now. Read through volatile: the compiler knows the initializer and
   // would otherwise fold the comparison to true.
   const volatile uint8_t* rom = reinterpret_cast<const volatile uint8_t*>(&kRomMarkerRom);
@@ -157,6 +177,8 @@ bool copyRom() {
 bool romOk() { return g_romOk; }
 uint32_t romBytes() { return static_cast<uint32_t>(_eqspi_rom - _sqspi_rom); }
 uint32_t romCopyUs() { return g_romUs; }
+
+uint32_t itcmBytes() { return static_cast<uint32_t>(_eitcm_text - _sitcm_text); }
 
 uint32_t stackSize() { return static_cast<uint32_t>(_estack - _edtcmram_bss); }
 uint32_t stackUsedMax() {
@@ -178,16 +200,22 @@ void reportLines(LineFn fn, void* user) {
   std::snprintf(l, sizeof(l), "[mem] AXI SRAM after the image: %lu KB of statics, %lu KB free of 512",
                 kb(axi), kb(0x24080000u - reinterpret_cast<uint32_t>(_eaxi_bss)));
   fn(user, l);
+  std::snprintf(l, sizeof(l), "[mem] ITCM 64 KB: code %lu B at 0x%08lx (%s)", static_cast<unsigned long>(itcmBytes()),
+                static_cast<unsigned long>(reinterpret_cast<uint32_t>(_sitcm_text)),
+                itcmBytes() ? "ITCM=1: the hot audio functions" : "unused in this build");
+  fn(user, l);
   const uint32_t dtcm = static_cast<uint32_t>(_edtcmram_bss - _sdata);
   std::snprintf(l, sizeof(l),
-                "[mem] DTCM 128 KB: .data %lu B, .bss %lu B (the engine's state), other %lu B; stack %lu B, used at most %lu B",
-                static_cast<unsigned long>(_edata - _sdata), static_cast<unsigned long>(_ebss - _sbss),
+                "[mem] DTCM 128 KB: tables %lu B, .data %lu B, .bss %lu B (the engine's state), other %lu B; stack %lu B, "
+                "used at most %lu B",
+                static_cast<unsigned long>(_edtcm_tables - _sdtcm_tables), static_cast<unsigned long>(_edata - _sdata), static_cast<unsigned long>(_ebss - _sbss),
                 static_cast<unsigned long>(_edtcmram_bss - _sdtcmram_bss), static_cast<unsigned long>(stackSize()),
                 static_cast<unsigned long>(stackUsedMax()));
   (void)dtcm;
   fn(user, l);
   std::snprintf(l, sizeof(l), "[mem] D2 SRAM: DMA buffers %lu of 32 KB (not cached); statics %lu KB, %lu KB free of 256",
-                kb(static_cast<uint32_t>(_esram1_bss - _ssram1_bss)), kb(static_cast<uint32_t>(_ed2_bss - _sd2_bss)),
+                kb(static_cast<uint32_t>(_esram1_bss - _ssram1_bss)),
+                kb(static_cast<uint32_t>(_ed2_bss - _sd2_bss)),
                 kb(0x30048000u - reinterpret_cast<uint32_t>(_pg_d2_end)));
   fn(user, l);
   std::snprintf(l, sizeof(l), "[mem] SDRAM 64 MB: ROM copy %lu KB (%s, copied in %lu us), buffers %lu KB, %lu KB free",

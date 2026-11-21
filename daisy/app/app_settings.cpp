@@ -100,6 +100,27 @@ int dbfs(uint16_t peak) { return peak ? static_cast<int>(lrintf(20.0f * log10f(f
 
 }  // namespace
 
+void App::setPots(bool on) {
+  pots_.setEnabled(on);
+  settings_.potsOn = on;
+  saveSettings();
+  printPots();
+}
+
+void App::printPots() {
+  float raw[PotMacros::kPots];
+  const bool have = hal_->readPots(raw);
+  if (!have) {
+    sp("[pots] none (no ADC); setting %s\n", pots_.enabled() ? "on" : "off");
+    return;
+  }
+  sp("[pots] %s (saved setting; 'p' or >pots on|off), macro moves %lu; positions %d %d %d %d (0..255), engaged %d%d%d%d%s\n",
+     pots_.enabled() ? "ON: the four pots move the selected track's macros (pickup)" : "OFF", static_cast<unsigned long>(pots_.moves()),
+     static_cast<int>(raw[0] * 255.0f), static_cast<int>(raw[1] * 255.0f), static_cast<int>(raw[2] * 255.0f),
+     static_cast<int>(raw[3] * 255.0f), pots_.engaged(0), pots_.engaged(1), pots_.engaged(2), pots_.engaged(3),
+     pots_.enabled() ? "" : " (the readings are only shown: nothing moves)");
+}
+
 void App::saveSettings() {
   uint8_t b[DaisySettings::kBytes];
   const size_t n = settings_.encode(b, sizeof(b));
@@ -242,6 +263,13 @@ bool App::settingsCommand(const char* line) {
   if (n == 0) return false;
   const char* v = w[0];
   float f = 0.0f;
+  if (std::strcmp(v, "bench") == 0) return benchCommand(w, n);
+  if (std::strcmp(v, "pots") == 0) {   // >pots [on|off]: the saved setting (alone: says which)
+    if (n > 1 && (std::strcmp(w[1], "on") == 0 || std::strcmp(w[1], "off") == 0)) setPots(w[1][1] == 'n');
+    else if (n > 1) sp("[pots] ? \"%s\": >pots on | >pots off\n", w[1]);
+    else printPots();
+    return true;
+  }
   if (std::strcmp(v, "pads") == 0) {
     if (n == 1) {
       printPads(true);

@@ -27,6 +27,9 @@ struct Fault {
 Fault lastFault();
 void setUptimeHook(uint32_t (*ms)());
 
+// The hot audio code in ITCM (ITCM=1), bytes; 0 in the default build.
+uint32_t itcmBytes();
+
 // Stack high-water (bytes used at most since boot) and its size.
 uint32_t stackUsedMax();
 uint32_t stackSize();

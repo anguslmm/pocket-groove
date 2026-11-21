@@ -24,6 +24,7 @@
 #include "../core/panel.h"
 #include "../core/pins.h"
 #include "../core/touch.h"
+#include "clock.h"
 #include "daisy_seed.h"
 #include "fatfs.h"
 #include "pg/tilt/tilt.h"
@@ -164,7 +165,7 @@ struct I2c final : pgd::I2cBus {
 };
 I2c g_i2c;
 pgd::I2cGuard g_bus;   // both drivers go through it (a stuck bus never holds the loop)
-uint32_t busMicros(void*) { return daisy::System::GetUs(); }
+uint32_t busMicros(void*) { return pgdev::clock::micros(); }
 bool g_i2cOn = false;
 pgd::Bmi270 g_imu;
 // touch

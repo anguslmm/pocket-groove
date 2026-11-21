@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "output_stage.h"
 #include "pg/io/project_io.h"
 #include "pg/ui/gfx.h"
 
@@ -119,8 +120,10 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
     pads_.setScanHz(static_cast<float>(hal.sampleRate()) / static_cast<float>(hal.blockFrames() ? hal.blockFrames() : 96));
     for (int i = 0; i < PadScanner::kPads; ++i) pads_.setCal(i, settings_.pads[i]);
     pads_.setGlobal(settings_.padGlobal);
+    pots_ = PotMacros{};
+    pots_.setEnabled(settings_.potsOn);
     hal.applySettings(settings_);
-    sp("[boot] settings %s (%s)\n", DaisySettings::kPath, settingsLoad_);
+    sp("[boot] settings %s (%s); pots %s\n", DaisySettings::kPath, settingsLoad_, settings_.potsOn ? "on" : "off");
   }
 
   // Recording: the codec's line input, into the pool (line_mic.h).
@@ -147,6 +150,10 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
 
   meter_.configure(hal.cpuHz(), static_cast<uint32_t>(static_cast<uint64_t>(hal.cpuHz()) * hal.blockFrames() /
                                                       (hal.sampleRate() ? hal.sampleRate() : 48000u)));
+  meter_.start();
+  wasPlaying_ = false;
+  playStartBlock_ = 0xFFFFFFFFu;
+  benchDoneMs_ = 0;
   setOutputGainDb(gainDb_);
   if (cfg.autoplay) {
     pg::Command c{};
@@ -177,7 +184,10 @@ void App::boot(Hal& hal, const AppMemory& mem, const AppConfig& cfg) {
 }
 
 void App::render(float* out, int frames, const float* in) {
+  if (bench_.audioBlock(out, frames)) return;   // the bench runs (bench.h): its block, the output muted
   meter_.begin(hal_->cycles());
+  LoadMeter::Context ctx;
+  ctx.task = static_cast<int8_t>(sched_.current());   // what the main loop was doing
   // The pads first: one scan per block, so the scan interval is the block's and
   // never waits for the main loop (pads.h LATENCY).
   float x[PadScanner::kPads];
@@ -186,25 +196,42 @@ void App::render(float* out, int frames, const float* in) {
     padsSeen_ = true;
   }
   if (in) lineMic_.audioIn(in, frames);
+  pg::Engine& eng = inst_.engine();
+  const uint8_t refreshes = eng.instrumentRefreshes();
   inst_.processFloat(out, frames);
   // The output level in float, on the engine's full-resolution output: the codec's
   // conversion (libDaisy: x 2^23, clamped to 0.999985) is the only rounding after it.
-  const float g = gain_;
-  float pk = 0.0f;
-  for (int i = 0; i < 2 * frames; ++i) {
-    float y = out[i] * g;
-    y = y > 1.0f ? 1.0f : (y < -1.0f ? -1.0f : y);
-    out[i] = y;
-    const float a = y < 0.0f ? -y : y;
-    pk = a > pk ? a : pk;
-  }
+  const float pk = applyOutputLevel(out, frames, gain_);
   const uint32_t pk16 = static_cast<uint32_t>(pk * 32767.0f + 0.5f);
   if (pk16 > outPeak_.load(std::memory_order_relaxed)) outPeak_.store(pk16, std::memory_order_relaxed);
-  meter_.end(hal_->cycles());
+  // The load meter's record of this block (used only if it was late): cheap reads.
+  const uint32_t nowMs = hal_->millis();
+  const uint32_t block = meter_.blocks();
+  const bool playing = eng.isPlaying();
+  if (playing && !wasPlaying_) playStartBlock_ = block;
+  wasPlaying_ = playing;
+  uint16_t f = hal_->contextFlags();
+  if (block == 0) f |= LoadMeter::kFlagFirstBlock;
+  if (playStartBlock_ != 0xFFFFFFFFu && block - playStartBlock_ <= 1u) f |= LoadMeter::kFlagPlayStart;
+  if (playing) f |= LoadMeter::kFlagPlaying;
+  if (eng.instrumentRefreshes() != refreshes) f |= LoadMeter::kFlagRefresh;
+  if (macroMoved_ && nowMs - lastMacroMoveMs_ < 20u) f |= LoadMeter::kFlagMacroMove;
+  if (keySeen_ && nowMs - lastKeyMs_ < 20u) f |= LoadMeter::kFlagKey;
+  ctx.flags = f;
+  meter_.end(hal_->cycles(), ctx, nowMs - bootMs_);   // the record: uptime since boot
 }
 
 void App::loopOnce() {
   if (!booted_) return;
+  if (bench_.active() || benchDoneMs_) {   // the bench: only the serial port and the LED meanwhile
+    serviceBench();
+    if (!booted_) return;
+    const uint32_t now = hal_->millis();
+    serviceSerial(now);
+    serviceLed(now);
+    hal_->serialFlush();
+    return;
+  }
   hal_->service(hal_->millis());
   sched_.runOnce(msClock, usClock, this);
   hal_->serialFlush();
@@ -214,6 +241,8 @@ void App::loopOnce() {
 
 void App::handleKey(const pg::KeyEvent& e, uint32_t now) {
   const uint8_t k = e.key;
+  lastKeyMs_ = now;
+  keySeen_ = true;
   if (k == KeyScript::kKeyPadJob) {   // the desktop's padjob key (F4): the pads' job
     if (e.down) ui_.togglePadJob();
     return;
@@ -389,6 +418,13 @@ void App::serviceSerial(uint32_t now) {
   const uint32_t t0 = hal_->millis();
   int letters = 0;
   for (int n = 0; n < 4096; ++n) {
+    // The key queue nearly full (a burst, or a script's waits): leave the rest in the
+    // receive ring (136 KB) for the next passes, as the keys task plays the queue, so
+    // nothing is dropped. (Letters and transfers behind it wait too.)
+    if (script_.room() < KeyScript::kLowWater) {
+      ++serialHeld_;
+      break;
+    }
     const int ch = hal_->serialRead();
     if (ch < 0) {
       // A transfer waits for each reply: spin a little for the next request, so a file
@@ -429,7 +465,7 @@ void App::serviceSerial(uint32_t now) {
 void App::printHelp() {
   sp("Pocket Groove %s on the Daisy, serial commands:\n", cfg_.version);
   sp("  r report   h help   l boot log   f one screen frame   m screen mirror on/off\n");
-  sp("  p pots on/off (the four pots move the selected track's four macros, with pickup)\n");
+  sp("  p pots on/off, saved; OFF by default (unwired pins float). Also >pots on|off\n");
   sp("  S save /int to flash now   B then y: Daisy bootloader (flash)   R then y: restart\n");
   sp("  >down KEY  >up KEY  >tap KEY [ms]  >wait MS  >release  >shot NAME  >sync TAG\n");
   sp("      keys as in the desktop's key scripts (host/ui_scripts); KEY by legend:\n");
@@ -483,8 +519,7 @@ void App::letter(char c, uint32_t now) {
       sp("[screen] mirror %s\n", mirror_on_ ? "on" : "off");
       break;
     case 'p':
-      pots_.setEnabled(!pots_.enabled());
-      sp("[pots] %s\n", pots_.enabled() ? "on: the four pots move the selected track's macros (pickup)" : "off");
+      setPots(!pots_.enabled());
       break;
     case 'S':
       persist_.requestNow();
@@ -546,6 +581,8 @@ void App::scriptLine(const char* line, uint32_t now) {
 
 void App::serviceUi(uint32_t now) {
   const uint32_t t0 = hal_->micros();
+  const uint32_t fsRev = ramfs_.revision();
+  const uint32_t full = ui_.fullRedraws();
   pg::ui::UiEnv env;
   env.nowMs = now;
   env.batteryPct = hal_->batteryPercent();
@@ -567,7 +604,11 @@ void App::serviceUi(uint32_t now) {
   }
   const uint32_t us = hal_->micros() - t0;
   frameUs_ = frameUs_ ? frameUs_ + ((static_cast<int32_t>(us) - static_cast<int32_t>(frameUs_)) / 16) : us;
-  if (us > frameMaxUs_) frameMaxUs_ = us;
+  if (us > frameMaxUs_) {   // the longest frame: and what it did (an /int write: the session's autosave)
+    frameMaxUs_ = us;
+    frameMaxFsWrites_ = ramfs_.revision() - fsRev;
+    frameMaxFull_ = ui_.fullRedraws() != full;
+  }
 }
 
 void App::serviceScreen(uint32_t now) {
@@ -621,6 +662,7 @@ void App::servicePots(uint32_t now) {
   (void)now;
   float raw[PotMacros::kPots];
   if (!hal_->readPots(raw)) return;
+  const uint32_t before = pots_.moves();
   pots_.update(
       raw, ui_.selTrack(),
       [](void* u, int m) {
@@ -633,12 +675,16 @@ void App::servicePots(uint32_t now) {
         a->ui_.setMacro(a->ui_.selTrack(), m, v);
       },
       this);
+  if (pots_.moves() != before) {
+    lastMacroMoveMs_ = hal_->millis();
+    macroMoved_ = true;
+  }
 }
 
 void App::printStatsLine() {
   const uint32_t pm = meter_.nowPermille();
   sp("[stats] t=%lus aud %d.%d%% max %luus/%luus late %lu+%lu q %lu ui %luus%s%s\n",
-     static_cast<unsigned long>(hal_->millis() / 1000), pct10(pm) / 10, pct10(pm) % 10,
+     static_cast<unsigned long>((hal_->millis() - bootMs_) / 1000), pct10(pm) / 10, pct10(pm) % 10,
      static_cast<unsigned long>(meter_.bootMaxUs()), static_cast<unsigned long>(meter_.periodUs()),
      static_cast<unsigned long>(meter_.overruns()), static_cast<unsigned long>(meter_.lateStarts()),
      static_cast<unsigned long>(inst_.engine().queuePeak()), static_cast<unsigned long>(frameUs_),
@@ -651,7 +697,7 @@ void App::printReport() {
   lastReportMs_ = nowMs;
   const LoadMeter::Window w = meter_.takeWindow();
   sp("\n===== POCKET GROOVE REPORT BEGIN %s =====\n", cfg_.version);
-  sp("[sys] uptime %lus, platform daisy, %s, board %s\n", static_cast<unsigned long>(nowMs / 1000), hal_->stageName(),
+  sp("[sys] uptime %lus, platform daisy, %s, board %s\n", static_cast<unsigned long>((nowMs - bootMs_) / 1000), hal_->stageName(),
      hal_->boardName());
   sp("[sys] window: %lu.%lu s since the previous report (peaks below are over it)\n",
      static_cast<unsigned long>(winMs / 1000), static_cast<unsigned long>(winMs % 1000 / 100));
@@ -678,11 +724,15 @@ void App::printReport() {
        static_cast<unsigned long>(w.maxUs), static_cast<unsigned long>(meter_.periodUs()),
        static_cast<unsigned long>(w.blocks), static_cast<unsigned long>(w.late), static_cast<unsigned long>(opk),
        opk ? static_cast<int>(lrintf(20.0f * log10f(static_cast<float>(opk) / 32767.0f))) : -99);
-    sp("[audio] since boot: longest block %luus, blocks %lu, underruns (block longer than its period) %lu, "
-       "late starts (> 1.5 periods apart) %lu\n",
-       static_cast<unsigned long>(meter_.bootMaxUs()), static_cast<unsigned long>(meter_.blocks()),
-       static_cast<unsigned long>(meter_.overruns()), static_cast<unsigned long>(meter_.lateStarts()));
+    sp("[audio] since boot: longest block %luus after the warm-up (the first %lu blocks: longest %luus), blocks %lu, "
+       "underruns (block longer than its period) %lu (%lu in the warm-up), late starts (> 1.5 periods apart) %lu (%lu "
+       "in the warm-up)\n",
+       static_cast<unsigned long>(meter_.bootMaxUs()), static_cast<unsigned long>(LoadMeter::kWarmupBlocks),
+       static_cast<unsigned long>(meter_.warmupMaxUs()), static_cast<unsigned long>(meter_.blocks()),
+       static_cast<unsigned long>(meter_.overruns()), static_cast<unsigned long>(meter_.warmupOverruns()),
+       static_cast<unsigned long>(meter_.lateStarts()), static_cast<unsigned long>(meter_.warmupLateStarts()));
   }
+  printAudioEvents();
   sp("[engine] command queue peak %lu of 256, UI dropped commands %lu, playing %s\n",
      static_cast<unsigned long>(inst_.engine().queuePeak()), static_cast<unsigned long>(ui_.droppedCommands()),
      inst_.engine().isPlaying() ? "yes" : "no");
@@ -698,11 +748,16 @@ void App::printReport() {
        static_cast<unsigned long>(busy10 % 10));
   }
   sched_.takeWindow();
-  sp("[keys] from the computer %lu (script queue %d, dropped %lu), physical %lu, held by script 0x%llx\n",
-     static_cast<unsigned long>(injected_), script_.queued(), static_cast<unsigned long>(script_.dropped()),
+  sp("[keys] from the computer %lu (script queue %d of %d, dropped %lu, repeated downs ignored %lu, input held back "
+     "%lu times), physical %lu, held by script 0x%llx\n",
+     static_cast<unsigned long>(injected_), script_.queued(), KeyScript::kQueue,
+     static_cast<unsigned long>(script_.dropped()), static_cast<unsigned long>(script_.repeats()),
+     static_cast<unsigned long>(serialHeld_),
      static_cast<unsigned long>(physical_), static_cast<unsigned long long>(script_.held()));
-  sp("[ui] frame avg %luus max %luus, full redraws %lu, status redraws %lu, view %d, project \"%s\"\n",
+  sp("[ui] frame avg %luus max %luus (that frame: %s, /int changes %lu), full redraws %lu, status redraws %lu, view %d, "
+     "project \"%s\"\n",
      static_cast<unsigned long>(frameUs_), static_cast<unsigned long>(frameMaxUs_),
+     frameMaxFull_ ? "a full redraw" : "no full redraw", static_cast<unsigned long>(frameMaxFsWrites_),
      static_cast<unsigned long>(ui_.fullRedraws()), static_cast<unsigned long>(ui_.statusRedraws()),
      static_cast<int>(ui_.view()), ui_.projectName());
   frameMaxUs_ = 0;
@@ -747,17 +802,7 @@ void App::printReport() {
        static_cast<unsigned long>(xs.badCrc), static_cast<unsigned long>(xs.badLines),
        static_cast<unsigned long>(xs.overflows));
   }
-  {
-    float raw[PotMacros::kPots];
-    if (hal_->readPots(raw)) {
-      sp("[pots] %s, macro moves %lu; positions %d %d %d %d (0..255), engaged %d%d%d%d\n",
-         pots_.enabled() ? "on" : "off", static_cast<unsigned long>(pots_.moves()), static_cast<int>(raw[0] * 255.0f),
-         static_cast<int>(raw[1] * 255.0f), static_cast<int>(raw[2] * 255.0f), static_cast<int>(raw[3] * 255.0f),
-         pots_.engaged(0), pots_.engaged(1), pots_.engaged(2), pots_.engaged(3));
-    } else {
-      sp("[pots] none\n");
-    }
-  }
+  printPots();
   printPads(true);
   printTouch();
   printLineIn();

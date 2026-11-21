@@ -8,6 +8,8 @@ set(PGD_ROOT ${PG_ROOT}/daisy)
 file(GLOB PGD_CORE_SRCS CONFIGURE_DEPENDS ${PGD_ROOT}/core/*.cpp ${PGD_ROOT}/app/*.cpp)
 add_library(pgd_core STATIC ${PGD_CORE_SRCS})
 target_include_directories(pgd_core PUBLIC ${PG_SRC} ${PGD_ROOT})
+# daisy/app/bench.cpp plays the busy pattern of host/tools/bench_instrument (host/common/grooves.h).
+target_include_directories(pgd_core PRIVATE ${PG_ROOT}/host)
 target_compile_options(pgd_core PRIVATE ${PG_FLAGS} -Wshadow)
 # The pg component libraries reference each other: listed twice so the linker
 # resolves them in any order (as host/CMakeLists.txt does for the tools).
@@ -38,3 +40,11 @@ if(Python3_Interpreter_FOUND AND NOT WIN32)
            WORKING_DIRECTORY ${PG_ROOT})
   set_tests_properties(test_pg_daisy PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300 LABELS daisy)
 endif()
+
+# The host's count for the on-device bench (daisy/app/bench.h): the same scenes under
+# callgrind, the core as the Daisy builds it (PG_TAPE=0: pg_notape), bench.cpp compiled
+# here again with it. Writes daisy/app/bench_ref.h and daisy/itcm_profile.txt.
+add_executable(daisy_bench_ref daisy_bench_ref.cpp ${PGD_ROOT}/app/bench.cpp)
+target_link_libraries(daisy_bench_ref PRIVATE pg_notape)
+target_include_directories(daisy_bench_ref PRIVATE ${PG_SRC} ${PGD_ROOT} ${PG_ROOT}/host)
+target_compile_options(daisy_bench_ref PRIVATE ${PG_FLAGS})

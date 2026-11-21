@@ -49,6 +49,7 @@
 #include "../core/ramfs.h"
 #include "../core/scheduler.h"
 #include "../core/serial_link.h"
+#include "bench.h"
 #include "pg/instrument/instrument.h"
 #include "pg/io/xfer.h"
 #include "pg/sampler/flash_pool.h"
@@ -133,6 +134,15 @@ class Hal {
 
   // Main loop housekeeping, once per pass (the device: the SD card's mount state).
   virtual void service(uint32_t /*nowMs*/) {}
+
+  // CALLED FROM THE AUDIO INTERRUPT when a block is noteworthy or for every block's
+  // record (cheap reads only): LoadMeter flags of what the platform has under way
+  // (kFlagQspi, kFlagUsbDown, kFlagSerialRx).
+  virtual uint16_t contextFlags() { return 0; }
+  // The bench (bench.h): empty both caches (audio interrupt, outside the timed span),
+  // and the lines that say what determines speed (build, caches, where things are).
+  virtual void flushCaches() {}
+  virtual void benchInfo(LineFn fn, void* user) { (void)fn; (void)user; }
 
  protected:
   ~Hal() = default;
@@ -234,6 +244,13 @@ class App {
   void servicePointer(uint32_t now);
   void pointer(const Hal::Pointer& p);
   bool settingsCommand(const char* line);
+  void setPots(bool on);   // the pots on or off, saved (DaisySettings::potsOn)
+  void printPots();
+  bool benchCommand(char** w, int n);
+  void serviceBench();
+  void printBench();
+  void printAudioEvents();
+  void describeEvent(const LoadMeter::Event& e, char* out, size_t cap) const;
   void saveSettings();
   void printPads(bool withCal);
   void printTouch();
@@ -288,6 +305,7 @@ class App {
   char pending_ = 0;                // 'B' or 'R' waiting for 'y'
   uint32_t pendingMs_ = 0;
   uint32_t injected_ = 0, physical_ = 0;
+  uint32_t serialHeld_ = 0;          // passes that left serial input waiting (key queue nearly full)
   uint32_t frameUs_ = 0, frameMaxUs_ = 0;
   uint32_t lastReportMs_ = 0;
   uint32_t samplesChanged_ = 0;
@@ -325,6 +343,20 @@ class App {
   bool injDown_ = false;
   const char* settingsLoad_ = "defaults";
   bool lineIn_ = false;               // the codec's input reaches render() (Hal::lineInput)
+  // the load meter's context (render() reads these; the main loop writes them)
+  volatile uint32_t lastMacroMoveMs_ = 0, lastKeyMs_ = 0;
+  bool macroMoved_ = false, keySeen_ = false;
+  bool wasPlaying_ = false;
+  uint32_t playStartBlock_ = 0xFFFFFFFFu;
+  // the bench (">bench", bench.h)
+  Bench bench_;
+  bool benchQuick_ = false, benchRestart_ = true;
+  uint32_t benchLiveAud_ = 0;          // AUD now (permille) when the bench started
+  uint32_t benchStartMs_ = 0;
+  uint32_t benchDoneMs_ = 0;           // the table printed: restart after the serial drains
+  // the UI frame's longest: what it did
+  uint32_t frameMaxFsWrites_ = 0;
+  bool frameMaxFull_ = false;
   std::atomic<uint32_t> outPeak_{0};  // render(): the output's largest |sample| (the report)
 
   // The boot log, replayed by 'l' (the computer usually opens the port after boot).

@@ -50,5 +50,7 @@ class QspiRegion final : public pg::sampler::FlashDriver {
 // leaves it off for all.
 void qspiMarkUnmapped();
 bool qspiMapped();
+// An erase or a write is under way (the main loop is in it): the audio interrupt's records.
+bool qspiBusy();
 
 }  // namespace pgdev
